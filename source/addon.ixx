@@ -2,8 +2,10 @@
 //
 // xla.addon — the init pipeline. Runs once at DLL_PROCESS_ATTACH, in the
 // original add-on's order: probe, configuration, image/build detection, then the
-// installers. Every installer is INI-gated; an unsupported or non-writable image
-// installs nothing and says why.
+// installers. The order is not hand-written here: `xla.order` declares the steps,
+// their phases and their named dependencies, sorts them deterministically, and
+// this module executes the result. Every installer is INI-gated; an unsupported
+// or non-writable image installs nothing and says why.
 
 module;
 
@@ -15,6 +17,7 @@ import xla.build;
 import xla.common;
 import xla.config;
 import xla.dfa;
+import xla.order;
 import xla.patches;
 import xla.registry;
 import xla.rom_window;
@@ -41,6 +44,26 @@ namespace xla
         constexpr DWORD kProbeSleepMs = 1;
 
         std::atomic<bool> g_delayed{false};
+
+        // Everything a step reads or publishes. Steps are plain functions so the
+        // plan's order is the only thing that decides the sequence.
+        struct RunState
+        {
+            std::filesystem::path directory;
+            config::LoadResult loaded;
+            bool fusionFix{};
+            Image image;
+            build::Id build{build::Id::unknown};
+            int borderless{-1};
+            int focusLoss{-1};
+            int exitCode{0};
+        };
+
+        enum class Outcome : std::uint8_t
+        {
+            next,
+            stop,
+        };
 
         bool ProbePresent()
         {
@@ -88,176 +111,401 @@ namespace xla
                       options.removeRegistryPathDependency, options.localSettingsPath,
                       options.customSavePath);
         }
+
+        // ---- the steps (declared in xla.order's Pipeline(), same order) --------
+
+        Outcome StepBanner(RunState&)
+        {
+            log::Banner();
+            return Outcome::next;
+        }
+
+        Outcome StepConsole(RunState&)
+        {
+            if (::GetConsoleWindow() != nullptr)
+            {
+                ::FreeConsole();
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepProbe(RunState& state)
+        {
+            // The game executable is checked for the probe before anything is trusted.
+            if (!ProbePresent())
+            {
+                if (!g_delayed.exchange(true))
+                {
+                    log::Write("init: probe missing; retrying on a worker thread");
+                    const HANDLE thread =
+                        ::CreateThread(nullptr, 0, &DelayedInit, nullptr, 0, nullptr);
+                    if (thread != nullptr)
+                    {
+                        ::CloseHandle(thread);
+                    }
+                    state.exitCode = 0;
+                    return Outcome::stop;
+                }
+
+                // Wait for the probe instead of spinning a core forever. Supported
+                // builds hit it on the first iterations; an unsupported build gets a
+                // log line and an orderly return.
+                int spins = 0;
+                while (!ProbePresent())
+                {
+                    if (++spins > kProbeSpinLimit)
+                    {
+                        log::Write("init: probe never appeared; aborting");
+                        state.exitCode = 1;
+                        return Outcome::stop;
+                    }
+                    ::Sleep(kProbeSleepMs);
+                }
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepPaths(RunState& state)
+        {
+            state.directory = paths::ModuleDirectory();
+            return Outcome::next;
+        }
+
+        Outcome StepConfig(RunState& state)
+        {
+            state.loaded = config::Load(state.directory);
+            return Outcome::next;
+        }
+
+        Outcome StepFusionFix(RunState& state)
+        {
+            state.fusionFix = config::FusionFixPresent(state.directory);
+            if (state.fusionFix)
+            {
+                for (const config::FusionFixGate& gate :
+                     config::ApplyFusionFixGates(state.loaded.options))
+                {
+                    log::Info("fusionfix: gating {} (FusionFix {})", gate.option,
+                              gate.fusionFixModule);
+                }
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepReportConfig(RunState& state)
+        {
+            LogConfiguration(state.loaded, state.fusionFix);
+            if (!state.loaded.options.customSettingsPath.empty())
+            {
+                log::Write("settings: CustomSettingsPath is not hooked in this build; use "
+                           "LocalSettingsPath or FusionFix userdata.ixx");
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepImage(RunState& state)
+        {
+            state.image = CurrentImage();
+            if (state.image.empty())
+            {
+                log::Write("init: game image unavailable; no patches applied");
+                state.exitCode = 0;
+                return Outcome::stop;
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepWritable(RunState& state)
+        {
+            if (!MakeImageWritable(state.image))
+            {
+                log::Write("init: image is not writable; no patches applied");
+                state.exitCode = 0;
+                return Outcome::stop;
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepBuild(RunState& state)
+        {
+            const std::optional<build::Id> detected = build::Detect(state.image);
+            if (!detected)
+            {
+                log::Write("init: unsupported build; no patches applied");
+                state.exitCode = 0;
+                return Outcome::stop;
+            }
+            state.build = *detected;
+            log::Info("build={}", build::Label(state.build));
+            return Outcome::next;
+        }
+
+        Outcome StepLocalSettings(RunState& state)
+        {
+            // LocalSettingsPath owns the shell user-data folders; install it before
+            // the game can query them.
+            if (state.loaded.options.localSettingsPath)
+            {
+                userdata::InstallLocalSettingsPath(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepSavegames(RunState& state)
+        {
+            savegames::Install(state.image, state.loaded.options.customSavePath);
+            return Outcome::next;
+        }
+
+        Outcome StepSkipLauncher(RunState& state)
+        {
+            if (state.loaded.options.skipLauncher)
+            {
+                const auto applied =
+                    ApplySkipLauncher(state.image.bytes(), &ResolveSkipHook, nullptr,
+                                      SkipLauncherStage::dfa | SkipLauncherStage::rom);
+                if (applied)
+                {
+                    const SkipLauncherReport& report = *applied;
+                    log::Info("skipLauncher: entries={} missing={} writes={} jump={} dfa={}/{} "
+                              "rom={}/{} collected={} createFileSlot={:08X}",
+                              report.entriesFound, report.entriesMissing, report.writes,
+                              report.jumpInstalled, report.dfaInstalls, report.dfaMissing,
+                              report.romInstalls, report.romMissing, report.collectedInstalls,
+                              report.createFileSlot);
+                }
+                else
+                {
+                    log::Info("skipLauncher: failed with code {} ({})",
+                              static_cast<int>(applied.error().code), applied.error().detail);
+                }
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepBorderless(RunState& state)
+        {
+            if (state.loaded.options.borderlessWindowed)
+            {
+                state.borderless = windowed::InstallBorderlessHooks(state.image) ? 1 : 0;
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepFocusLoss(RunState& state)
+        {
+            if (state.loaded.options.doNotPauseOnMinimize)
+            {
+                state.focusLoss = windowed::InstallFocusLossInput(state.image) ? 1 : 0;
+            }
+            log::Info("window: borderless={} focusLoss={}", state.borderless, state.focusLoss);
+            return Outcome::next;
+        }
+
+        Outcome StepCorePatches(RunState& state)
+        {
+            patches::InstallCore(state.image, state.build);
+            return Outcome::next;
+        }
+
+        Outcome StepLauncherStage(RunState& state)
+        {
+            // The launcher helpers only run when the recovered stage is disabled;
+            // the original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0.
+            if (!state.loaded.options.skipLauncher)
+            {
+                if (!build::Is(state.build, {build::Id::v1100, build::Id::v1110}))
+                {
+                    dfa::Install(state.image);
+                }
+                rom_window::Install(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepWebConnect(RunState& state)
+        {
+            if (state.loaded.options.skipWebConnect)
+            {
+                patches::InstallWebConnectChecks(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepIntro(RunState& state)
+        {
+            if (state.loaded.options.skipIntro)
+            {
+                patches::InstallIntro(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepMenu(RunState& state)
+        {
+            if (state.loaded.options.skipMenu)
+            {
+                patches::InstallMenu(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepDoNotPause(RunState& state)
+        {
+            if (state.loaded.options.doNotPauseOnMinimize)
+            {
+                patches::InstallDoNotPauseOnMinimize(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepDefWindowShims(RunState& state)
+        {
+            if (state.loaded.options.borderlessWindowed)
+            {
+                windowed::InstallDefWindowProcShims(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepRegistry(RunState& state)
+        {
+            if (state.loaded.options.removeRegistryPathDependency)
+            {
+                registry::Install(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepVram(RunState& state)
+        {
+            if (state.loaded.options.vramFix)
+            {
+                patches::InstallVramFix(state.image);
+            }
+            return Outcome::next;
+        }
+
+        Outcome StepComplete(RunState&)
+        {
+            log::Write("init complete");
+            return Outcome::next;
+        }
+
+        using StepFn = Outcome (*)(RunState&);
+
+        struct StepEntry
+        {
+            std::string_view name; // must match xla.order::Pipeline() at the same index
+            StepFn run;
+        };
+
+        // One entry per xla.order::Pipeline() node, in declaration order.
+        constexpr StepEntry kSteps[] = {
+            {"banner", StepBanner},
+            {"console", StepConsole},
+            {"probe", StepProbe},
+            {"paths", StepPaths},
+            {"config", StepConfig},
+            {"fusionfix", StepFusionFix},
+            {"report-config", StepReportConfig},
+            {"image", StepImage},
+            {"writable", StepWritable},
+            {"build", StepBuild},
+            {"local-settings", StepLocalSettings},
+            {"savegames", StepSavegames},
+            {"skip-launcher", StepSkipLauncher},
+            {"borderless-hooks", StepBorderless},
+            {"focus-loss", StepFocusLoss},
+            {"core-patches", StepCorePatches},
+            {"launcher-stage", StepLauncherStage},
+            {"web-connect", StepWebConnect},
+            {"intro", StepIntro},
+            {"menu", StepMenu},
+            {"do-not-pause", StepDoNotPause},
+            {"defwindow-shims", StepDefWindowShims},
+            {"registry", StepRegistry},
+            {"vram", StepVram},
+            {"complete", StepComplete},
+        };
+
+        // The names are the link between the schedule and the functions: a node
+        // inserted, removed or renamed without the matching step is a compile
+        // error, not a silently different install order.
+        [[nodiscard]] constexpr bool StepTableMatchesPipeline() noexcept
+        {
+            const std::span<const order::Node> pipeline = order::Pipeline();
+            if (std::size(kSteps) != pipeline.size())
+            {
+                return false;
+            }
+            for (std::size_t index = 0; index < pipeline.size(); ++index)
+            {
+                if (kSteps[index].name != pipeline[index].name)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(StepTableMatchesPipeline());
+
+        [[nodiscard]] std::size_t IndexOf(std::span<const order::Node> pipeline,
+                                          std::string_view name) noexcept
+        {
+            for (std::size_t index = 0; index < pipeline.size(); ++index)
+            {
+                if (pipeline[index].name == name)
+                {
+                    return index;
+                }
+            }
+            return pipeline.size();
+        }
     } // namespace
 
     int Run(HMODULE module)
     {
         (void)module;
-        log::Banner();
 
-        if (::GetConsoleWindow() != nullptr)
+        const std::span<const order::Node> pipeline = order::Pipeline();
+        const order::Plan plan = order::Build(pipeline);
+        if (!plan.valid)
         {
-            ::FreeConsole();
+            for (const std::string& diagnostic : plan.diagnostics)
+            {
+                log::Info("{}", diagnostic);
+            }
+            log::Write("init: order invalid; no patches applied");
+            return 1;
         }
 
-        // The game executable is checked for the probe before anything is trusted.
-        if (!ProbePresent())
+        RunState state;
+        std::vector<bool> executed(pipeline.size(), false);
+        for (const std::size_t index : plan.order)
         {
-            if (!g_delayed.exchange(true))
+            // `prerequisites` is also enforced by the sorter (a missing target makes the
+            // plan invalid); the executor additionally refuses to run a step whose
+            // hard prerequisite has not executed, so a future conditional step
+            // cannot silently depend on one that was skipped.
+            for (const std::string_view required : pipeline[index].prerequisites)
             {
-                log::Write("init: probe missing; retrying on a worker thread");
-                const HANDLE thread =
-                    ::CreateThread(nullptr, 0, &DelayedInit, nullptr, 0, nullptr);
-                if (thread != nullptr)
+                const std::size_t requiredIndex = IndexOf(pipeline, required);
+                if (requiredIndex == pipeline.size() || !executed[requiredIndex])
                 {
-                    ::CloseHandle(thread);
-                }
-                return 0;
-            }
-
-            // Wait for the probe instead of spinning a core forever. Supported
-            // builds hit it on the first iterations; an unsupported build gets a
-            // log line and an orderly return.
-            int spins = 0;
-            while (!ProbePresent())
-            {
-                if (++spins > kProbeSpinLimit)
-                {
-                    log::Write("init: probe never appeared; aborting");
+                    log::Info("init: order prerequisite '{}' for '{}' did not run", required,
+                              pipeline[index].name);
                     return 1;
                 }
-                ::Sleep(kProbeSleepMs);
             }
-        }
 
-        const std::filesystem::path directory = paths::ModuleDirectory();
-        config::LoadResult loaded = config::Load(directory);
-        config::Options& options = loaded.options;
-
-        const bool fusionFix = config::FusionFixPresent(directory);
-        if (fusionFix)
-        {
-            for (const config::FusionFixGate& gate : config::ApplyFusionFixGates(options))
+            const Outcome outcome = kSteps[index].run(state);
+            executed[index] = true;
+            if (outcome == Outcome::stop)
             {
-                log::Info("fusionfix: gating {} (FusionFix {})", gate.option,
-                          gate.fusionFixModule);
+                break;
             }
         }
-
-        LogConfiguration(loaded, fusionFix);
-        if (!options.customSettingsPath.empty())
-        {
-            log::Write("settings: CustomSettingsPath is not hooked in this build; use "
-                       "LocalSettingsPath or FusionFix userdata.ixx");
-        }
-
-        const Image image = CurrentImage();
-        if (image.empty())
-        {
-            log::Write("init: game image unavailable; no patches applied");
-            return 0;
-        }
-
-        if (!MakeImageWritable(image))
-        {
-            log::Write("init: image is not writable; no patches applied");
-            return 0;
-        }
-
-        const std::optional<build::Id> detected = build::Detect(image);
-        if (!detected)
-        {
-            log::Write("init: unsupported build; no patches applied");
-            return 0;
-        }
-        const build::Id build = *detected;
-        log::Info("build={}", build::Label(build));
-
-        // LocalSettingsPath owns the shell user-data folders; install it before the
-        // game can query them.
-        if (options.localSettingsPath)
-        {
-            userdata::InstallLocalSettingsPath(image);
-        }
-
-        savegames::Install(image, options.customSavePath);
-
-        if (options.skipLauncher)
-        {
-            const auto applied = ApplySkipLauncher(image.bytes(), &ResolveSkipHook, nullptr,
-                                                   SkipLauncherStage::dfa | SkipLauncherStage::rom);
-            if (applied)
-            {
-                const SkipLauncherReport& report = *applied;
-                log::Info("skipLauncher: entries={} missing={} writes={} jump={} dfa={}/{} "
-                          "rom={}/{} collected={} createFileSlot={:08X}",
-                          report.entriesFound, report.entriesMissing, report.writes,
-                          report.jumpInstalled, report.dfaInstalls, report.dfaMissing,
-                          report.romInstalls, report.romMissing, report.collectedInstalls,
-                          report.createFileSlot);
-            }
-            else
-            {
-                log::Info("skipLauncher: failed with code {} ({})",
-                          static_cast<int>(applied.error().code), applied.error().detail);
-            }
-        }
-
-        int borderless = -1;
-        int focusLoss = -1;
-        if (options.borderlessWindowed)
-        {
-            borderless = windowed::InstallBorderlessHooks(image) ? 1 : 0;
-        }
-        if (options.doNotPauseOnMinimize)
-        {
-            focusLoss = windowed::InstallFocusLossInput(image) ? 1 : 0;
-        }
-        log::Info("window: borderless={} focusLoss={}", borderless, focusLoss);
-
-        patches::InstallCore(image, build);
-
-        // The launcher helpers only run when the recovered stage is disabled; the
-        // original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0.
-        if (!options.skipLauncher)
-        {
-            if (!build::Is(build, {build::Id::v1100, build::Id::v1110}))
-            {
-                dfa::Install(image);
-            }
-            rom_window::Install(image);
-        }
-
-        if (options.skipWebConnect)
-        {
-            patches::InstallWebConnectChecks(image);
-        }
-        if (options.skipIntro)
-        {
-            patches::InstallIntro(image);
-        }
-        if (options.skipMenu)
-        {
-            patches::InstallMenu(image);
-        }
-        if (options.doNotPauseOnMinimize)
-        {
-            patches::InstallDoNotPauseOnMinimize(image);
-        }
-        if (options.borderlessWindowed)
-        {
-            windowed::InstallDefWindowProcShims(image);
-        }
-        if (options.removeRegistryPathDependency)
-        {
-            registry::Install(image);
-        }
-        if (options.vramFix)
-        {
-            patches::InstallVramFix(image);
-        }
-
-        log::Write("init complete");
-        return 0;
+        return state.exitCode;
     }
 } // namespace xla

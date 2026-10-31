@@ -19,8 +19,11 @@ as a companion, as some features belong there; it also works on its own.
 - Borderless window, focus-loss handling and the VRAM detection fix.
 - Every option is INI-gated and logged, and is gated off when FusionFix owns the same subsystem.
 
-Known limitation: `CustomSettingsPath` is parsed and logged but its hook is not ported, so the
-value changes nothing. Use `LocalSettingsPath` or FusionFix's `userdata.ixx` instead.
+`CustomSettingsPath` is implemented with a reconstructed 5-byte call body: the pinned injector's
+`MakeInline` is SafetyHook-based and this build compiles no SafetyHook. The recovered path logic is
+unit-tested, but the hook has not been validated in-game; an absolute path (one with a drive letter)
+uses the documented intent rather than the original's undefined empty-string check. Prefer
+`LocalSettingsPath` or FusionFix's `userdata.ixx` if the hook does not fit.
 
 ## Installation
 

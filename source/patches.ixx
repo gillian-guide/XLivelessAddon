@@ -38,6 +38,18 @@ export namespace xla::patches
 
     // VRAM detection fix so the settings are not locked out.
     void InstallVramFix(const Image& image);
+
+    // CustomSettingsPath: redirect the game's settings folder. The recovered
+    // XLivelessAddon body is a register-contract inline hook at two sites; the
+    // pinned injector's MakeInline is SafetyHook-based, so the behaviour is
+    // carried by a 5-byte call to an assembled body (see the definition).
+    // Empty = option off (also the FusionFix-gated state).
+    void InstallCustomSettingsPath(const Image& image, std::string_view customSettingsPath);
+
+    // The path the original body composes; exported for the native test.
+    [[nodiscard]] std::string ComposeSettingsPath(std::string_view moduleDirectory,
+                                                  std::string_view configured,
+                                                  std::string_view subfolder);
 } // namespace xla::patches
 
 namespace xla::patches
@@ -589,5 +601,165 @@ namespace xla::patches
         g_vidMemOriginal = reinterpret_cast<std::int32_t(__cdecl*)()>(
             patch::CallFirst("E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24", 0,
                              reinterpret_cast<void*>(&GetVidMemBody), "vram: call (3/3)"));
+    }
+} // namespace xla::patches
+
+namespace xla::patches
+{
+    std::string ComposeSettingsPath(std::string_view moduleDirectory, std::string_view configured,
+                                    std::string_view subfolder)
+    {
+        // The recovered order: a relative configured path is prefixed with the
+        // game folder, then the configured part, the per-profile folder name the
+        // game passes in EBX, and a trailing separator. The original called
+        // s.back() on an empty string when the configured path was absolute
+        // (undefined); the documented intent (start at the configured path) is
+        // used for that case.
+        std::string path;
+        if (configured.find(':') == std::string_view::npos)
+        {
+            path.assign(moduleDirectory);
+            if (!path.empty() && path.back() != '\\')
+            {
+                path += '\\';
+            }
+        }
+        path.append(configured);
+        if (path.empty() || path.back() != '\\')
+        {
+            path += '\\';
+        }
+        path.append(subfolder);
+        path += '\\';
+        return path;
+    }
+
+    namespace
+    {
+        // Recovered XLivelessAddon pattern [v1001-v1008]. The original asserts
+        // four hits; matches 1 and 2 are patched at +5 (the `mov ecx, <global>`
+        // after the pushed settings-path buffer operand).
+        constexpr std::string_view kSettingsPathPattern =
+            "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
+        constexpr std::size_t kSettingsPathSites = 4;
+        constexpr std::size_t kSettingsPatchOffset = 5;
+        constexpr std::uint16_t kSettingsCopyLimit = 256;
+
+        std::string g_customSettingsPath;
+
+        // Runs in the game process at the patched site (cdecl, called from the
+        // assembled body below): fills the game's settings-path buffer. The
+        // try/catch is required because the call frame is assembly; an exception
+        // must never unwind through it.
+        void __cdecl BuildCustomSettingsPath(char* buffer, const char* subfolder)
+        {
+            if (buffer == nullptr || subfolder == nullptr)
+            {
+                return;
+            }
+            try
+            {
+                const std::string path = ComposeSettingsPath(
+                    paths::ModuleDirectory().string(), g_customSettingsPath, subfolder);
+                if (::GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+                {
+                    ::CreateDirectoryA(path.c_str(), nullptr);
+                }
+                // The original checks the attribute without re-testing the error:
+                // INVALID_FILE_ATTRIBUTES (-1) still has the directory bit set, so
+                // a failed CreateDirectory copies too. Kept 1:1.
+                if ((::GetFileAttributesA(path.c_str()) & FILE_ATTRIBUTE_DIRECTORY) != 0)
+                {
+                    path.copy(buffer, kSettingsCopyLimit);
+                    buffer[path.size()] = '\0';
+                }
+            }
+            catch (...)
+            {
+            }
+        }
+
+        // The body the patched site calls. The site's `mov ecx, <global>` is
+        // replaced by `call <stub>` (5 bytes), so the stub must return to the next
+        // instruction with every register and EFLAGS unchanged except ECX. The
+        // pushad layout after pushfd is eax, ecx, edx, ebx, esp, ebp, esi, edi:
+        // saved EBX is at [esp+0x0C] (the game's per-profile folder name) and
+        // saved ECX at [esp+4] (set to the original global).
+        void* MakeSettingsStub(std::uint32_t buffer, std::uint32_t global, std::uint32_t helper)
+        {
+            constexpr std::size_t kStubBytes = 30;
+            void* memory = ::VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
+                                          PAGE_EXECUTE_READWRITE);
+            if (memory == nullptr)
+            {
+                log::Write("settings: cannot allocate the CustomSettingsPath stub");
+                return nullptr;
+            }
+            std::uint8_t code[kStubBytes] = {
+                0x9C,                                           // pushfd
+                0x60,                                           // pushad
+                0xFF, 0x74, 0x24, 0x0C,                         // push [esp+0x0C]
+                0x68, 0x00, 0x00, 0x00, 0x00,                   // push buffer
+                0xE8, 0x00, 0x00, 0x00, 0x00,                   // call helper
+                0x83, 0xC4, 0x08,                               // add esp, 8
+                0xC7, 0x44, 0x24, 0x04, 0x00, 0x00, 0x00, 0x00, // mov [esp+4], global
+                0x61,                                           // popad
+                0x9D,                                           // popfd
+                0xC3,                                           // ret
+            };
+            static_assert(sizeof(code) == kStubBytes);
+            std::memcpy(code + 7, &buffer, sizeof(buffer));
+            const auto callSite = reinterpret_cast<std::uintptr_t>(memory) + 16;
+            const auto displacement = static_cast<std::int32_t>(
+                static_cast<std::uintptr_t>(helper) - callSite);
+            std::memcpy(code + 12, &displacement, sizeof(displacement));
+            std::memcpy(code + 23, &global, sizeof(global));
+            std::memcpy(memory, code, sizeof(code));
+            ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(code));
+            return memory;
+        }
+    } // namespace
+
+    void InstallCustomSettingsPath(const Image& image, std::string_view customSettingsPath)
+    {
+        if (customSettingsPath.empty())
+        {
+            return; // option off, or FusionFix owns the subsystem
+        }
+        g_customSettingsPath.assign(customSettingsPath);
+
+        const auto begin = reinterpret_cast<std::uintptr_t>(image.base);
+        hook::pattern pattern =
+            hook::make_range_pattern(begin, begin + image.size, kSettingsPathPattern);
+        if (pattern.size() != kSettingsPathSites)
+        {
+            log::Info("settings: CustomSettingsPath pattern matched {} site(s), expected {}; "
+                      "keeping the game default",
+                      pattern.size(), kSettingsPathSites);
+            return;
+        }
+
+        const auto install = [&](std::size_t index) {
+            const auto match = pattern.get(index);
+            auto* site = match.get<std::uint8_t>() + kSettingsPatchOffset;
+            if (!image.contains(site, 5))
+            {
+                log::Write("settings: CustomSettingsPath site outside the image; skipped");
+                return;
+            }
+            const std::uint32_t buffer = *match.get<std::uint32_t>(1);
+            const std::uint32_t global = *match.get<std::uint32_t>(6);
+            void* stub = MakeSettingsStub(
+                buffer, global,
+                static_cast<std::uint32_t>(
+                    reinterpret_cast<std::uintptr_t>(&BuildCustomSettingsPath)));
+            if (stub != nullptr)
+            {
+                injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(stub), true);
+            }
+        };
+        install(1);
+        install(2);
+        log::Info("settings: CustomSettingsPath installed ({}, two sites)", customSettingsPath);
     }
 } // namespace xla::patches

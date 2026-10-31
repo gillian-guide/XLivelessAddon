@@ -14,7 +14,9 @@ its sources.
 - `source/*.ixx` — one C++23 module interface unit per feature (FusionFix layout); `common.hxx`
   is the shared include header. They are listed in the `XLA_MODULES` `CXX_MODULES` file set;
   `tools/module_layout.py` (CTest `xla_module_layout`) fails if a file drifts out of the shape.
-- `source/dllmain.cpp`, `source/ini_file.cpp` — the only plain translation units.
+- `source/dllmain.cpp` — the only plain translation unit in `source/` (the entry point). The
+  vendored libraries compile their own TUs under `external/` (`Hooking.Patterns.cpp` and the
+  IniReader pimpl implementation).
 - `source/patch.ixx` — the primitive store helpers (Hooking.Patterns for scans, injector for
   writes); every helper logs applied/missing.
 - `source/patches.ixx` — the recovered patch list, in the original handler's order; its scan
@@ -54,8 +56,10 @@ Rules learned the hard way:
 
 1. **Modules:** standard headers belong in `common.hxx`; include it in the `module;` global
    fragment, then `import`. Including a std header after an `import` breaks MSVC's `istream`.
-2. **mINI/IniReader must stay in a plain TU** (`ini_file.cpp`). In module purview MSVC's
-   serialisation of its stream internals is unreliable (it crashes at runtime).
+2. **mINI/IniReader is a pimpl library** (`external/IniReader/IniReader.h` = declarations,
+   `IniReaderImpl.cpp` = mINI implementation). Module code includes only the header. The
+   all-inline reader crashed when instantiated in module purview (reproduced in a probe module
+   and in `xla.config`); do not move the implementation back into the header.
 3. **`__declspec(naked)` on an exported module member is rejected by MSVC.** Assemble the opcodes
    instead (`skip_hooks::RomSetStub`) or use a plain TU. The one internal-linkage naked body
    (`SkipIntroBody` in `patches.ixx`) does compile in module purview on MSVC 2026; do not add new

@@ -53,6 +53,12 @@ revision `fcc0c83` stores the opcode as one byte and the immediate as two (three
 `ret imm16`). The gitlink records the patched revision; the zlib licence is unchanged. Any
 further local submodule fix is committed in that submodule and recorded here with its revision.
 
+The pinned `external/IniReader` revision (`9057ef1`) is also locally fixed: `CIniReader` is a pimpl
+class whose mINI implementation lives in `IniReaderImpl.cpp`, and mINI reads its file through the
+C runtime. The all-inline reader crashed when it was instantiated from a C++23 module interface
+unit (reproduced in this add-on's `xla.config`); a module translation unit now includes
+declarations only. The MIT licence is unchanged.
+
 ## Game assets
 
 Grand Theft Auto IV and Episodes from Liberty City are property of Rockstar Games and Take-Two

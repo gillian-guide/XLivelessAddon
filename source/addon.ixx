@@ -203,11 +203,6 @@ namespace xla
         Outcome StepReportConfig(RunState& state)
         {
             LogConfiguration(state.loaded, state.fusionFix);
-            if (!state.loaded.options.customSettingsPath.empty())
-            {
-                log::Write("settings: CustomSettingsPath is not hooked in this build; use "
-                           "LocalSettingsPath or FusionFix userdata.ixx");
-            }
             return Outcome::next;
         }
 
@@ -317,6 +312,10 @@ namespace xla
         Outcome StepCorePatches(RunState& state)
         {
             patches::InstallCore(state.image, state.build);
+            // The settings redirect is INI-gated inside the installer (empty = off,
+            // which is also the FusionFix-gated state).
+            patches::InstallCustomSettingsPath(state.image,
+                                               state.loaded.options.customSettingsPath);
             return Outcome::next;
         }
 

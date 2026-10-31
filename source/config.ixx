@@ -7,14 +7,15 @@
 // then a flat/legacy `ZolikaPatch.ini`. The FusionFix gates disable any option
 // whose subsystem FusionFix owns, so two modules never write the same code.
 //
-// The parser itself lives in ini_file.cpp (a plain translation unit): mINI's
-// stream code is unreliable inside module purview, and a wrong key silently
-// falling back to its default is the one failure this loader must not have.
+// The parser is the vendored IniReader, compiled in its own translation unit
+// (external/IniReader/IniReaderImpl.cpp). This module includes only its pimpl
+// header: mINI's inline code crashed when it was instantiated in module purview.
 
 module;
 
 #include "common.hxx"
-#include "ini_file.hxx"
+
+#include <IniReader.h>
 
 export module xla.config;
 
@@ -84,8 +85,8 @@ export namespace xla::config
         "[Options]\n"
         "; custom savegames folder; leave empty to use the game default (FusionFix userdata.ixx owns this when present)\n"
         "CustomSavePath=\n"
-        "; custom settings folder; PARSED AND LOGGED ONLY - the hook is not ported, so this "
-        "value changes nothing (use LocalSettingsPath or FusionFix userdata.ixx)\n"
+        "; custom settings folder; relative to the game folder unless it has a drive letter "
+        "(FusionFix userdata.ixx owns this when present)\n"
         "CustomSettingsPath=\n"
         "; skip the launcher/DRM checks (recovered DFA and ROM stages)\n"
         "SkipLauncher=1\n"
@@ -180,11 +181,111 @@ export namespace xla::config
             {"CustomSettingsPath", &Options::customSettingsPath},
         }};
 
+        // The reader splits on '\n' already, so the CRLF rewrite is inherited
+        // editor/round-trip compatibility (it rewrites the user's file once), not
+        // a parse requirement. The C runtime is used because this runs in module
+        // purview.
+        inline void NormalizeLineEndings(const std::filesystem::path& path)
+        {
+            std::FILE* in = ::_wfopen(path.c_str(), L"rb");
+            if (in == nullptr)
+            {
+                return;
+            }
+            std::fseek(in, 0, SEEK_END);
+            const long size = std::ftell(in);
+            std::rewind(in);
+            if (size <= 0)
+            {
+                std::fclose(in);
+                return;
+            }
+            std::string text(static_cast<std::size_t>(size), '\0');
+            const std::size_t read = std::fread(text.data(), 1, text.size(), in);
+            std::fclose(in);
+            text.resize(read);
+
+            bool hasBareLf = false;
+            for (std::size_t i = 0; i < text.size(); ++i)
+            {
+                if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
+                {
+                    hasBareLf = true;
+                    break;
+                }
+            }
+            if (!hasBareLf)
+            {
+                return;
+            }
+
+            std::string normalized;
+            normalized.reserve(text.size() + 16);
+            for (std::size_t i = 0; i < text.size(); ++i)
+            {
+                if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
+                {
+                    normalized += "\r\n";
+                }
+                else
+                {
+                    normalized += text[i];
+                }
+            }
+
+            std::FILE* out = ::_wfopen(path.c_str(), L"wb");
+            if (out == nullptr)
+            {
+                return;
+            }
+            std::fwrite(normalized.data(), 1, normalized.size(), out);
+            std::fclose(out);
+            log::Info("config: normalized {} to CRLF (inherited editor/round-trip norm; "
+                      "mINI already splits on LF)",
+                      path.string());
+        }
+
+        // One INI file, opened through the vendored reader. CIniReader cannot tell
+        // "key absent" from "value equals the default", so Read maps a sentinel to
+        // nullopt; no real INI line can contain it.
+        class IniFile
+        {
+        public:
+            static std::optional<IniFile> Open(const std::filesystem::path& path)
+            {
+                std::error_code error;
+                if (!std::filesystem::exists(path, error) || error)
+                {
+                    return std::nullopt;
+                }
+                NormalizeLineEndings(path);
+                return IniFile{path};
+            }
+
+            [[nodiscard]] std::optional<std::string> Read(std::string_view section,
+                                                          std::string_view key) const
+            {
+                static constexpr std::string_view kMissing = "\x01xla-missing";
+                std::string value = m_reader.ReadString(section, key, kMissing);
+                if (value == kMissing)
+                {
+                    return std::nullopt;
+                }
+                return value;
+            }
+
+        private:
+            explicit IniFile(const std::filesystem::path& path) : m_reader(path) {}
+
+            // ReadString is non-const in the vendored API; the wrapper stays const.
+            mutable CIniReader m_reader;
+        };
+
         // The first present value for `key`: the add-on's own INI, then the legacy
         // one, in `kSections` order (the list order is the precedence, not the file
         // order - the shipped flat ZolikaPatch.ini relies on it).
-        inline std::optional<std::string> FindOption(const ini::File* own,
-                                                    const ini::File* legacy,
+        inline std::optional<std::string> FindOption(const IniFile* own,
+                                                    const IniFile* legacy,
                                                     std::string_view key)
         {
             if (own != nullptr)
@@ -266,21 +367,21 @@ export namespace xla::config
         std::error_code error;
         result.legacyPresent = std::filesystem::exists(result.legacyPath, error) && !error;
 
-        std::optional<ini::File> own = ini::File::Open(result.iniPath);
+        std::optional<detail::IniFile> own = detail::IniFile::Open(result.iniPath);
         result.iniReadable = own.has_value();
         if (!result.iniReadable)
         {
             log::Info("config: cannot read {}; using defaults", result.iniPath.string());
         }
 
-        std::optional<ini::File> legacy;
+        std::optional<detail::IniFile> legacy;
         if (result.legacyPresent)
         {
-            legacy = ini::File::Open(result.legacyPath);
+            legacy = detail::IniFile::Open(result.legacyPath);
         }
 
-        const ini::File* ownFile = own ? &*own : nullptr;
-        const ini::File* legacyFile = legacy ? &*legacy : nullptr;
+        const detail::IniFile* ownFile = own ? &*own : nullptr;
+        const detail::IniFile* legacyFile = legacy ? &*legacy : nullptr;
 
         // One pass over the key→member table. A key that neither file has keeps the
         // member's default; an empty or non-numeric flag value is false (the original

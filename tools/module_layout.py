@@ -7,8 +7,9 @@ The layout is a contract (see AGENTS.md and GTAIV.EFLC.FusionFix):
     `export module xla.<stem>;`
   * `source/common.hxx` is the single shared include header, included in the
     `module;` global fragment of every interface unit;
-  * `source/dllmain.cpp` and `source/ini_file.cpp` are the only plain
-    translation units (the entry point and the mINI/IniReader isolation);
+  * `source/dllmain.cpp` is the only plain translation unit in `source/` (the
+    entry point); the vendored libraries compile their own TUs under `external/`
+    (Hooking.Patterns and the IniReader pimpl implementation);
   * every interface unit is listed in the `XLA_MODULES` CXX_MODULES file set,
     so CMake scans it instead of compiling it as an ordinary source;
   * standard headers live in `common.hxx` — nothing is included after the module
@@ -25,8 +26,8 @@ import re
 import sys
 from pathlib import Path
 
-PLAIN_TUS = {"dllmain.cpp", "ini_file.cpp"}
-HEADERS = {"common.hxx", "ini_file.hxx"}
+PLAIN_TUS = {"dllmain.cpp"}
+HEADERS = {"common.hxx"}
 MODULE = re.compile(r"^\s*export\s+module\s+([A-Za-z_][\w.]*)\s*;", re.M)
 IMPORT = re.compile(r"^\s*import\s+([^;]+);", re.M)
 INCLUDE = re.compile(r"^\s*#include\s+", re.M)
@@ -156,7 +157,7 @@ def main(argv: list[str]) -> int:
 
         if plain != PLAIN_TUS:
             problems.append(
-                f"source/*.cpp is {sorted(plain)}, expected the two plain TUs {sorted(PLAIN_TUS)}")
+                f"source/*.cpp is {sorted(plain)}, expected the plain TU(s) {sorted(PLAIN_TUS)}")
         if headers != HEADERS:
             problems.append(
                 f"source/*.hxx is {sorted(headers)}, expected {sorted(HEADERS)}")
@@ -188,3 +189,4 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+

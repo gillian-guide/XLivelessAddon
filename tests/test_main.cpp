@@ -12,6 +12,7 @@ import xla.build;
 import xla.common;
 import xla.config;
 import xla.patch;
+import xla.patches;
 import xla.registry;
 import xla.rom_window;
 import xla.savegames;
@@ -594,6 +595,90 @@ namespace
         CHECK_EQ(xla::patch::Call(xla::patch::Site{}, 0, first, "test: empty"), nullptr);
     }
 
+    // Defined with the skip-launcher helpers below; declared here for the
+    // settings-path install test.
+    std::vector<std::byte> BytesOf(std::string_view signature);
+
+    void TestCustomSettingsPathComposition()
+    {
+        using xla::patches::ComposeSettingsPath;
+
+        // Relative configured path: game folder, configured part, per-profile
+        // folder, trailing separator (the recovered order).
+        CHECK_EQ(ComposeSettingsPath("C:\\Games\\GTA IV\\", "Saves", "GTAIV"),
+                 std::string{"C:\\Games\\GTA IV\\Saves\\GTAIV\\"});
+        // A game directory without a trailing separator gains one.
+        CHECK_EQ(ComposeSettingsPath("C:\\Games\\GTA IV", "Saves", "GTAIV"),
+                 std::string{"C:\\Games\\GTA IV\\Saves\\GTAIV\\"});
+        // A configured value ending in a separator is not doubled before the
+        // profile folder.
+        CHECK_EQ(ComposeSettingsPath("C:\\Games\\GTA IV\\", "Saves\\", "GTAIV"),
+                 std::string{"C:\\Games\\GTA IV\\Saves\\GTAIV\\"});
+        // Absolute configured path: the documented intent (the original's empty
+        // s.back() is undefined).
+        CHECK_EQ(ComposeSettingsPath("C:\\Games\\GTA IV\\", "D:\\Saves", "GTAIV"),
+                 std::string{"D:\\Saves\\GTAIV\\"});
+    }
+
+    void TestCustomSettingsPathInstall()
+    {
+        // The recovered four-hit pattern; matches 1 and 2 lose their `mov ecx,
+        // <global>` to a 5-byte call to the assembled body, matches 0 and 3 stay.
+        constexpr std::string_view signature =
+            "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
+        const auto bytes = BytesOf(signature);
+        std::vector<std::byte> image(0x800, std::byte{0});
+        constexpr std::size_t kStride = 0x100;
+        constexpr std::size_t kBase = 0x100;
+        for (std::size_t index = 0; index < 4; ++index)
+        {
+            const std::size_t offset = kBase + index * kStride;
+            std::copy(bytes.begin(), bytes.end(), image.begin() + offset);
+            const std::uint32_t buffer = static_cast<std::uint32_t>(0x1000 + index);
+            std::memcpy(image.data() + offset + 1, &buffer, sizeof(buffer));
+            const std::uint32_t global = static_cast<std::uint32_t>(0x2000 + index);
+            std::memcpy(image.data() + offset + 6, &global, sizeof(global));
+        }
+
+        const xla::Image view{image.data(), image.size()};
+        xla::patches::InstallCustomSettingsPath(view, "Saves");
+
+        for (std::size_t index = 0; index < 4; ++index)
+        {
+            const std::size_t opcode = kBase + index * kStride + 5;
+            const bool patched = index == 1 || index == 2;
+            CHECK_EQ(image[opcode], patched ? std::byte{0xE8} : std::byte{0xB9});
+        }
+
+        // The patched site's rel32 names the assembled body; the fixed opcodes,
+        // the buffer operand, the global operand and the return are pinned.
+        const std::size_t site = kBase + kStride + 5;
+        std::int32_t displacement = 0;
+        std::memcpy(&displacement, image.data() + site + 1, sizeof(displacement));
+        const auto target = reinterpret_cast<std::uintptr_t>(image.data() + site + 5) +
+                            static_cast<std::uintptr_t>(displacement);
+        const auto* stub = reinterpret_cast<const std::uint8_t*>(target);
+        CHECK_EQ(stub[0], std::uint8_t{0x9C}); // pushfd
+        CHECK_EQ(stub[1], std::uint8_t{0x60}); // pushad
+        CHECK_EQ(stub[2], std::uint8_t{0xFF}); // push [esp+0x0C] (saved EBX)
+        CHECK_EQ(stub[3], std::uint8_t{0x74});
+        CHECK_EQ(stub[4], std::uint8_t{0x24});
+        CHECK_EQ(stub[5], std::uint8_t{0x0C});
+        CHECK_EQ(stub[6], std::uint8_t{0x68}); // push buffer
+        std::uint32_t buffer = 0;
+        std::memcpy(&buffer, stub + 7, sizeof(buffer));
+        CHECK_EQ(buffer, 0x1001u); // match 1's pushed settings buffer
+        CHECK_EQ(stub[11], std::uint8_t{0xE8}); // call helper
+        CHECK_EQ(stub[16], std::uint8_t{0x83}); // add esp, 8
+        CHECK_EQ(stub[19], std::uint8_t{0xC7}); // mov [esp+4], global
+        std::uint32_t global = 0;
+        std::memcpy(&global, stub + 23, sizeof(global));
+        CHECK_EQ(global, 0x2001u); // match 1's original ecx operand
+        CHECK_EQ(stub[27], std::uint8_t{0x61}); // popad
+        CHECK_EQ(stub[28], std::uint8_t{0x9D}); // popfd
+        CHECK_EQ(stub[29], std::uint8_t{0xC3}); // ret
+    }
+
     void TestSavegamePaths()
     {
         CHECK_EQ(xla::savegames::BaseSavePath("C:\\Games\\GTA IV\\", ""),
@@ -995,6 +1080,8 @@ int main(int argc, char** argv)
     run("pipeline order", TestPipelineOrder);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);
+    run("custom settings path composition", TestCustomSettingsPathComposition);
+    run("custom settings path install", TestCustomSettingsPathInstall);
     run("savegame paths", TestSavegamePaths);
     run("registry helpers", TestRegistryHelpers);
     run("user data folders", TestUserdataFolders);
@@ -1016,5 +1103,6 @@ int main(int argc, char** argv)
     std::printf("xla tests: PASS\n");
     return 0;
 }
+
 
 

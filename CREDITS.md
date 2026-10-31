@@ -22,4 +22,5 @@ run next to [OpenPreCEPatch](https://github.com/OpenZDecomp/OpenPreCEPatch) and
 - **ThirteenAG** — `IniReader`.
 
 The signature tables, the hook bodies and the write behaviour were recovered
-from the shipped binaries and are documented in `docs/ARCHITECTURE.md`.
+from the shipped binaries; `source/skip_launcher.ixx` and `source/patches.ixx`
+carry the provenance comments.

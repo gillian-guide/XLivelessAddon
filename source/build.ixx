@@ -43,8 +43,8 @@ export namespace xla::build
         Id id;
     };
 
-    // Recovered from the original's build-classification switch (see
-    // docs/ARCHITECTURE.md). Order is irrelevant; the values are unique.
+    // Recovered from the original's build-classification switch. Order is
+    // irrelevant; the values are unique.
     inline constexpr std::array<Signature, 13> kSignatures{{
         {0xC25DE58Bu, Id::v1000},
         {0x831F7518u, Id::v1010},

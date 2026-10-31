@@ -83,7 +83,7 @@ export namespace xla::config
         "[Options]\n"
         "; custom savegames folder; leave empty to use the game default (FusionFix userdata.ixx owns this when present)\n"
         "CustomSavePath=\n"
-        "; custom settings folder; not hooked in this build (see docs/INI.md), leave empty\n"
+        "; custom settings folder; not hooked in this build, leave empty\n"
         "CustomSettingsPath=\n"
         "; skip the launcher/DRM checks (recovered DFA and ROM stages)\n"
         "SkipLauncher=1\n"

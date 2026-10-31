@@ -19,6 +19,9 @@ as a companion, as some features belong there; it also works on its own.
 - Borderless window, focus-loss handling and the VRAM detection fix.
 - Every option is INI-gated and logged, and is gated off when FusionFix owns the same subsystem.
 
+Known limitation: `CustomSettingsPath` is parsed and logged but its hook is not ported, so the
+value changes nothing. Use `LocalSettingsPath` or FusionFix's `userdata.ixx` instead.
+
 ## Installation
 
 1. Install [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest).

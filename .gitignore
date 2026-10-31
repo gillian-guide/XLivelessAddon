@@ -1,0 +1,46 @@
+# Build trees
+/build/
+/bin/
+/dist/
+/out/
+CMakeUserPresets.json
+compile_commands.json
+
+# Build artefacts
+*.asi
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.map
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.res
+
+# Logs and local configuration
+*.log
+.env
+*.local.ini
+
+# IDE and editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.*
+CMakeSettings.json
+
+# OS metadata
+Thumbs.db
+desktop.ini
+.DS_Store
+._*
+
+# Scratch space
+.scratch/

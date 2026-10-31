@@ -1,0 +1,28 @@
+# Normalise text in the repository and check it out with native Windows
+# line endings, which is what the MSVC toolchain and the INI reader expect.
+* text=auto
+
+*.cpp   text eol=crlf
+*.hpp   text eol=crlf
+*.hxx   text eol=crlf
+*.h     text eol=crlf
+*.c     text eol=crlf
+*.inc   text eol=crlf
+*.rc    text eol=crlf
+*.in    text eol=crlf
+*.ini   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.asm   text eol=crlf
+*.sln   text eol=crlf
+*.md    text eol=crlf
+*.txt   text eol=crlf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+
+# Binary artefacts never belong in the tree, but keep the attribute explicit.
+*.zip   binary
+*.png   binary
+*.ico   binary

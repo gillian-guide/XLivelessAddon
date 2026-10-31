@@ -380,6 +380,30 @@ namespace
         std::filesystem::remove_all(directory, error);
     }
 
+    void TestOpcodeCatalogue()
+    {
+        // Independent copy of the recovered windows: every table write goes
+        // through these bytes, so a change here is a write-set change.
+        constexpr std::array<std::uint8_t, 4> kMovAl1RetNop{0xB0, 0x01, 0xC3, 0x90};
+        CHECK(std::memcmp(xla::ops::kMovAl1RetNop, kMovAl1RetNop.data(),
+                          kMovAl1RetNop.size()) == 0);
+        constexpr std::array<std::uint8_t, 4> kXorEaxRetNop{0x33, 0xC0, 0xC3, 0x90};
+        CHECK(std::memcmp(xla::ops::kXorEaxRetNop, kXorEaxRetNop.data(),
+                          kXorEaxRetNop.size()) == 0);
+        constexpr std::array<std::uint8_t, 2> kXorEaxEax{0x33, 0xC0};
+        CHECK(std::memcmp(xla::ops::kXorEaxEax, kXorEaxEax.data(), kXorEaxEax.size()) == 0);
+        constexpr std::array<std::uint8_t, 3> kRet8{0xC2, 0x08, 0x00};
+        CHECK(std::memcmp(xla::ops::kRet8, kRet8.data(), kRet8.size()) == 0);
+
+        CHECK_EQ(xla::Byte(xla::Opcode::kNop), std::uint8_t{0x90});
+        CHECK_EQ(xla::Byte(xla::Opcode::kCallRel32), std::uint8_t{0xE8});
+        CHECK_EQ(xla::Byte(xla::Opcode::kJmpRel32), std::uint8_t{0xE9});
+        CHECK_EQ(xla::JmpShort(-0x37), std::uint16_t{0xC9EB});
+        CHECK_EQ(xla::JmpShort(0x0D), std::uint16_t{0x0DEB});
+        CHECK_EQ(xla::Dword(kMovAl1RetNop), std::uint32_t{0x90C301B0});
+        CHECK_EQ(xla::Word(kXorEaxEax), std::uint16_t{0xC033});
+    }
+
     void TestBuildDetection()
     {
         for (const auto& entry : xla::build::kSignatures)
@@ -755,6 +779,7 @@ int main(int argc, char** argv)
     run("config section order and duplicates", TestConfigSectionOrderAndDuplicates);
     run("config whitespace, comments and quotes", TestConfigWhitespaceCommentsQuotes);
     run("config line endings", TestConfigLineEndings);
+    run("opcode catalogue", TestOpcodeCatalogue);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);
     run("savegame paths", TestSavegamePaths);

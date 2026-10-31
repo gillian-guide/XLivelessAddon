@@ -128,14 +128,16 @@ namespace xla::savegames
         g_customSavePath = customSavePath;
 
         // The path buffer lives in a helper around the third match; the original
-        // scanned back 0x80 bytes from it.
+        // scanned back 0x80 bytes from it (128 - a byte count, not a mask).
+        constexpr std::uintptr_t kPathScanBackBytes = 128;
         hook::pattern anchor{
             "8A 10 83 C0 01 84 D2 75 F7 56 57 BF ? ? ? ? 2B C1 8B F1 83 C7 FF 8A 4F 01 83 C7 01"};
         if (anchor.size() >= 3)
         {
             const auto rangeEnd = reinterpret_cast<std::uintptr_t>(anchor.get(2).get<void>());
             hook::pattern redirect = hook::make_range_pattern(
-                rangeEnd - 0x80, rangeEnd, "8A 88 ? ? ? ? 88 88 ? ? ? ? 83 C0 01");
+                rangeEnd - kPathScanBackBytes, rangeEnd,
+                "8A 88 ? ? ? ? 88 88 ? ? ? ? 83 C0 01");
             if (!redirect.empty())
             {
                 const auto* slot = redirect.get(0).get<const char*>(2);

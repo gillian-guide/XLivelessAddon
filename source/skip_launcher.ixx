@@ -28,11 +28,12 @@ export namespace xla
         std::int32_t offset;
         std::uint16_t length;
         const std::uint8_t* bytes; // null when fill is used
-        std::uint8_t fill;         // e.g. 0x90 for NOP fills
+        std::uint8_t fill;         // a fill opcode, e.g. Byte(Opcode::kNop)
         std::uint32_t jumpToEntry;
     };
 
-    inline constexpr std::uint32_t kNoJumpTarget = 0xFFFFFFFFu;
+    // "This row installs no jump" sentinel; compare with == and never write it.
+    inline constexpr std::uint32_t kNoJumpTarget = std::numeric_limits<std::uint32_t>::max();
 
     struct SkipLauncherEntry
     {
@@ -77,7 +78,7 @@ export namespace xla
     {
         std::string_view signature;
         std::int32_t offset;
-        std::uint8_t opcode; // 0xE8 call or 0xE9 jump
+        Opcode opcode; // kCallRel32 or kJmpRel32
         SkipHook hook;
     };
 
@@ -169,133 +170,93 @@ namespace xla
 {
     namespace
     {
-        constexpr std::uint8_t kNopByte = 0x90;
-        constexpr std::uint8_t kCallOpcode = 0xE8;
-        constexpr std::uint8_t kJumpOpcode = 0xE9;
         constexpr std::size_t kBranchLength = 5; // E8/E9 <rel32>
-        constexpr std::uint16_t kCollectorStubLength = 4;
+        // The collectors write the shared "mov al,1; ret; nop" window.
+        constexpr std::uint16_t kCollectorStubLength =
+            static_cast<std::uint16_t>(std::size(ops::kMovAl1RetNop));
 
-        constexpr std::uint8_t kSkipEntryBytes_0_0[] = {0xeb};              // jmp rel8
-        constexpr std::uint8_t kSkipEntryBytes_0_1[] = {0xeb};              // jmp rel8
-        constexpr std::uint8_t kSkipEntryBytes_2_0[] = {0x90, 0x90};        // nop 2
-        constexpr std::uint8_t kSkipEntryBytes_2_1[] = {0x90, 0x90};        // nop 2
-        constexpr std::uint8_t kSkipEntryBytes_3_0[] = {0x90, 0x90};        // nop 2
-        constexpr std::uint8_t kSkipEntryBytes_4_0[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_5_0[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_6_0[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_7_0[] = {0x33, 0xc0};        // xor eax,eax
-        constexpr std::uint8_t kSkipEntryBytes_7_1[] = {0x90, 0xa3};        // nop; mov [imm32],eax
-        constexpr std::uint8_t kSkipEntryBytes_9_0[] = {0x33, 0xc0};        // xor eax,eax
-        constexpr std::uint8_t kSkipEntryBytes_9_1[] = {0xe9};              // jmp rel32
-        constexpr std::uint8_t kSkipEntryBytes_10_0[] = {0x90, 0xa3};       // nop; mov [imm32],eax
-        constexpr std::uint8_t kSkipEntryBytes_11_0[] = {0x33, 0xc0};       // xor eax,eax
-        constexpr std::uint8_t kSkipEntryBytes_11_1[] = {0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_12_0[] = {0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_13_0[] = {0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_14_0[] = {
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-        };
-        constexpr std::uint8_t kSkipEntryBytes_17_0[] = {0x90, 0x90, 0x90, 0x90,
-                                                         0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_18_0[] = {0x90, 0x90, 0x90, 0x90,
-                                                         0x90, 0x90, 0x90, 0x90};
-        constexpr std::uint8_t kSkipEntryBytes_19_0[] = {
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-        };
-        constexpr std::uint8_t kSkipEntryBytes_20_0[] = {0xc3}; // ret
-        constexpr std::uint8_t kSkipEntryBytes_22_0[] = {
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-            0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-        };
-        constexpr std::uint8_t kSkipEntryBytes_23_0[] = {0x33, 0xc0, 0xc3, 0x90}; // xor; ret; nop
-        constexpr std::uint8_t kSkipEntryBytes_24_0[] = {0x33, 0xc0, 0xc3, 0x90}; // xor; ret; nop
-
-        // The collectors' stub: "mov al,1; ret; nop" over each collected match.
-        constexpr std::uint8_t kSkipCollectorBytes_0[] = {0xb0, 0x01, 0xc3, 0x90};
-        constexpr std::uint8_t kSkipCollectorBytes_1[] = {0xb0, 0x01, 0xc3, 0x90};
 
         // Entry i's stores: {match-relative offset, length, bytes (null = fill),
         // fill byte, jump-target entry (kNoJumpTarget = not a jump)}.
         constexpr SkipLauncherWrite kSkipEntryWrites_0[] = {
-            {34, 1, kSkipEntryBytes_0_0, 0, kNoJumpTarget},
-            {223, 1, kSkipEntryBytes_0_1, 0, kNoJumpTarget},
+            {34, 1, ops::kJmpRel8, 0, kNoJumpTarget},
+            {223, 1, ops::kJmpRel8, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_2[] = {
-            {0, 2, kSkipEntryBytes_2_0, 0, kNoJumpTarget},
-            {5, 2, kSkipEntryBytes_2_1, 0, kNoJumpTarget},
+            {0, 2, ops::kNop2, 0, kNoJumpTarget},
+            {5, 2, ops::kNop2, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_3[] = {
-            {0, 2, kSkipEntryBytes_3_0, 0, kNoJumpTarget},
+            {0, 2, ops::kNop2, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_4[] = {
-            {3, 6, kSkipEntryBytes_4_0, 0, kNoJumpTarget},
+            {3, 6, ops::kNop6, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_5[] = {
-            {3, 6, kSkipEntryBytes_5_0, 0, kNoJumpTarget},
+            {3, 6, ops::kNop6, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_6[] = {
-            {0, 6, kSkipEntryBytes_6_0, 0, kNoJumpTarget},
+            {0, 6, ops::kNop6, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_7[] = {
-            {3, 2, kSkipEntryBytes_7_0, 0, kNoJumpTarget},
-            {10, 2, kSkipEntryBytes_7_1, 0, kNoJumpTarget},
+            {3, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
+            {10, 2, ops::kNopMovMoffsEax, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_8[] = {
-            {1, 447, nullptr, kNopByte, kNoJumpTarget},
+            {1, 447, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_9[] = {
-            {0, 2, kSkipEntryBytes_9_0, 0, kNoJumpTarget},
-            {2, 1, kSkipEntryBytes_9_1, 0, kNoJumpTarget},
+            {0, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
+            {2, 1, ops::kJmpRel32, 0, kNoJumpTarget},
             {3, 4, nullptr, 0, kSkipLauncherJumpTargetEntry},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_10[] = {
-            {0, 2, kSkipEntryBytes_10_0, 0, kNoJumpTarget},
+            {0, 2, ops::kNopMovMoffsEax, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_11[] = {
-            {0, 2, kSkipEntryBytes_11_0, 0, kNoJumpTarget},
-            {2, 4, kSkipEntryBytes_11_1, 0, kNoJumpTarget},
+            {0, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
+            {2, 4, ops::kNop4, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_12[] = {
-            {0, 3, kSkipEntryBytes_12_0, 0, kNoJumpTarget},
-            {6, 11, nullptr, kNopByte, kNoJumpTarget},
+            {0, 3, ops::kNop3, 0, kNoJumpTarget},
+            {6, 11, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_13[] = {
-            {0, 3, kSkipEntryBytes_13_0, 0, kNoJumpTarget},
-            {6, 11, nullptr, kNopByte, kNoJumpTarget},
+            {0, 3, ops::kNop3, 0, kNoJumpTarget},
+            {6, 11, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_14[] = {
-            {0, 11, kSkipEntryBytes_14_0, 0, kNoJumpTarget},
+            {0, 11, ops::kNop11, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_15[] = {
-            {0, 32, nullptr, kNopByte, kNoJumpTarget},
+            {0, 32, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_16[] = {
-            {0, 25, nullptr, kNopByte, kNoJumpTarget},
+            {0, 25, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_17[] = {
-            {0, 8, kSkipEntryBytes_17_0, 0, kNoJumpTarget},
+            {0, 8, ops::kNop8, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_18[] = {
-            {0, 8, kSkipEntryBytes_18_0, 0, kNoJumpTarget},
+            {0, 8, ops::kNop8, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_19[] = {
-            {0, 14, kSkipEntryBytes_19_0, 0, kNoJumpTarget},
+            {0, 14, ops::kNop14, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_20[] = {
-            {0, 1, kSkipEntryBytes_20_0, 0, kNoJumpTarget},
+            {0, 1, ops::kRet, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_21[] = {
-            {0, 16, nullptr, kNopByte, kNoJumpTarget},
+            {0, 16, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_22[] = {
-            {0, 14, kSkipEntryBytes_22_0, 0, kNoJumpTarget},
+            {0, 14, ops::kNop14, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_23[] = {
-            {0, 4, kSkipEntryBytes_23_0, 0, kNoJumpTarget},
+            {0, 4, ops::kXorEaxRetNop, 0, kNoJumpTarget},
         };
         constexpr SkipLauncherWrite kSkipEntryWrites_24[] = {
-            {0, 4, kSkipEntryBytes_24_0, 0, kNoJumpTarget},
+            {0, 4, ops::kXorEaxRetNop, 0, kNoJumpTarget},
         };
 
         constexpr SkipLauncherEntry kSkipLauncherEntries[] = {
@@ -340,9 +301,9 @@ namespace xla
 
         constexpr SkipLauncherCollector kSkipLauncherCollectors[] = {
             {"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75", SkipLauncherCollector::Target::first_two,
-             kSkipCollectorBytes_0, kCollectorStubLength},
+             ops::kMovAl1RetNop, kCollectorStubLength},
             {"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3",
-             SkipLauncherCollector::Target::last_two, kSkipCollectorBytes_1,
+             SkipLauncherCollector::Target::last_two, ops::kMovAl1RetNop,
              kCollectorStubLength},
         };
 
@@ -352,25 +313,25 @@ namespace xla
 
         // DFA file-API hooks: the original installs these E8/E9 jumps from 0x10004850.
         constexpr SkipLauncherInstall kSkipLauncherDfaInstalls[] = {
-            {"E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00", 0, kCallOpcode,
+            {"E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00", 0, Opcode::kCallRel32,
              SkipHook::dfa_init},
-            {"55 8B EC 6A 00 E8", 0, kJumpOpcode, SkipHook::create_file},
+            {"55 8B EC 6A 00 E8", 0, Opcode::kJmpRel32, SkipHook::create_file},
             {"6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B "
              "40 08 FF 60 0C 33 C0 C3",
-             0, kJumpOpcode, SkipHook::close_handle},
+             0, Opcode::kJmpRel32, SkipHook::close_handle},
             {"6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B "
              "40 08 FF 60 ? 83 C8 FF C3",
-             0, kJumpOpcode, SkipHook::set_file_pointer},
+             0, Opcode::kJmpRel32, SkipHook::set_file_pointer},
             {"56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 "
              "C1 89 06 5E 8B C1 C3",
-             0, kJumpOpcode, SkipHook::get_file_size_ex},
-            {"FF 50 60 83 C4 14 39 75 F8 89 45 FC", -165, kJumpOpcode, SkipHook::read_file},
+             0, Opcode::kJmpRel32, SkipHook::get_file_size_ex},
+            {"FF 50 60 83 C4 14 39 75 F8 89 45 FC", -165, Opcode::kJmpRel32, SkipHook::read_file},
         };
 
         // ROM message-window hooks: the original installs these from 0x10004620.
         constexpr SkipLauncherInstall kSkipLauncherRomInstalls[] = {
-            {"89 46 3C 89 4E 40 E8", 6, kCallOpcode, SkipHook::rom_reset},
-            {"0F 85 ? ? ? ? 68 03 01 00 00 68 ? ? ? ? 68 04 01 00 00", -67, kJumpOpcode,
+            {"89 46 3C 89 4E 40 E8", 6, Opcode::kCallRel32, SkipHook::rom_reset},
+            {"0F 85 ? ? ? ? 68 03 01 00 00 68 ? ? ? ? 68 04 01 00 00", -67, Opcode::kJmpRel32,
              SkipHook::rom_set},
         };
 
@@ -528,7 +489,7 @@ namespace xla
                         }
                         else
                         {
-                            // Every fill row in the tables is kNopByte.
+                            // Every fill row in the tables is Byte(Opcode::kNop).
                             injector::MakeNOP(injector::raw_ptr(site), write.length, true);
                         }
                     }
@@ -571,7 +532,8 @@ namespace xla
                                                           "site out of bounds"});
                     }
 
-                    injector::WriteMemoryRaw(injector::raw_ptr(site), const_cast<std::uint8_t*>(collector.bytes),
+                    injector::WriteMemoryRaw(injector::raw_ptr(site),
+                                             const_cast<std::uint8_t*>(collector.bytes),
                                              collector.length, true);
                     ++report.collectorWrites;
                 }
@@ -626,12 +588,12 @@ namespace xla
 
                     // The recovered table's opcode column is only ever E8 (call) or E9
                     // (jump); anything else is a table defect, not a byte to write.
-                    if (install.opcode == kCallOpcode)
+                    if (install.opcode == Opcode::kCallRel32)
                     {
                         injector::MakeCALL(injector::raw_ptr(site),
                                            injector::raw_ptr(destination), true);
                     }
-                    else if (install.opcode == kJumpOpcode)
+                    else if (install.opcode == Opcode::kJmpRel32)
                     {
                         injector::MakeJMP(injector::raw_ptr(site),
                                           injector::raw_ptr(destination), true);
@@ -930,12 +892,16 @@ namespace xla
                 return nullptr;
             }
 
+            // `mov ecx,[esi+1c]; mov [esi+20],ecx; mov al,1; ret 8` - the eleven
+            // bytes of sub_10004610. The ModRM/displacement bytes are the recovered
+            // operands (esi+0x1c / esi+0x20); the opcodes are named.
             constexpr std::uint8_t kCode[] = {
-                0x8B, 0x4E, 0x1C, // mov ecx, [esi + 0x1c]
-                0x89, 0x4E, 0x20, // mov [esi + 0x20], ecx
-                0xB0, 0x01,       // mov al, 1
-                0xC2, 0x08, 0x00, // ret 8
+                Byte(Opcode::kMovR32Rm32), 0x4E, 0x1C, // mov ecx, [esi + 0x1c]
+                Byte(Opcode::kMovRm32R32), 0x4E, 0x20, // mov [esi + 0x20], ecx
+                Byte(Opcode::kMovAlImm8), 0x01,        // mov al, 1
+                Byte(Opcode::kRetImm16), 0x08, 0x00,   // ret 8
             };
+            static_assert(std::size(kCode) == 11);
             std::memcpy(memory, kCode, sizeof(kCode));
             ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(kCode));
             cached.store(memory);

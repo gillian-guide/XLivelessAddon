@@ -43,8 +43,12 @@ export namespace xla::build
         Id id;
     };
 
-    // Recovered from the original's build-classification switch. Order is
-    // irrelevant; the values are unique.
+    // opaque: the first four code bytes at kSignatureOffset on each build - a
+    // fingerprint of machine code. They are compared, never decoded, because the
+    // instruction at that offset differs per build and has no other meaning.
+    // provenance: the original add-on's classification switch (its `gv()` lambda),
+    // reproduced from the pre-split source (dcc4f31 source/dllmain.cpp:677-708).
+    // why: a fingerprint of someone else's code has no derivable expression.
     inline constexpr std::array<Signature, 13> kSignatures{{
         {0xC25DE58Bu, Id::v1000},
         {0x831F7518u, Id::v1010},
@@ -61,9 +65,37 @@ export namespace xla::build
         {0x04C1F600u, Id::v1130},
     }};
 
+    // The game executable's PE ImageBase on every supported build (the recovered
+    // mechanism reads through the load address, so the offset is base-relative).
+    inline constexpr std::uintptr_t kGtaImageBase = 0x400000;
+    static_assert(kGtaImageBase == (1u << 22));
+
+    // The dword the original reads, as an RVA from the image base.
+    inline constexpr std::uintptr_t kRecoveredSignatureRva = 0x608C34;
+
     // 0x608C34 - 0x400000: the file offset the original read through the load
     // address (the image is linked at 0x400000).
-    inline constexpr std::uintptr_t kSignatureOffset = 0x608C34u - 0x400000u;
+    inline constexpr std::uintptr_t kSignatureOffset =
+        kRecoveredSignatureRva - kGtaImageBase;
+    static_assert(kSignatureOffset == 0x208C34);
+
+    // A duplicate fingerprint would make two ids indistinguishable; a compile-time
+    // check is cheaper than noticing it in the field.
+    [[nodiscard]] constexpr bool SignaturesAreUnique() noexcept
+    {
+        for (std::size_t i = 0; i < kSignatures.size(); ++i)
+        {
+            for (std::size_t j = i + 1; j < kSignatures.size(); ++j)
+            {
+                if (kSignatures[i].value == kSignatures[j].value)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    static_assert(SignaturesAreUnique());
 
     [[nodiscard]] inline constexpr std::optional<Id> FromSignature(
         std::uint32_t signature) noexcept

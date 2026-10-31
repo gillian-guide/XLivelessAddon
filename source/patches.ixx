@@ -44,11 +44,56 @@ namespace xla::patches
 {
     namespace
     {
-        constexpr std::uint8_t kRet = 0xC3;
-        constexpr std::uint8_t kJmpShort = 0xEB;
-        constexpr std::uint8_t kCallOpcode = 0xE8;
-        constexpr std::uint32_t kMovAl1RetNop = 0x90C301B0u; // mov al,1; retn; nop
-        constexpr std::uint32_t kXorEaxRetNop = 0x90C3C033u; // xor eax,eax; retn; nop
+        // Recovered instruction windows the rows store (common.ixx names the
+        // opcodes): "mov al,1; ret; nop" and "xor eax,eax; ret; nop".
+        constexpr std::uint32_t kMovAl1RetNop = Dword(ops::kMovAl1RetNop);
+        constexpr std::uint32_t kXorEaxRetNop = Dword(ops::kXorEaxRetNop);
+        constexpr std::uint16_t kXorEaxEax = Word(ops::kXorEaxEax);
+        constexpr std::uint16_t kNopMovMoffsEax = Word(ops::kNopMovMoffsEax);
+        // The recovered values stay as proofs of the byte catalogues above.
+        static_assert(kMovAl1RetNop == 0x90C301B0);   // mov al,1; ret; nop
+        static_assert(kXorEaxRetNop == 0x90C3C033);   // xor eax,eax; ret; nop
+        static_assert(kXorEaxEax == 0xC033);          // xor eax,eax
+        static_assert(kNopMovMoffsEax == 0xA390);     // nop; mov [imm32],eax
+
+        // ModRM of `mov [imm32], ebx` (89 1D): the original's 1.0.0.x/1.0.1.0
+        // variant changes the `mov [imm32], esi` operand's register field to ebx.
+        constexpr std::uint8_t kMoffsModRmEbX = 0x1D;
+
+        // 447-byte NOP fill of the EFC20 row [v1003 - v1004] (the original's
+        // 0x1BF; spelled as the byte count it is).
+        constexpr std::size_t kEfc20NopBytes = 447;
+        static_assert(kEfc20NopBytes == 0x1BF);
+
+        // GetAsyncKeyState's "key is down" mask (its high bit).
+        constexpr SHORT kKeyDownMask = static_cast<SHORT>(0xF000);
+
+        // The JZ rel8 at +3 (`74 19`) in the [1002 - 1004] row: site + 3, two
+        // bytes long, displacement 0x19 - so the continuation is at +0x1E.
+        constexpr std::ptrdiff_t kJzOffset = 3;
+        constexpr std::ptrdiff_t kJzLength = 2;
+        constexpr std::int8_t kJzDisplacement = 0x19;
+        constexpr std::ptrdiff_t kJzTarget = kJzOffset + kJzLength + kJzDisplacement;
+        static_assert(kJzTarget == 0x1E);
+
+        // The two recovered `EB rel8` pokes: the DLC token activation jumps over
+        // the check (-0x37), the first-time-play ask skips it (+0x0D).
+        constexpr std::int8_t kDlcTokenJump = -0x37;
+        constexpr std::int8_t kFirstPlayJump = 0x0D;
+        static_assert(JmpShort(kDlcTokenJump) == 0xC9EB);
+        static_assert(JmpShort(kFirstPlayJump) == 0x0DEB);
+
+        // The intro skip's register contract: ecx *= 400 (ms per tick), then edx
+        // is forced to 300 ms while it is below 8000 ms.
+        enum : std::uint32_t
+        {
+            kIntroTickMilliseconds = 400,   // recovered: imul ecx,ecx,0x190
+            kIntroFloorMilliseconds = 8000, // recovered: cmp edx,0x1f40
+            kIntroForcedMilliseconds = 300, // recovered: mov edx,0x12c
+        };
+        static_assert(kIntroTickMilliseconds == 0x190);
+        static_assert(kIntroFloorMilliseconds == 0x1F40);
+        static_assert(kIntroForcedMilliseconds == 0x12C);
 
         // ---- SkipIntro -------------------------------------------------------
         // Same contract as the original inline hook: ecx *= 400, edx is forced to
@@ -59,10 +104,10 @@ namespace xla::patches
         {
             __asm
             {
-                imul ecx, ecx, 0x190
-                cmp edx, 0x1f40
+                imul ecx, ecx, kIntroTickMilliseconds
+                cmp edx, kIntroFloorMilliseconds
                 jge skip_intro_ok
-                mov edx, 0x12c
+                mov edx, kIntroForcedMilliseconds
                 skip_intro_ok:
                 jmp dword ptr [g_skipIntroResume]
             }
@@ -78,7 +123,7 @@ namespace xla::patches
             {
                 if (value == 0)
                 {
-                    const bool noLoad = (::GetAsyncKeyState(VK_SHIFT) & 0xF000) != 0;
+                    const bool noLoad = (::GetAsyncKeyState(VK_SHIFT) & kKeyDownMask) != 0;
                     if (!noLoad)
                     {
                         value = 6;
@@ -121,7 +166,7 @@ namespace xla::patches
         // RETN - enable debugger in error menu (don't load WER.dll) [v1000 - v1008]
         patch::WriteByte(
             "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? 00 00 53 56 8B 35 ? ? ? ? 68", 0,
-            kRet, "core: debugger in error menu");
+            Byte(Opcode::kRet), "core: debugger in error menu");
 
         // RETN 8 - certificates check [v1002 - v1008]
         patch::RetFirst(
@@ -153,7 +198,7 @@ namespace xla::patches
                 auto* site = pattern.get(0).get<std::uint8_t>();
                 // The JZ rel8 at +3 (`74 19`) continues at +0x1E. An E9 keeps the same
                 // destination, so the literal +0x16 the original stored is derived here.
-                injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + 0x1E),
+                injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + kJzTarget),
                                   true);
                 log::Write("core: branch rewrite [1002-1004] applied");
             }
@@ -178,14 +223,16 @@ namespace xla::patches
             0, 4, "core: RGSC connect [1002-1005]");
 
         // data integrity checks VDS102 [v1002 - v1004]
-        patch::WriteByte("C7 06 ? ? ? ? 74 19", 6, kJmpShort, "core: VDS102 [1002-1004]");
+        patch::WriteByte("C7 06 ? ? ? ? 74 19", 6, Byte(Opcode::kJmpRel8),
+                         "core: VDS102 [1002-1004]");
 
         // data integrity checks VDS102 [v1005 - v1008]
-        patch::WriteByte("83 C4 ? 3B 46 20", 12, kJmpShort, "core: VDS102 [1005-1008]");
+        patch::WriteByte("83 C4 ? 3B 46 20", 12, Byte(Opcode::kJmpRel8),
+                         "core: VDS102 [1005-1008]");
 
         // data integrity checks VDS100 [v1006 - v1008]
-        patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", 0, kJmpShort,
-                         "core: VDS100 [1006-1008]");
+        patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", 0,
+                         Byte(Opcode::kJmpRel8), "core: VDS100 [1006-1008]");
 
         // NOP - RGSC initialization check [v1000 - v1001]
         {
@@ -222,9 +269,9 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 3), 0xC033,
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 3), kXorEaxEax,
                                                      true); // xor eax,eax
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 10), 0xA390,
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 10), kNopMovMoffsEax,
                                                      true); // nop; mov [],eax
                 log::Write("core: RGSC result reset [1002-1004] applied");
             }
@@ -235,7 +282,7 @@ namespace xla::patches
         }
 
         // EFC20 [v1003 - v1004]
-        patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1, 0x1BF,
+        patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1, kEfc20NopBytes,
                         "core: EFC20 [1003-1004]");
 
         // fix messed sequences (the original patches the first two matches)
@@ -280,7 +327,7 @@ namespace xla::patches
             if (!pattern.empty() && efc != nullptr)
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xC033,
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax,
                                                      true); // xor eax,eax
                 injector::MakeJMP(injector::raw_ptr(site + 2), injector::raw_ptr(efc), true);
                 log::Write("core: RGSC/EFC skip [1005-1008] applied");
@@ -299,11 +346,13 @@ namespace xla::patches
                 auto* site = pattern.get(0).get<std::uint8_t>();
                 if (!build::Is(build, {build::Id::v1000, build::Id::v1010}))
                 {
-                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xA390, true);
+                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kNopMovMoffsEax,
+                                                         true);
                 }
                 else
                 {
-                    injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1), 0x1D, true);
+                    injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1),
+                                                        kMoffsModRmEbX, true);
                 }
                 log::Write("core: RGSC store neutralised");
             }
@@ -319,7 +368,7 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xC033, true);
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax, true);
                 injector::MakeNOP(injector::raw_ptr(site + 2), 4, true);
                 log::Write("core: missing-test skip [v1005] (1/9) applied");
             }
@@ -367,13 +416,15 @@ namespace xla::patches
                           "core: missing-test [1006-1007] (2/2)");
 
         // DLC token activation [v1006 - v1007]
-        patch::WriteWord("8B 54 24 04 52 A3", 0, 0xC9EB, "core: DLC token activation (1/2)");
+        patch::WriteWord("8B 54 24 04 52 A3", 0, JmpShort(kDlcTokenJump),
+                         "core: DLC token activation (1/2)");
         {
             hook::pattern pattern{"83 F8 01 75 30 A3"};
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site), 0xB8,
+                injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site),
+                                                    Byte(Opcode::kMovEaxImm32),
                                                     true); // mov eax, ...
                 injector::WriteMemory<std::uint32_t>(injector::raw_ptr(site + 1), 1, true);
                 log::Write("core: DLC token activation (2/2) applied");
@@ -385,8 +436,8 @@ namespace xla::patches
         }
 
         // skip first-time play ask [v1006 - v1008]
-        patch::WriteWord("C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", 0, 0x0DEB,
-                         "core: first-time play ask");
+        patch::WriteWord("C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", 0,
+                         JmpShort(kFirstPlayJump), "core: first-time play ask");
     }
 
     void InstallWebConnectChecks(const Image& image)
@@ -406,7 +457,7 @@ namespace xla::patches
         patch::WriteByte(
             "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 ? 53 50 "
             "E8",
-            0, kRet, "web: health check");
+            0, Byte(Opcode::kRet), "web: health check");
     }
 
     void InstallIntro(const Image& image)
@@ -419,8 +470,8 @@ namespace xla::patches
         hook::pattern pattern{"89 91 ? ? ? ? 8D 44 24 ? 68 ? ? ? ? 50"};
         if (!pattern.empty())
         {
-            g_skipIntroResume =
-                static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pattern.get(0).get<void>()));
+            g_skipIntroResume = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(pattern.get(0).get<void>()));
             injector::MakeJMP(injector::raw_ptr(pattern.get_first(-6)),
                               injector::raw_ptr(reinterpret_cast<void*>(&SkipIntroBody)), true);
             log::Info("intro: 300 ms body installed (resume {:08X})", g_skipIntroResume);

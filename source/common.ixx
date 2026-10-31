@@ -63,6 +63,97 @@ export namespace xla
     // Installers return void on success and a PatchError otherwise.
     using PatchOutcome = std::expected<void, PatchError>;
 
+    // The x86 opcodes the recovered tables store. Naming them keeps a byte in a
+    // table read as an instruction instead of a number (research 07's taxonomy).
+    enum class Opcode : std::uint8_t
+    {
+        kNop = 0x90,
+        kRet = 0xC3,
+        kRetImm16 = 0xC2,
+        kCallRel32 = 0xE8,
+        kJmpRel32 = 0xE9,
+        kJmpRel8 = 0xEB,
+        kMovAlImm8 = 0xB0,
+        kMovMoffsEax = 0xA3,
+        kMovEaxImm32 = 0xB8,
+        kMovR32Rm32 = 0x8B,
+        kMovRm32R32 = 0x89,
+        kXorEaxEax = 0x33,   // first byte of `xor eax,eax`
+        kModRmEaxEax = 0xC0, // its ModRM
+    };
+
+    [[nodiscard]] constexpr std::uint8_t Byte(Opcode opcode) noexcept
+    {
+        return static_cast<std::uint8_t>(opcode);
+    }
+
+    // `EB <rel8>` as one little-endian word (the recovered rows store rel8 pairs
+    // this way; naming the displacement makes the packed value readable).
+    [[nodiscard]] constexpr std::uint16_t JmpShort(std::int8_t displacement) noexcept
+    {
+        return static_cast<std::uint16_t>(Byte(Opcode::kJmpRel8) |
+                                          (static_cast<std::uint16_t>(
+                                               static_cast<std::uint8_t>(displacement))
+                                           << 8));
+    }
+
+    // The little-endian dword of a four-byte instruction window, derived from the
+    // byte catalogue instead of re-spelling the number.
+    [[nodiscard]] constexpr std::uint32_t Dword(std::span<const std::uint8_t, 4> bytes) noexcept
+    {
+        return static_cast<std::uint32_t>(bytes[0]) |
+               (static_cast<std::uint32_t>(bytes[1]) << 8) |
+               (static_cast<std::uint32_t>(bytes[2]) << 16) |
+               (static_cast<std::uint32_t>(bytes[3]) << 24);
+    }
+
+    // The little-endian word of a two-byte instruction window.
+    [[nodiscard]] constexpr std::uint16_t Word(std::span<const std::uint8_t, 2> bytes) noexcept
+    {
+        return static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[0]) |
+                                          (static_cast<std::uint16_t>(bytes[1]) << 8));
+    }
+
+    // Recovered instruction windows shared by the patch tables. Each is the exact
+    // byte sequence the original writes; the names say what it executes.
+    namespace ops
+    {
+        inline constexpr std::uint8_t kJmpRel8[]{Byte(Opcode::kJmpRel8)};
+        inline constexpr std::uint8_t kJmpRel32[]{Byte(Opcode::kJmpRel32)};
+        inline constexpr std::uint8_t kRet[]{Byte(Opcode::kRet)};
+        inline constexpr std::uint8_t kXorEaxEax[]{Byte(Opcode::kXorEaxEax),
+                                                   Byte(Opcode::kModRmEaxEax)};
+        inline constexpr std::uint8_t kNopMovMoffsEax[]{Byte(Opcode::kNop),
+                                                        Byte(Opcode::kMovMoffsEax)};
+        inline constexpr std::uint8_t kNop2[]{Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop3[]{Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop4[]{Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop6[]{Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop8[]{Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop),
+                                              Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop11[]{
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop),
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop),
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kNop14[]{
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop),
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop),
+            Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop), Byte(Opcode::kNop),
+            Byte(Opcode::kNop), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kXorEaxRetNop[]{Byte(Opcode::kXorEaxEax),
+                                                      Byte(Opcode::kModRmEaxEax),
+                                                      Byte(Opcode::kRet), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kMovAl1RetNop[]{Byte(Opcode::kMovAlImm8), 0x01,
+                                                      Byte(Opcode::kRet), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kRet8[]{Byte(Opcode::kRetImm16), 0x08, 0x00};
+    } // namespace ops
+
     namespace paths
     {
         // Same, but reports why it failed instead of returning an empty path.
@@ -179,6 +270,13 @@ export namespace xla
     // not the one this build expects.
     inline bool MakeImageWritable(const Image& image) noexcept
     {
+        // PE sections are page-aligned; round VirtualSize up to the section
+        // alignment before VirtualProtect.
+        constexpr DWORD kSectionAlignment = 0x1000;
+        constexpr DWORD kSectionAlignmentMask = kSectionAlignment - 1;
+        static_assert(kSectionAlignmentMask == 0xFFF);
+        static_assert((kSectionAlignment & kSectionAlignmentMask) == 0);
+
         if (image.empty())
         {
             return false;
@@ -210,7 +308,8 @@ export namespace xla
                 continue;
             }
 
-            const DWORD physical_size = (section->Misc.VirtualSize + 0xFFFu) & ~0xFFFu;
+            const DWORD physical_size = (section->Misc.VirtualSize + kSectionAlignmentMask) &
+                                        ~kSectionAlignmentMask;
             const DWORD protection = (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
                                          ? PAGE_EXECUTE_READWRITE
                                          : PAGE_READWRITE;

@@ -76,21 +76,36 @@ namespace xla::rom_window
             }
         }
 
+        // The original add-on's window recipe, preserved value for value:
+        // CS_VREDRAW|CS_HREDRAW (3), class "banana", and a background brush of the
+        // COLOR_WINDOW system-colour index as-is (5, not the documented +1 form),
+        // because that is what the original passed. The window is a hidden message
+        // window (WS_DISABLED|WS_CLIPSIBLINGS|WS_CAPTION, 0x0CC00000).
+        constexpr std::uintptr_t kRomBackgroundColor = COLOR_WINDOW;
+        constexpr DWORD kRomWindowStyle = WS_DISABLED | WS_CLIPSIBLINGS | WS_CAPTION;
+        // IDC_ARROW's numeric id (32512, i.e. 0x7F00); the header's macro is the
+        // ANSI resource form and LoadCursorW wants the wide one.
+        constexpr WORD kArrowCursorId = 32512;
+        static_assert(kRomBackgroundColor == 5);
+        static_assert(kRomWindowStyle == 0x0CC00000);
+        static_assert(kArrowCursorId == 0x7F00);
+
         HWND CreateRomWindow()
         {
             WNDCLASSEXW wc{};
             wc.cbSize = sizeof(wc);
-            wc.style = 3;
+            wc.style = CS_VREDRAW | CS_HREDRAW;
             wc.lpfnWndProc = &WindowProc;
             wc.lpszClassName = L"banana";
             wc.hInstance = ::GetModuleHandleW(nullptr);
-            wc.hbrBackground = reinterpret_cast<HBRUSH>(static_cast<std::uintptr_t>(5));
-            wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(0x7F00));
+            wc.hbrBackground =
+                reinterpret_cast<HBRUSH>(static_cast<std::uintptr_t>(kRomBackgroundColor));
+            wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
 
             ::RegisterClassExW(&wc);
 
-            return ::CreateWindowExW(0, L"banana", L"", 0xCC00000, 0, 0, 0, 0, nullptr, nullptr,
-                                     ::GetModuleHandleW(nullptr), nullptr);
+            return ::CreateWindowExW(0, L"banana", L"", kRomWindowStyle, 0, 0, 0, 0, nullptr,
+                                     nullptr, ::GetModuleHandleW(nullptr), nullptr);
         }
     } // namespace
 

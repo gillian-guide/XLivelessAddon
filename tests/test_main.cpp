@@ -660,23 +660,115 @@ namespace
         const auto* stub = reinterpret_cast<const std::uint8_t*>(target);
         CHECK_EQ(stub[0], std::uint8_t{0x9C}); // pushfd
         CHECK_EQ(stub[1], std::uint8_t{0x60}); // pushad
-        CHECK_EQ(stub[2], std::uint8_t{0xFF}); // push [esp+0x0C] (saved EBX)
+        CHECK_EQ(stub[2], std::uint8_t{0xFF}); // push [esp+0x10] (saved EBX)
         CHECK_EQ(stub[3], std::uint8_t{0x74});
         CHECK_EQ(stub[4], std::uint8_t{0x24});
-        CHECK_EQ(stub[5], std::uint8_t{0x0C});
+        CHECK_EQ(stub[5], std::uint8_t{0x10});
         CHECK_EQ(stub[6], std::uint8_t{0x68}); // push buffer
         std::uint32_t buffer = 0;
         std::memcpy(&buffer, stub + 7, sizeof(buffer));
         CHECK_EQ(buffer, 0x1001u); // match 1's pushed settings buffer
         CHECK_EQ(stub[11], std::uint8_t{0xE8}); // call helper
         CHECK_EQ(stub[16], std::uint8_t{0x83}); // add esp, 8
-        CHECK_EQ(stub[19], std::uint8_t{0xC7}); // mov [esp+4], global
+        CHECK_EQ(stub[19], std::uint8_t{0xC7}); // mov [esp+0x18], global
+        CHECK_EQ(stub[20], std::uint8_t{0x44});
+        CHECK_EQ(stub[21], std::uint8_t{0x24});
+        CHECK_EQ(stub[22], std::uint8_t{0x18});
         std::uint32_t global = 0;
         std::memcpy(&global, stub + 23, sizeof(global));
         CHECK_EQ(global, 0x2001u); // match 1's original ecx operand
         CHECK_EQ(stub[27], std::uint8_t{0x61}); // popad
         CHECK_EQ(stub[28], std::uint8_t{0x9D}); // popfd
         CHECK_EQ(stub[29], std::uint8_t{0xC3}); // ret
+    }
+
+    char* g_settingsBuffer = nullptr;
+    const char* g_settingsSubfolder = nullptr;
+    std::uintptr_t g_stubEbx = 0;
+    std::uintptr_t g_stubEsi = 0;
+    std::uintptr_t g_stubEcx = 0;
+    std::uintptr_t g_stubEdx = 0;
+    std::uintptr_t g_stubEax = 0;
+    std::uintptr_t g_stubOutEbx = 0;
+    std::uintptr_t g_stubOutEsi = 0;
+    std::uintptr_t g_stubOutEcx = 0;
+    std::uintptr_t g_stubOutEax = 0;
+    std::uintptr_t g_stubOutEdx = 0;
+    std::uint8_t g_stubOutCarry = 0;
+    void* g_stubCode = nullptr;
+
+    void __cdecl RecordSettingsCall(char* buffer, const char* subfolder)
+    {
+        g_settingsBuffer = buffer;
+        g_settingsSubfolder = subfolder;
+    }
+
+    // Executes the exact assembled body with controlled registers: saved EBX must
+    // reach the helper as the profile folder, saved ECX must become the global,
+    // EBX/ESI/EDX/EAX must survive, and the carry flag must be preserved.
+    extern "C" void __declspec(naked) RunSettingsStub()
+    {
+        __asm {
+            pushad
+            mov eax, dword ptr [g_stubEbx]
+            mov ebx, eax
+            mov eax, dword ptr [g_stubEsi]
+            mov esi, eax
+            mov eax, dword ptr [g_stubEcx]
+            mov ecx, eax
+            mov eax, dword ptr [g_stubEdx]
+            mov edx, eax
+            mov eax, dword ptr [g_stubEax]
+            stc
+            call dword ptr [g_stubCode]
+            mov dword ptr [g_stubOutEbx], ebx
+            mov dword ptr [g_stubOutEsi], esi
+            mov dword ptr [g_stubOutEcx], ecx
+            mov dword ptr [g_stubOutEax], eax
+            mov dword ptr [g_stubOutEdx], edx
+            setc byte ptr [g_stubOutCarry]
+            popad
+            ret
+        }
+    }
+
+    void TestCustomSettingsPathRegisterContract()
+    {
+        std::array<char, 300> buffer{};
+        constexpr std::uint32_t kGlobal = 0x12345678u;
+        constexpr std::uintptr_t kEbx = 0x5000u; // fake profile-folder pointer
+        constexpr std::uintptr_t kEsi = 0xAAAAu;
+        constexpr std::uintptr_t kEcx = 0x1111u;
+        constexpr std::uintptr_t kEdx = 0x2222u;
+        constexpr std::uintptr_t kEax = 0x3333u;
+
+        g_stubCode = xla::patches::MakeSettingsStub(
+            static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(buffer.data())), kGlobal,
+            static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&RecordSettingsCall)));
+        CHECK(g_stubCode != nullptr);
+        if (g_stubCode == nullptr)
+        {
+            return;
+        }
+
+        g_stubEbx = kEbx;
+        g_stubEsi = kEsi;
+        g_stubEcx = kEcx;
+        g_stubEdx = kEdx;
+        g_stubEax = kEax;
+        g_settingsBuffer = nullptr;
+        g_settingsSubfolder = nullptr;
+        g_stubOutCarry = 0;
+        RunSettingsStub();
+
+        CHECK(g_settingsBuffer == buffer.data());
+        CHECK(g_settingsSubfolder == reinterpret_cast<const char*>(kEbx));
+        CHECK_EQ(g_stubOutEcx, static_cast<std::uintptr_t>(kGlobal));
+        CHECK_EQ(g_stubOutEsi, kEsi);
+        CHECK_EQ(g_stubOutEbx, kEbx);
+        CHECK_EQ(g_stubOutEax, kEax);
+        CHECK_EQ(g_stubOutEdx, kEdx);
+        CHECK_EQ(g_stubOutCarry, std::uint8_t{1});
     }
 
     void TestSavegamePaths()
@@ -1082,6 +1174,7 @@ int main(int argc, char** argv)
     run("patch primitives", TestPatchPrimitives);
     run("custom settings path composition", TestCustomSettingsPathComposition);
     run("custom settings path install", TestCustomSettingsPathInstall);
+    run("custom settings path register contract", TestCustomSettingsPathRegisterContract);
     run("savegame paths", TestSavegamePaths);
     run("registry helpers", TestRegistryHelpers);
     run("user data folders", TestUserdataFolders);
@@ -1103,6 +1196,3 @@ int main(int argc, char** argv)
     std::printf("xla tests: PASS\n");
     return 0;
 }
-
-
-

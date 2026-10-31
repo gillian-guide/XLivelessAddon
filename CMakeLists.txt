@@ -217,7 +217,7 @@ if(XLA_BUILD_TESTS)
                     --tables "${CMAKE_CURRENT_SOURCE_DIR}/tests/skip_launcher_tables.tsv"
                     --v1005 "${CMAKE_CURRENT_SOURCE_DIR}/tests/patches_v1005.tsv")
 
-        # The .ixx layout (one unit per feature, only two plain TUs, CXX_MODULES
+        # The .ixx layout (one unit per feature, one plain TU in source/, CXX_MODULES
         # file set) is a contract; this fails if a file drifts out of it.
         add_test(NAME xla_module_layout
             COMMAND "${Python3_EXECUTABLE}"
@@ -261,4 +261,3 @@ set(CPACK_GENERATOR ZIP)
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
 set(CPACK_PACKAGE_CHECKSUM SHA256)
 include(CPack)
-

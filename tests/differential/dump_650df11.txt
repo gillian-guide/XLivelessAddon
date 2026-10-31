@@ -1,0 +1,354 @@
+section tables
+tables entries=25 collectors=2 dfa=6 rom=2 collected=1
+entry 0 sig=84 DB 0F 85 43 01 00 00 8D 4C 24 28 8B C1 writes=2
+  w0 off=34 len=1 bytes=EB fill=00 jump=-
+  w1 off=223 len=1 bytes=EB fill=00 jump=-
+entry 1 sig=68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84 writes=0
+entry 2 sig=74 EC 38 5E 06 74 E7 68 writes=2
+  w0 off=0 len=2 bytes=9090 fill=00 jump=-
+  w1 off=5 len=2 bytes=9090 fill=00 jump=-
+entry 3 sig=74 C4 8B 07 3B 46 18 75 BD 68 writes=1
+  w0 off=0 len=2 bytes=9090 fill=00 jump=-
+entry 4 sig=3B 56 18 0F 85 writes=1
+  w0 off=3 len=6 bytes=909090909090 fill=00 jump=-
+entry 5 sig=3B 4E 18 0F 85 writes=1
+  w0 off=3 len=6 bytes=909090909090 fill=00 jump=-
+entry 6 sig=0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6 writes=1
+  w0 off=0 len=6 bytes=909090909090 fill=00 jump=-
+entry 7 sig=3B 46 18 75 BD writes=2
+  w0 off=3 len=2 bytes=33C0 fill=00 jump=-
+  w1 off=10 len=2 bytes=90A3 fill=00 jump=-
+entry 8 sig=57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24 writes=1
+  w0 off=1 len=447 bytes=- fill=90 jump=-
+entry 9 sig=8B 56 1C 3B 56 20 ? ? 6A 00 6A 00 writes=3
+  w0 off=0 len=2 bytes=33C0 fill=00 jump=-
+  w1 off=2 len=1 bytes=E9 fill=00 jump=-
+  w2 off=3 len=4 bytes=- fill=00 jump=1
+entry 10 sig=89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 writes=1
+  w0 off=0 len=2 bytes=90A3 fill=00 jump=-
+entry 11 sig=8B 50 2C 3B 50 30 writes=2
+  w0 off=0 len=2 bytes=33C0 fill=00 jump=-
+  w1 off=2 len=4 bytes=90909090 fill=00 jump=-
+entry 12 sig=8B 48 2C 83 EC 78 writes=2
+  w0 off=0 len=3 bytes=909090 fill=00 jump=-
+  w1 off=6 len=11 bytes=- fill=90 jump=-
+entry 13 sig=8B 48 2C 83 EC 74 writes=2
+  w0 off=0 len=3 bytes=909090 fill=00 jump=-
+  w1 off=6 len=11 bytes=- fill=90 jump=-
+entry 14 sig=8B 48 2C 3B 48 30 74 03 writes=1
+  w0 off=0 len=11 bytes=9090909090909090909090 fill=00 jump=-
+entry 15 sig=8B 48 2C 3B 48 30 53 writes=1
+  w0 off=0 len=32 bytes=- fill=90 jump=-
+entry 16 sig=8B 48 2C 3B 48 30 74 11 writes=1
+  w0 off=0 len=25 bytes=- fill=90 jump=-
+entry 17 sig=8B 48 2C 3B 48 30 75 DC 8D 54 24 18 writes=1
+  w0 off=0 len=8 bytes=9090909090909090 fill=00 jump=-
+entry 18 sig=8B 48 2C 3B 48 30 75 DC 8D 54 24 1C writes=1
+  w0 off=0 len=8 bytes=9090909090909090 fill=00 jump=-
+entry 19 sig=8B 0D ? ? ? ? 8B 51 2C writes=1
+  w0 off=0 len=14 bytes=9090909090909090909090909090 fill=00 jump=-
+entry 20 sig=51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C writes=1
+  w0 off=0 len=1 bytes=C3 fill=00 jump=-
+entry 21 sig=3B C7 0F 85 ? ? ? ? 85 C0 writes=1
+  w0 off=0 len=16 bytes=- fill=90 jump=-
+entry 22 sig=0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2 writes=1
+  w0 off=0 len=14 bytes=9090909090909090909090909090 fill=00 jump=-
+entry 23 sig=83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57 writes=1
+  w0 off=0 len=4 bytes=33C0C390 fill=00 jump=-
+entry 24 sig=83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52 writes=1
+  w0 off=0 len=4 bytes=33C0C390 fill=00 jump=-
+collector 0 pattern=A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75 target=first_two bytes=B001C390 len=4
+collector 1 pattern=33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3 target=last_two bytes=B001C390 len=4
+install dfa 0 sig=E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00 off=0 opcode=E8 hook=dfa_init
+install dfa 1 sig=55 8B EC 6A 00 E8 off=0 opcode=E9 hook=create_file
+install dfa 2 sig=6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 0C 33 C0 C3 off=0 opcode=E9 hook=close_handle
+install dfa 3 sig=6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 ? 83 C8 FF C3 off=0 opcode=E9 hook=set_file_pointer
+install dfa 4 sig=56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 C1 89 06 5E 8B C1 C3 off=0 opcode=E9 hook=get_file_size_ex
+install dfa 5 sig=FF 50 60 83 C4 14 39 75 F8 89 45 FC off=-165 opcode=E9 hook=read_file
+install rom 0 sig=89 46 3C 89 4E 40 E8 off=6 opcode=E8 hook=rom_reset
+install rom 1 sig=0F 85 ? ? ? ? 68 03 01 00 00 68 ? ? ? ? 68 04 01 00 00 off=-67 opcode=E9 hook=rom_set
+collected 0 collector=A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6 targets=2
+  target 0 index=0 sig=80 BC 24 ? ? ? ? ? 6A 00
+  target 1 index=1 sig=6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57
+section hooks
+hook dfa_init resolved=1
+hook create_file resolved=1
+hook close_handle resolved=1
+hook set_file_pointer resolved=1
+hook get_file_size_ex resolved=1
+hook read_file resolved=1
+hook rom_reset resolved=1
+hook rom_set resolved=1
+romSet bytes=8B4E1C894E20B001C20800
+dfaInit returns=1
+createFile direct valid=1
+createFile slot stub=1
+section entries
+run entry0 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [122] EB
+  [1DF] EB
+run entry1 stages=1 resolver=1
+  report found=2 missing=23 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [105] 90A3
+run entry2 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090
+  [105] 9090
+run entry3 stages=1 resolver=1
+  report found=2 missing=23 writes=3 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090
+  [107] 33C0
+  [10E] 90A3
+run entry4 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [103] 909090909090
+run entry5 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [103] 909090909090
+run entry6 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 909090909090
+run entry7 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [103] 33C0
+  [10A] 90A3
+run entry8 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [101] 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+run entry9+target stages=1 resolver=1
+  report found=3 missing=22 writes=4 collFound=0 collWrites=0 jump=1 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 33C0E9F90200
+  [405] 90A3
+run entry9 stages=1 resolver=1
+  report found=1 missing=24 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+run entry10 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 90A3
+run entry11 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 33C090909090
+run entry12 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 909090
+  [106] 9090909090909090909090
+run entry13 stages=1 resolver=1
+  report found=1 missing=24 writes=2 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 909090
+  [106] 9090909090909090909090
+run entry14 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090909090
+run entry15 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090909090909090909090909090909090909090909090909090
+run entry16 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 90909090909090909090909090909090909090909090909090
+run entry17 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090
+run entry18 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090
+run entry19 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090909090909090
+run entry20 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] C3
+run entry21 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 90909090909090909090909090909090
+run entry22 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 9090909090909090909090909090
+run entry23 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 33C0C390
+run entry24 stages=1 resolver=1
+  report found=1 missing=24 writes=1 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] 33C0C390
+section all-entries
+run all-entries stages=1 resolver=1
+  report found=25 missing=0 writes=32 collFound=0 collWrites=0 jump=1 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [122] EB
+  [1DF] EB
+  [405] 90A3
+  [700] 9090
+  [705] 9090
+  [A00] 9090
+  [A07] 33C0
+  [A0E] 90A3
+  [D03] 909090909090
+  [1003] 909090909090
+  [1300] 909090909090
+  [1901] 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+  [1C00] 33C0E9F9E7FFFF
+  [2200] 33C090909090
+  [2500] 909090
+  [2506] 9090909090909090909090
+  [2800] 909090
+  [2806] 9090909090909090909090
+  [2B00] 9090909090909090909090
+  [2E00] 9090909090909090909090909090909090909090909090909090909090909090
+  [3100] 90909090909090909090909090909090909090909090909090
+  [3400] 9090909090909090
+  [3700] 9090909090909090
+  [3A00] 9090909090909090909090909090
+  [3D00] C3
+  [4000] 90909090909090909090909090909090
+  [4300] 9090909090909090909090909090
+  [4600] 33C0C390
+  [4900] 33C0C390
+run all-entries stages=1 resolver=0
+  report found=25 missing=0 writes=32 collFound=0 collWrites=0 jump=1 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [122] EB
+  [1DF] EB
+  [405] 90A3
+  [700] 9090
+  [705] 9090
+  [A00] 9090
+  [A07] 33C0
+  [A0E] 90A3
+  [D03] 909090909090
+  [1003] 909090909090
+  [1300] 909090909090
+  [1901] 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+  [1C00] 33C0E9F9E7FFFF
+  [2200] 33C090909090
+  [2500] 909090
+  [2506] 9090909090909090909090
+  [2800] 909090
+  [2806] 9090909090909090909090
+  [2B00] 9090909090909090909090
+  [2E00] 9090909090909090909090909090909090909090909090909090909090909090
+  [3100] 90909090909090909090909090909090909090909090909090
+  [3400] 9090909090909090
+  [3700] 9090909090909090
+  [3A00] 9090909090909090909090909090
+  [3D00] C3
+  [4000] 90909090909090909090909090909090
+  [4300] 9090909090909090909090909090
+  [4600] 33C0C390
+  [4900] 33C0C390
+run all-entries stages=7 resolver=1
+  report found=25 missing=0 writes=32 collFound=0 collWrites=0 jump=1 dfa=0/6 rom=0/2 collected=0 slot=0 slotStub=0
+  [122] EB
+  [1DF] EB
+  [405] 90A3
+  [700] 9090
+  [705] 9090
+  [A00] 9090
+  [A07] 33C0
+  [A0E] 90A3
+  [D03] 909090909090
+  [1003] 909090909090
+  [1300] 909090909090
+  [1901] 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+  [1C00] 33C0E9F9E7FFFF
+  [2200] 33C090909090
+  [2500] 909090
+  [2506] 9090909090909090909090
+  [2800] 909090
+  [2806] 9090909090909090909090
+  [2B00] 9090909090909090909090
+  [2E00] 9090909090909090909090909090909090909090909090909090909090909090
+  [3100] 90909090909090909090909090909090909090909090909090
+  [3400] 9090909090909090
+  [3700] 9090909090909090
+  [3A00] 9090909090909090909090909090
+  [3D00] C3
+  [4000] 90909090909090909090909090909090
+  [4300] 9090909090909090909090909090
+  [4600] 33C0C390
+  [4900] 33C0C390
+run all-entries stages=7 resolver=0
+  report found=25 missing=0 writes=32 collFound=0 collWrites=0 jump=1 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [122] EB
+  [1DF] EB
+  [405] 90A3
+  [700] 9090
+  [705] 9090
+  [A00] 9090
+  [A07] 33C0
+  [A0E] 90A3
+  [D03] 909090909090
+  [1003] 909090909090
+  [1300] 909090909090
+  [1901] 909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090909090
+  [1C00] 33C0E9F9E7FFFF
+  [2200] 33C090909090
+  [2500] 909090
+  [2506] 9090909090909090909090
+  [2800] 909090
+  [2806] 9090909090909090909090
+  [2B00] 9090909090909090909090
+  [2E00] 9090909090909090909090909090909090909090909090909090909090909090
+  [3100] 90909090909090909090909090909090909090909090909090
+  [3400] 9090909090909090
+  [3700] 9090909090909090
+  [3A00] 9090909090909090909090909090
+  [3D00] C3
+  [4000] 90909090909090909090909090909090
+  [4300] 9090909090909090909090909090
+  [4600] 33C0C390
+  [4900] 33C0C390
+run all-entries stages=6 resolver=1
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/6 rom=0/2 collected=0 slot=0 slotStub=0
+run all-entries stages=6 resolver=0
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+section collectors
+run collectors1 stages=1 resolver=1
+  report found=0 missing=25 writes=0 collFound=2 collWrites=2 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] B001C390
+  [1000] B001C390
+run collectors2 stages=1 resolver=1
+  report found=0 missing=25 writes=0 collFound=2 collWrites=4 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] B001C390
+  [140] B001C390
+  [1000] B001C390
+  [1040] B001C390
+run collectors3 stages=1 resolver=1
+  report found=0 missing=25 writes=0 collFound=2 collWrites=4 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] B001C390
+  [140] B001C390
+  [1040] B001C390
+  [1080] B001C390
+run collectors5 stages=1 resolver=1
+  report found=0 missing=25 writes=0 collFound=2 collWrites=4 jump=0 dfa=0/0 rom=0/0 collected=0 slot=0 slotStub=0
+  [100] B001C390
+  [140] B001C390
+  [10C0] B001C390
+  [1100] B001C390
+section dfa
+run dfa-capture stages=2 resolver=1
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=1/5 rom=0/0 collected=0 slot=1 slotStub=1
+  [300] branch5 -> create_file
+run dfa-capture-noresolver stages=2 resolver=0
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/0 rom=0/0 collected=0 slot=1 slotStub=1
+run all-installs stages=7 resolver=1
+  report found=0 missing=25 writes=0 collFound=0 collWrites=0 jump=0 dfa=6/0 rom=2/0 collected=0 slot=0 slotStub=0
+  [40] branch5 -> dfa_init
+  [340] branch5 -> create_file
+  [640] branch5 -> close_handle
+  [940] branch5 -> set_file_pointer
+  [C40] branch5 -> get_file_size_ex
+  [E9B] branch5 -> read_file
+  [1246] branch5 -> rom_reset
+  [14FD] branch5 -> rom_set
+run collected stages=2 resolver=1
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/6 rom=0/0 collected=2 slot=0 slotStub=0
+  [100] E9FB06
+  [300] E9FB06
+run dfa-clear-slot stages=2 resolver=1
+  report found=0 missing=0 writes=0 collFound=0 collWrites=0 jump=0 dfa=0/6 rom=0/0 collected=0 slot=0 slotStub=0
+run dfa-readfile-oob stages=2 resolver=1
+  error code=1 detail=site out of bounds
+run rom-set-oob stages=4 resolver=1
+  error code=1 detail=site out of bounds
+run entry0-tail-oob stages=1 resolver=1
+  error code=1 detail=site out of bounds
+run empty stages=7 resolver=1
+  error code=0 detail=invalid skip launcher input
+dump complete

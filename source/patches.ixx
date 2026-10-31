@@ -50,6 +50,10 @@ export namespace xla::patches
     [[nodiscard]] std::string ComposeSettingsPath(std::string_view moduleDirectory,
                                                   std::string_view configured,
                                                   std::string_view subfolder);
+
+    // Builds the 30-byte call body; exposed for the register-contract test.
+    [[nodiscard]] void* MakeSettingsStub(std::uint32_t buffer, std::uint32_t global,
+                                         std::uint32_t helper);
 } // namespace xla::patches
 
 namespace xla::patches
@@ -642,6 +646,7 @@ namespace xla::patches
         constexpr std::string_view kSettingsPathPattern =
             "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
         constexpr std::size_t kSettingsPathSites = 4;
+        constexpr std::size_t kSettingsPatchCount = 2;
         constexpr std::size_t kSettingsPatchOffset = 5;
         constexpr std::uint16_t kSettingsCopyLimit = 256;
 
@@ -670,6 +675,9 @@ namespace xla::patches
                 // a failed CreateDirectory copies too. Kept 1:1.
                 if ((::GetFileAttributesA(path.c_str()) & FILE_ATTRIBUTE_DIRECTORY) != 0)
                 {
+                    // Original: memmove(buffer, path, min(256, size)); then
+                    // buffer[size] = 0. A path longer than 255 bytes writes past
+                    // the game buffer; that inherited fault is preserved here.
                     path.copy(buffer, kSettingsCopyLimit);
                     buffer[path.size()] = '\0';
                 }
@@ -681,44 +689,46 @@ namespace xla::patches
 
         // The body the patched site calls. The site's `mov ecx, <global>` is
         // replaced by `call <stub>` (5 bytes), so the stub must return to the next
-        // instruction with every register and EFLAGS unchanged except ECX. The
-        // pushad layout after pushfd is eax, ecx, edx, ebx, esp, ebp, esi, edi:
-        // saved EBX is at [esp+0x0C] (the game's per-profile folder name) and
-        // saved ECX at [esp+4] (set to the original global).
-        void* MakeSettingsStub(std::uint32_t buffer, std::uint32_t global, std::uint32_t helper)
-        {
-            constexpr std::size_t kStubBytes = 30;
-            void* memory = ::VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
-                                          PAGE_EXECUTE_READWRITE);
-            if (memory == nullptr)
-            {
-                log::Write("settings: cannot allocate the CustomSettingsPath stub");
-                return nullptr;
-            }
-            std::uint8_t code[kStubBytes] = {
-                0x9C,                                           // pushfd
-                0x60,                                           // pushad
-                0xFF, 0x74, 0x24, 0x0C,                         // push [esp+0x0C]
-                0x68, 0x00, 0x00, 0x00, 0x00,                   // push buffer
-                0xE8, 0x00, 0x00, 0x00, 0x00,                   // call helper
-                0x83, 0xC4, 0x08,                               // add esp, 8
-                0xC7, 0x44, 0x24, 0x04, 0x00, 0x00, 0x00, 0x00, // mov [esp+4], global
-                0x61,                                           // popad
-                0x9D,                                           // popfd
-                0xC3,                                           // ret
-            };
-            static_assert(sizeof(code) == kStubBytes);
-            std::memcpy(code + 7, &buffer, sizeof(buffer));
-            const auto callSite = reinterpret_cast<std::uintptr_t>(memory) + 16;
-            const auto displacement = static_cast<std::int32_t>(
-                static_cast<std::uintptr_t>(helper) - callSite);
-            std::memcpy(code + 12, &displacement, sizeof(displacement));
-            std::memcpy(code + 23, &global, sizeof(global));
-            std::memcpy(memory, code, sizeof(code));
-            ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(code));
-            return memory;
-        }
+        // instruction with every register and EFLAGS unchanged except ECX. After
+        // `pushfd; pushad` the saved frame is, low to high: EDI, ESI, EBP, original
+        // ESP, EBX, EDX, ECX, EAX. Saved EBX (the game's per-profile folder name)
+        // is at [esp+0x10] and saved ECX at [esp+0x18]; the recovered thunk's
+        // helper reads frame+16 and writes frame+24, matching those offsets.
+        inline constexpr std::size_t kStubBytes = 30;
     } // namespace
+
+    void* MakeSettingsStub(std::uint32_t buffer, std::uint32_t global, std::uint32_t helper)
+    {
+        void* memory = ::VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
+                                      PAGE_EXECUTE_READWRITE);
+        if (memory == nullptr)
+        {
+            log::Write("settings: cannot allocate the CustomSettingsPath stub");
+            return nullptr;
+        }
+        std::uint8_t code[kStubBytes] = {
+            0x9C,                                           // pushfd
+            0x60,                                           // pushad
+            0xFF, 0x74, 0x24, 0x10,                         // push [esp+0x10]
+            0x68, 0x00, 0x00, 0x00, 0x00,                   // push buffer
+            0xE8, 0x00, 0x00, 0x00, 0x00,                   // call helper
+            0x83, 0xC4, 0x08,                               // add esp, 8
+            0xC7, 0x44, 0x24, 0x18, 0x00, 0x00, 0x00, 0x00, // mov [esp+0x18], global
+            0x61,                                           // popad
+            0x9D,                                           // popfd
+            0xC3,                                           // ret
+        };
+        static_assert(sizeof(code) == kStubBytes);
+        std::memcpy(code + 7, &buffer, sizeof(buffer));
+        const auto callSite = reinterpret_cast<std::uintptr_t>(memory) + 16;
+        const auto displacement = static_cast<std::int32_t>(
+            static_cast<std::uintptr_t>(helper) - callSite);
+        std::memcpy(code + 12, &displacement, sizeof(displacement));
+        std::memcpy(code + 23, &global, sizeof(global));
+        std::memcpy(memory, code, sizeof(code));
+        ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(code));
+        return memory;
+    }
 
     void InstallCustomSettingsPath(const Image& image, std::string_view customSettingsPath)
     {
@@ -739,6 +749,7 @@ namespace xla::patches
             return;
         }
 
+        std::size_t installed = 0;
         const auto install = [&](std::size_t index) {
             const auto match = pattern.get(index);
             auto* site = match.get<std::uint8_t>() + kSettingsPatchOffset;
@@ -753,13 +764,24 @@ namespace xla::patches
                 buffer, global,
                 static_cast<std::uint32_t>(
                     reinterpret_cast<std::uintptr_t>(&BuildCustomSettingsPath)));
-            if (stub != nullptr)
+            if (stub == nullptr)
             {
-                injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(stub), true);
+                return;
             }
+            injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(stub), true);
+            ++installed;
         };
         install(1);
         install(2);
-        log::Info("settings: CustomSettingsPath installed ({}, two sites)", customSettingsPath);
+        if (installed == kSettingsPatchCount)
+        {
+            log::Info("settings: CustomSettingsPath installed ({}, two sites)",
+                      customSettingsPath);
+        }
+        else
+        {
+            log::Info("settings: CustomSettingsPath installed at {}/2 sites ({})", installed,
+                      customSettingsPath);
+        }
     }
 } // namespace xla::patches

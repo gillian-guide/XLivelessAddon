@@ -195,6 +195,8 @@ namespace xla::registry
             return 0;
         }
 
+        // Bounds-checked copy of the import walker used by windowed/userdata (those
+        // trust the PE headers); keep the descriptor/thunk/slot checks here.
         std::size_t replaced = 0;
         auto* descriptor =
             reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);

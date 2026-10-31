@@ -19,12 +19,10 @@
 
 #include <windows.h>
 #include <ShlObj.h>
-#include <Shlwapi.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstddef>
 #include <climits>
 #include <cstddef>
 #include <cstdint>

@@ -21,14 +21,16 @@ import xla.common;
 
 export namespace xla
 {
-    // One store relative to a signature match: `bytes`, or `fill` repeated, and a
-    // rel32 to another entry's match when `jumpToEntry` is set (the 33 C0 E9 rel32).
+    // One store relative to a signature match: `bytes`, or a NOP fill of `length`
+    // bytes, and a rel32 to another entry's match when `jumpToEntry` is set (the
+    // 33 C0 E9 rel32). The installer always emits NOPs for the fill branch, so
+    // `fill` is data that must be Byte(Opcode::kNop); xla_table_parity validates it.
     struct SkipLauncherWrite
     {
         std::int32_t offset;
         std::uint16_t length;
-        const std::uint8_t* bytes; // null when fill is used
-        std::uint8_t fill;         // a fill opcode, e.g. Byte(Opcode::kNop)
+        const std::uint8_t* bytes; // null when the row is a NOP fill
+        std::uint8_t fill;         // must be Byte(Opcode::kNop); 0 on byte rows
         std::uint32_t jumpToEntry;
     };
 
@@ -97,6 +99,8 @@ export namespace xla
 
     struct SkipLauncherReport
     {
+        // Main table only: the shipping path (dfa|rom) never runs this stage, so
+        // these stay 0/false on a healthy shipped run.
         std::size_t entriesFound{};
         std::size_t entriesMissing{};
         std::size_t writes{};
@@ -169,10 +173,10 @@ export namespace xla
     // call CreateFileA directly.
     void SetCreateFileSlot(std::uint32_t slotVa) noexcept;
 
-    // Publishes the slot captured into the create_file body so it forwards through
-    // the game's IAT slot (and any detour another ASI installed there), like the
-    // original trampoline at 0x10004820. Call it after ApplySkipLauncher, before
-    // the game reaches the hooked DFA entry point.
+    // Publishes the captured CreateFile IAT slot into the hook body. ApplySkipLauncher
+    // already calls this inside the DFA stage (before the hooks can run); this entry
+    // point exists for tests and out-of-band reinstalls. Returns true when a non-zero
+    // slot was published.
     bool PublishCreateFileSlot(const SkipLauncherReport& report) noexcept;
 
     // Resolves a SkipHook to the reimplemented body; 0 for an unknown hook.
@@ -190,6 +194,9 @@ namespace xla
 
         // Entry i's stores: {match-relative offset, length, bytes (null = fill),
         // fill byte, jump-target entry (kNoJumpTarget = not a jump)}.
+        // Entry 0's +34 and +223 are hook sites in the same function but OUTSIDE
+        // its 14-byte signature (the signature's own `0F 85` is at +2); each row
+        // writes the single-byte `EB` opcode there (kJmpRel8), not a full branch.
         constexpr SkipLauncherWrite kSkipEntryWrites_0[] = {
             {34, 1, ops::kJmpRel8, 0, kNoJumpTarget},
             {223, 1, ops::kJmpRel8, 0, kNoJumpTarget},
@@ -324,6 +331,8 @@ namespace xla
         constexpr std::int32_t kDfaCaptureSlotOffset = 2;
 
         // DFA file-API hooks: the original installs these E8/E9 jumps from 0x10004850.
+        // `read_file`'s -165 is 165 bytes BEFORE its 12-byte signature (the hook site
+        // is the prologue of the enclosing function, not the matched tail).
         constexpr SkipLauncherInstall kSkipLauncherDfaInstalls[] = {
             {"E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00", 0, Opcode::kCallRel32,
              SkipHook::dfa_init},
@@ -341,6 +350,8 @@ namespace xla
         };
 
         // ROM message-window hooks: the original installs these from 0x10004620.
+        // `rom_reset`'s +6 is the E8 after `89 46 3C 89 4E 40`; `rom_set`'s -67 is
+        // 67 bytes before its 17-byte signature (hook site outside the match).
         constexpr SkipLauncherInstall kSkipLauncherRomInstalls[] = {
             {"89 46 3C 89 4E 40 E8", 6, Opcode::kCallRel32, SkipHook::rom_reset},
             {"0F 85 ? ? ? ? 68 03 01 00 00 68 ? ? ? ? 68 04 01 00 00", -67, Opcode::kJmpRel32,
@@ -410,6 +421,10 @@ namespace xla
         std::span<std::byte> image, SkipHookResolver resolve, void* resolverUser,
         SkipLauncherStage stages)
     {
+        // Structure: main table + collectors (only when `main` is selected), then
+        // capture/publish of the DFA slot, DFA hook installs, collected jumps, and
+        // ROM hooks. The shipping set is dfa|rom, so the main block is dead code
+        // unless a caller explicitly asks for it (tests do).
         if (image.empty())
         {
             return std::unexpected(PatchError{PatchErrorCode::invalid_input,
@@ -686,7 +701,13 @@ namespace xla
 
 namespace xla
 {
-    namespace rom
+    // The `SkipLauncher=1` hook bodies: six DFA bodies (upstream
+    // dcc4f31:source/skip_launcher.cpp) plus the WM_ROM service. `dfa.ixx` holds
+    // the separate `SkipLauncher=0` DFA bodies; the differences are documented at
+    // the top of both files. This namespace also holds the ROM service, hence the
+    // neutral name. The two WM_ROM services (this one and rom_window.ixx) are
+    // independent copies and must be kept in sync by hand; nothing cross-checks them.
+    namespace skip_hooks
     {
         // The originals live at 0x10004720..0x1000484e (the file API and DFA bodies)
         // and 0x100041A0..0x10004570 (the WM_ROM message-window service, ANSI variant).
@@ -879,15 +900,12 @@ namespace xla
             return ::ReadFile(handle, buffer, toRead, read, overlapped);
         }
 
-        // 0x10004570: start the ROM service, reset the object and publish the window
-        // handle plus the WM_ROM id. __cdecl with one stack argument, returning the
-        // window handle in eax (plain ret).
         // 0x10004610: the object arrives in ESI (the patched site keeps it there) and
         // the site pushed two arguments the callee must pop - the original is
         // `mov ecx,[esi+1c]; mov [esi+20],ecx; mov al,1; ret 8`. A C function cannot
-        // express that, so the eleven opcode bytes are assembled once, at install
-        // time, into an executable page (MSVC rejects __declspec(naked) on a
-        // namespace-scope function, which a module makes everything be).
+        // express that, and MSVC rejects __declspec(naked) on an exported module
+        // member (the internal-linkage SkipIntroBody is the documented exception), so
+        // the eleven opcode bytes are assembled into an executable page at install.
         inline void* RomSetStub()
         {
             static std::atomic<void*> cached{nullptr};
@@ -896,8 +914,9 @@ namespace xla
                 return existing;
             }
 
-            void* memory = ::VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
-                                          PAGE_EXECUTE_READWRITE);
+            constexpr std::size_t kStubAllocationBytes = 64; // one page, eleven used
+            void* memory = ::VirtualAlloc(nullptr, kStubAllocationBytes,
+                                          MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (memory == nullptr)
             {
                 log::Write("rom: cannot allocate the RomSet stub");
@@ -923,6 +942,9 @@ namespace xla
             return memory;
         }
 
+        // 0x10004570: start the ROM service, reset the object and publish the window
+        // handle plus the WM_ROM id. ABI: __cdecl with one stack argument, returning
+        // the window handle in eax (plain ret).
         inline int __cdecl RomResetBody(std::uint32_t* object)
         {
             StartService();
@@ -945,11 +967,11 @@ namespace xla
             return static_cast<int>(object[kObjectWindow]);
         }
 
-    } // namespace rom
+    } // namespace skip_hooks
 
     inline void SetCreateFileSlot(std::uint32_t slotVa) noexcept
     {
-        rom::gCreateFileSlot.store(slotVa);
+        skip_hooks::gCreateFileSlot.store(slotVa);
     }
 
     inline bool PublishCreateFileSlot(const SkipLauncherReport& report) noexcept
@@ -963,21 +985,21 @@ namespace xla
         switch (hook)
         {
         case SkipHook::dfa_init:
-            return reinterpret_cast<std::uintptr_t>(&rom::DfaInitBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::DfaInitBody);
         case SkipHook::create_file:
-            return reinterpret_cast<std::uintptr_t>(&rom::CreateFileBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::CreateFileBody);
         case SkipHook::close_handle:
-            return reinterpret_cast<std::uintptr_t>(&rom::CloseHandleGuardedBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::CloseHandleGuardedBody);
         case SkipHook::set_file_pointer:
-            return reinterpret_cast<std::uintptr_t>(&rom::SetFilePointerBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::SetFilePointerBody);
         case SkipHook::get_file_size_ex:
-            return reinterpret_cast<std::uintptr_t>(&rom::GetFileSizeExBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::GetFileSizeExBody);
         case SkipHook::read_file:
-            return reinterpret_cast<std::uintptr_t>(&rom::ReadFileBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::ReadFileBody);
         case SkipHook::rom_reset:
-            return reinterpret_cast<std::uintptr_t>(&rom::RomResetBody);
+            return reinterpret_cast<std::uintptr_t>(&skip_hooks::RomResetBody);
         case SkipHook::rom_set:
-            return reinterpret_cast<std::uintptr_t>(rom::RomSetStub());
+            return reinterpret_cast<std::uintptr_t>(skip_hooks::RomSetStub());
         }
         return 0;
     }

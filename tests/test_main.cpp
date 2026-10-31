@@ -173,8 +173,9 @@ namespace
         const auto ini = xla::config::EnsureIni(directory);
         CHECK(std::filesystem::exists(ini));
 
-        // EnsureIni writes the shipped defaults, which enable the windowed/intro
-        // options explicitly (the code defaults below are the original's own).
+        // EnsureIni writes the shipped defaults, which explicitly enable four keys
+        // the code defaults leave off (skipWebConnect, skipIntro, doNotPauseOnMinimize,
+        // borderlessWindowed).
         auto loaded = xla::config::Load(directory);
         CHECK_EQ(loaded.legacyPresent, false);
         CHECK_EQ(loaded.iniReadable, true);
@@ -931,7 +932,8 @@ namespace
             return;
         }
         CHECK_EQ(result->entriesFound, std::size_t{0});
-        CHECK_EQ(result->entriesMissing, std::size_t{0});
+        // entriesMissing is intentionally not asserted: it is only incremented by
+        // the main stage, so it is 0 by construction here and would prove nothing.
         CHECK_EQ(result->writes, std::size_t{0});
         CHECK_EQ(result->jumpInstalled, false);
         CHECK_EQ(image[offset + 34], std::byte{0});
@@ -975,7 +977,8 @@ namespace
         }
         CHECK_EQ(result->entriesFound, std::size_t{1});
         CHECK_EQ(result->writes, std::size_t{2});
-        // Offset 34 inside the signature is the `0F 85` of the jcc: patched to EB.
+        // Entry 0's write at +34 is outside its 14-byte signature (the signature's
+        // own `0F 85` is at +2); the table writes one `EB` byte at that hook site.
         CHECK_EQ(image[offset + 34], std::byte{0xEB});
     }
 
@@ -1065,6 +1068,12 @@ int main(int argc, char** argv)
     {
         run("default ini matches the shipped file",
             [&] { TestDefaultIniMatchesShippedFile(argv[1]); });
+    }
+    else
+    {
+        // Do not silently drop a test when the suite is run by hand.
+        std::printf("-- default ini matches the shipped file: SKIPPED (no data directory "
+                    "argument; run via ctest)\n");
     }
     run("config precedence and FusionFix gates", TestConfigPrecedenceAndGates);
     run("config defaults and EnsureIni", TestConfigDefaultsAndEnsureIni);

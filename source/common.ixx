@@ -2,7 +2,9 @@
 //
 // xla.common — the pieces every other module shares: the view of the loaded
 // game image, the error type used by the installers, the logger, module paths
-// and the single place that makes the game image writable.
+// and the helper that makes the game's .text/.rdata writable. Installers that
+// patch their own IAT slots protect those slots themselves, so this is not the
+// only writability path.
 //
 // The layout (common.hxx + one .ixx per feature, definitions inside the module
 // interface) follows GTAIV.EFLC.FusionFix.
@@ -16,8 +18,9 @@ export module xla.common;
 export namespace xla
 {
     // A writable view of the game module: `base` is the load address and `size`
-    // is OptionalHeader.SizeOfImage, so `contains()` is the one bounds check used
-    // by every write.
+    // is OptionalHeader.SizeOfImage. `contains()` is the bounds check used by the
+    // image-aware installers (skip_launcher, savegames, rom_window, ...); the
+    // generic `patch::` helpers do not take an Image and trust the signature match.
     struct Image
     {
         std::byte* base{};
@@ -50,8 +53,6 @@ export namespace xla
     {
         invalid_input,
         out_of_bounds,
-        not_writable,
-        unsupported_build,
     };
 
     struct PatchError
@@ -163,7 +164,9 @@ export namespace xla
         // Same, but reports why it failed instead of returning an empty path.
         inline std::filesystem::path ModuleDirectory(std::error_code& error) noexcept
         {
-            std::array<wchar_t, 32768> buffer{};
+            // Windows' documented maximum path length (including the terminator).
+            constexpr std::size_t kMaxModulePathChars = 32768;
+            std::array<wchar_t, kMaxModulePathChars> buffer{};
             const DWORD length =
                 ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
             if (length == 0 || length >= buffer.size())
@@ -306,6 +309,13 @@ export namespace xla
         for (WORD index = 0; index < nt->FileHeader.NumberOfSections; ++index, ++section)
         {
             const auto* name = reinterpret_cast<const char*>(section->Name);
+            // PE section names are 8 bytes and not necessarily NUL-terminated.
+            std::size_t name_length = 0;
+            while (name_length < IMAGE_SIZEOF_SHORT_NAME && name[name_length] != '\0')
+            {
+                ++name_length;
+            }
+            const std::string_view section_name{name, name_length};
             const bool is_text = std::strncmp(name, ".text", IMAGE_SIZEOF_SHORT_NAME) == 0;
             const bool is_rdata = std::strncmp(name, ".rdata", IMAGE_SIZEOF_SHORT_NAME) == 0;
             if (!is_text && !is_rdata)
@@ -322,7 +332,7 @@ export namespace xla
             if (!::VirtualProtect(image.base + section->VirtualAddress, physical_size, protection,
                                   &previous))
             {
-                log::Info("image: cannot unprotect {} ({:#x}); no patches applied", name,
+                log::Info("image: cannot unprotect {} ({:#x}); no patches applied", section_name,
                           ::GetLastError());
                 return false;
             }

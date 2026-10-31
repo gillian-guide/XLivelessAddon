@@ -1,5 +1,5 @@
 # XLivelessAddon code style (clang-format 18+).
-# Allman braces, four-space indent, 100-column limit; signatures already match.
+# Allman braces, four-space indent, 100-column limit; namespace bodies are indented.
 BasedOnStyle: LLVM
 Language: Cpp
 Standard: c++23
@@ -7,6 +7,8 @@ IndentWidth: 4
 TabWidth: 4
 UseTab: Never
 BreakBeforeBraces: Allman
+NamespaceIndentation: All
+AlignTrailingComments: false
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false

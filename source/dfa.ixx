@@ -5,6 +5,15 @@
 // These are the bodies ZolikaPatch's handler jumps to when the recovered
 // launcher stage is disabled: DFA init reports success, and the file API
 // forwards. The ABIs are part of the contract; do not add parameters.
+//
+// This is the `SkipLauncher=0` copy (upstream `dcc4f31:source/dllmain.cpp`).
+// `skip_launcher.ixx` has a second, live copy for `SkipLauncher=1` (upstream
+// `dcc4f31:source/skip_launcher.cpp`); they differ deliberately:
+//   CreateFile       direct CreateFileA            | forwards through captured IAT slot
+//   CloseHandle      SEH continue -> TRUE          | SEH execute -> -1
+//   ReadFile site    `55 8B EC 51 51 53 56 8B C5` (+0) | `FF 50 60 ...` (-165)
+//   DfaInit          3 args (original call shape)  | 0 args (body only)
+// Do not merge them without deciding which original path each build follows.
 
 module;
 
@@ -18,6 +27,7 @@ import xla.patch;
 export namespace xla::dfa
 {
     // 0x10004780 in the original handler: the DFA init call reports success.
+    // ABI: __cdecl, three integer args per the original call shape; returns 1.
     int __cdecl DfaInit(int, int, int);
 
     // Installs the six hooks plus the two collected jump targets. Signatures that

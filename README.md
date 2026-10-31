@@ -67,7 +67,12 @@ ctest --preset release
 ```
 
 The output is `build/win-x86/bin/XLivelessAddon.asi` and its INI. CI publishes a single
-`XLivelessAddon.zip` containing just those two files.
+`XLivelessAddon.zip` containing just those two files; `--build --preset package` produces the CPack
+zip, which also carries `README.md`, `LICENSE`, `NOTICE` and `CREDITS.md`.
+
+`win-x86` names the **Visual Studio 18 2026** generator. On VS 2022 use
+`cmake --preset win-x86-vs2022` with `cmake --build --preset release-vs2022` and
+`ctest --preset release-vs2022`.
 
 ## Credits
 

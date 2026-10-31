@@ -11,7 +11,7 @@ pre-modular source:
   tests/skip_launcher_tables.tsv  25 entries, 32 write rows, 2 collectors,
                                   the DFA capture pattern/offset, 8 install rows,
                                   2 collected targets, 1 collected install
-  tests/patches_v1005.tsv         the eight `[v1005]` missing-test rows and their
+  tests/patches_v1005.tsv         the nine `[v1005]` missing-test rows and their
                                   exact NOP plan (head 3 at +0, tail 11 at +6 for
                                   the 2/9 and 3/9 rows)
 
@@ -277,7 +277,7 @@ def parse_writes(text: str, arrays: dict[str, list[int]], opcodes: dict[str, int
             jump_expr = fields[4].strip()
             if jump_expr in ("kNoJumpTarget",):
                 jump = None
-            elif jump_expr in ("kSkipLauncherJumpTargetEntry", "jump_target"):
+            elif jump_expr in ("kSkipLauncherJumpTargetEntry",):
                 jump = jump_target
             elif re.fullmatch(r"\d+", jump_expr):
                 jump = int(jump_expr)
@@ -367,10 +367,9 @@ def parse_installs(text: str, opcodes: dict[str, int]) -> dict[str, list[dict]]:
             opcode_expr = fields[2].strip()
             if opcode_expr.startswith("Opcode::"):
                 opcode = opcodes[opcode_expr.split("::", 1)[1]]
-            elif opcode_expr == "kCallOpcode":
-                opcode = 0xE8
-            elif opcode_expr == "kJumpOpcode":
-                opcode = 0xE9
+            elif opcode_expr in ("kCallOpcode", "kJumpOpcode"):
+                # Pre-modular spelling; only the one-off golden derivation sees it.
+                opcode = 0xE8 if opcode_expr == "kCallOpcode" else 0xE9
             else:
                 raise SystemExit(f"table_parity: unknown opcode {opcode_expr!r}")
             hook = fields[3].strip().split("::", 1)[-1]
@@ -454,6 +453,11 @@ def validate(tables: dict) -> None:
                 require(row["length"] == len(row["bytes"]),
                         f"entry {index} +{row['offset']}: length {row['length']} != "
                         f"{len(row['bytes'])} stored bytes")
+            else:
+                if row["jump"] is None:
+                    require(row["fill"] == 0x90,
+                            f"entry {index} +{row['offset']}: the installer writes NOPs, so "
+                            f"fill must be kNop (0x90), got {row['fill']!r}")
     require(write_rows == 32, f"expected 32 write rows, parsed {write_rows}")
     require(len(tables["collectors"]) == 2,
             f"expected 2 collectors, parsed {len(tables['collectors'])}")

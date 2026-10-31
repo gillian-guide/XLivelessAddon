@@ -235,6 +235,8 @@ if(XLA_BUILD_TESTS)
             COMMAND ${POWERSHELL_EXECUTABLE} -NoProfile -ExecutionPolicy Bypass
                     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_asi.ps1"
                     -Path "$<TARGET_FILE:XLivelessAddon>")
+    else()
+        message(WARNING "PowerShell not found: the xla_asi_headers PE test is not registered.")
     endif()
 endif()
 

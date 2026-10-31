@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.addon — the init pipeline. Runs once at DLL_PROCESS_ATTACH, in the
-// original add-on's order: probe, configuration, image/build detection, then the
-// installers. The order is not hand-written here: `xla.order` declares the steps,
-// their phases and their named dependencies, sorts them deterministically, and
-// this module executes the result. Every installer is INI-gated; an unsupported
-// or non-writable image installs nothing and says why.
+// xla.addon — the init pipeline. The first pass runs synchronously at
+// DLL_PROCESS_ATTACH; when the probe is absent it retries the whole pipeline once
+// on a worker thread (StepProbe -> DelayedInit). The order is the original
+// add-on's: probe, configuration, image/build detection, then the installers. It
+// is not hand-written here: `xla.order` declares the steps, their phases and
+// their named dependencies, sorts them deterministically, and this module
+// executes the result. Every optional installer is INI-gated; the core patch
+// list and the savegame CRC32 bypass are unconditional, as in the original. An
+// unsupported or non-writable image installs nothing and says why.
 
 module;
 
@@ -54,6 +57,8 @@ namespace xla
             bool fusionFix{};
             Image image;
             build::Id build{build::Id::unknown};
+            // Tri-state install results: -1 = option off, 0 = pattern missing, 1 =
+            // installed (the original's log legend).
             int borderless{-1};
             int focusLoss{-1};
             int exitCode{0};
@@ -267,7 +272,11 @@ namespace xla
                 if (applied)
                 {
                     const SkipLauncherReport& report = *applied;
-                    log::Info("skipLauncher: entries={} missing={} writes={} jump={} dfa={}/{} "
+                    // entries/missing/writes/jump are main-table counters; the
+                    // shipping path never runs that stage, so label it rather than
+                    // letting a healthy log read as "nothing found".
+                    log::Info("skipLauncher: stages=dfa|rom main=not-applied entries={} "
+                              "missing={} writes={} jump={} dfa={}/{} "
                               "rom={}/{} collected={} createFileSlot={:08X}",
                               report.entriesFound, report.entriesMissing, report.writes,
                               report.jumpInstalled, report.dfaInstalls, report.dfaMissing,
@@ -311,7 +320,9 @@ namespace xla
         Outcome StepLauncherStage(RunState& state)
         {
             // The launcher helpers only run when the recovered stage is disabled;
-            // the original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0.
+            // the original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0: DFA there
+            // faulted with an unhandled exception at 0x00426440 (0xC0000005), so the
+            // crash evidence is the reason for the build test, not a preference.
             if (!state.loaded.options.skipLauncher)
             {
                 if (!build::Is(state.build, {build::Id::v1100, build::Id::v1110}))

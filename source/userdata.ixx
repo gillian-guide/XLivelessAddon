@@ -72,7 +72,8 @@ namespace xla::userdata
         }
 
         // Replaces one shell32 IAT slot in the game module and hands back the
-        // original.
+        // original. Near-copy of windowed::ReplaceImport (HMODULE vs Image) and
+        // registry's walker; this one trusts the PE, registry's is bounds-checked.
         bool ReplaceShellImport(const Image& image, const char* function, void* replacement,
                                 void** original) noexcept
         {

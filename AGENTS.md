@@ -40,8 +40,9 @@ ctest --preset release
 ```
 
 Win32 only (the game is 32-bit; the hook bodies assume x86). `ctest` runs the native suite plus
-three checks: the recovered signature list/order (`xla_signature_parity`), the `.ixx` layout
-(`xla_module_layout`, needs Python 3) and the PE test (`xla_asi_headers`). The PE test asserts the
+four checks: the recovered signature list/order (`xla_signature_parity`), the recovered launcher
+tables and `[v1005]` NOP plan (`xla_table_parity`), the `.ixx` layout (`xla_module_layout`; all
+three need Python 3) and the PE test (`xla_asi_headers`). The PE test asserts the
 artifact is a 32-bit DLL based at `0x10000000` with the GUI subsystem, a USER32 import and the
 static CRT (`/MT`; an MSVCP140/VCRUNTIME140 import is a failure, so the game folder needs no
 Visual C++ redistributable).
@@ -53,7 +54,7 @@ Rules learned the hard way:
 2. **mINI/IniReader must stay in a plain TU** (`ini_file.cpp`). In module purview MSVC's
    serialisation of its stream internals is unreliable (it crashes at runtime).
 3. **`__declspec(naked)` on an exported module member is rejected by MSVC.** Assemble the opcodes
-   instead (`rom::RomSetStub`) or use a plain TU. The one internal-linkage naked body
+   instead (`skip_hooks::RomSetStub`) or use a plain TU. The one internal-linkage naked body
    (`SkipIntroBody` in `patches.ixx`) does compile in module purview on MSVC 2026; do not add new
    ones.
 4. **Hook bodies are ABI contracts**: `CreateFile` is `__cdecl` (plain `ret`), `RomSet` is
@@ -63,7 +64,9 @@ Rules learned the hard way:
    New rows/guards are allowed only as documented fail-safes (log instead of fault).
 6. **Log everything.** Every installer and every store logs, so a bug report names the build and
    the failing patch. The log's first line carries the version + git SHA.
-7. **Every install is INI-gated**, and FusionFix-owned options are gated off before installing.
+7. **Every optional install is INI-gated** (and FusionFix-owned options are gated off before
+   installing). The core patch list and the savegame CRC32 bypass are unconditional, as in the
+   original.
 
 ## Dependency policy
 

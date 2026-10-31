@@ -74,6 +74,9 @@ namespace xla::windowed
 
         // Replaces the first matching USER32 import slot. The imported function
         // stays callable through `original`.
+        // Deliberate near-copy of userdata::ReplaceShellImport and registry's inline
+        // walker: this one trusts the PE headers (the other two bounds-check more),
+        // and the OriginalFirstThunk == 0 fallback must be kept in sync by hand.
         bool ReplaceImport(HMODULE module, const char* function, void* replacement,
                            void** original) noexcept
         {
@@ -165,6 +168,9 @@ namespace xla::windowed
                        : nullptr;
         }
 
+        // Centres on the nearest monitor. MoveWindowHook below has its own inline
+        // copy of the same arithmetic (it also handles the oversized-client case);
+        // keep the two in sync. Not merged because the hook has that extra branch.
         void CentreWindow(HWND window, int width, int height) noexcept
         {
             const HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
@@ -387,6 +393,9 @@ namespace xla::windowed
         }
     } // namespace
 
+    // ABI: __cdecl with one char argument, plain ret. It replaces the game's
+    // per-frame input call, so the original call target is invoked with the same
+    // argument when input is not suppressed.
     extern "C" void __cdecl FocusLossInput(char argument) noexcept
     {
         if (g_windowed != nullptr && g_focusLost != nullptr && *g_windowed && *g_focusLost)

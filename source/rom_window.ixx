@@ -6,6 +6,11 @@
 // The game sends WM_ROM to a window it creates once; the add-on answers it with
 // the original's action table (copy table / add / set). The SendMessage call that
 // deadlocks the audio thread is redirected to an empty stub.
+//
+// `skip_launcher.ixx` (the SkipLauncher=1 path) has its own, independent WM_ROM
+// service for ZolikaPatch's 0x100041A0..0x10004570 ("MessageWindow"/"MessageWindow2").
+// The message id (43858) and the 16-entry action table are duplicated on purpose;
+// the two copies are not cross-checked, so a protocol change must be made in both.
 
 module;
 
@@ -124,13 +129,17 @@ namespace xla::rom_window
         // The game's two globals (window handle, message id) are reached through the
         // operands of `mov eax, [g1]` / `mov ecx, [g2]`; write them only when they
         // point inside the image.
+        // A1 <rel32> at +0 and 8B 0D <rel32> at +5; the operands are at +1 and +7.
+        constexpr std::ptrdiff_t kMessageOperandOffset = 1;
+        constexpr std::ptrdiff_t kWindowOperandOffset = 7;
         hook::pattern pattern{"A1 ? ? ? ? 8B 0D ? ? ? ? 68 ? ? ? ? 53 50 51 FF 15"};
         if (!pattern.empty())
         {
             auto* match = pattern.get(0).get<std::uint8_t>();
             const auto messageSlot =
-                *reinterpret_cast<const std::uint32_t*>(match + 1);
-            const auto windowSlot = *reinterpret_cast<const std::uint32_t*>(match + 7);
+                *reinterpret_cast<const std::uint32_t*>(match + kMessageOperandOffset);
+            const auto windowSlot =
+                *reinterpret_cast<const std::uint32_t*>(match + kWindowOperandOffset);
             if (image.contains(reinterpret_cast<const void*>(
                                    static_cast<std::uintptr_t>(messageSlot)),
                                4) &&
@@ -145,7 +154,7 @@ namespace xla::rom_window
                     static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
                         rom_window::CreateServiceWindow())),
                     true);
-                log::Info("rom: window {:08X}, message id {}", windowSlot, kMessage);
+                log::Info("rom: window slot {:08X}, message id {}", windowSlot, kMessage);
             }
             else
             {

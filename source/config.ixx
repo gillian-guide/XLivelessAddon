@@ -22,8 +22,9 @@ import xla.common;
 
 export namespace xla::config
 {
-    // One INI option set. Defaults are the original add-on's INI defaults (not
-    // the shipped INI file, which enables the windowed/intro options explicitly).
+    // One INI option set. Defaults are the original add-on's INI defaults, not the
+    // shipped INI file: that file explicitly enables four non-default keys
+    // (skipWebConnect, skipIntro, doNotPauseOnMinimize, borderlessWindowed).
     struct Options
     {
         std::string customSavePath;

@@ -45,6 +45,9 @@ namespace xla::savegames
         std::string g_gameDefaultSavePath;
         std::string g_customSavePath;
 
+        // ABI: __cdecl, (unused int, char* buffer, char* saveName), plain ret. The
+        // game's path builder is tail-jumped here with its 256-byte caller buffer;
+        // the copy below is bounded but keeps that buffer contract.
         void __cdecl GetSavefilePath(int /*unused*/, char* buffer, char* saveName)
         {
             if (buffer == nullptr)

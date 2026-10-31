@@ -317,6 +317,11 @@ namespace xla::order
         static constexpr std::string_view kPrerequisitesWritable[]{"writable"};
         static constexpr std::string_view kPrerequisitesLauncher[]{"build", "writable"};
 
+        // The `after` arrays form a total chain today: the original's sequence is
+        // the data, and encoding it as edges plus a sort keeps a future conditional
+        // or non-chain prerequisite expressible (and testable) without rewriting
+        // the executor. The chain adds no information declaration order lacks; it
+        // exists so a change to that order must be a reviewed edge change.
         static constexpr Node kPipeline[] = {
             {"banner", probe, {}, {}},
             {"console", probe, kAfterConsole, {}},

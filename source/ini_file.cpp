@@ -68,7 +68,9 @@ namespace xla::ini
                 return;
             }
             out.write(normalized.data(), static_cast<std::streamsize>(normalized.size()));
-            log::Info("config: normalized {} to CRLF (the INI parser needs it)", path.string());
+            log::Info("config: normalized {} to CRLF (inherited editor/round-trip norm; "
+                      "mINI already splits on LF)",
+                      path.string());
         }
 
     } // namespace

@@ -59,6 +59,20 @@ namespace xla::patches
         static_assert(kXorEaxEax == 0xC033);        // 33 C0
         static_assert(kNopMovMoffsEax == 0xA390);   // 90 A3
 
+        // Match-relative write offsets for rows whose site is not the pattern start.
+        // Each call site names its signature; the comment decodes what sits there.
+        constexpr std::ptrdiff_t kVds102JccOffset = 6;       // `74 19` at +6 -> EB
+        constexpr std::ptrdiff_t kVds102LateJccOffset = 12;  // +12, 5 bytes past the 7-byte sig
+        constexpr std::ptrdiff_t kVds100JccOffset = 0;       // pattern starts `75 28`
+        constexpr std::ptrdiff_t kRgscInitSecondNopOffset = 5; // the `74 E7` after `74 EC 38 5E 06`
+        constexpr std::ptrdiff_t kRgscResultJccOffset = 3;   // `75 BD` at +3 -> 33 C0
+        constexpr std::ptrdiff_t kRgscResultStoreOffset = 10; // 5 bytes past the 5-byte sig
+        constexpr std::ptrdiff_t kRgscEfcJumpOffset = 2;     // E9 over `8B 56 1C`
+        constexpr std::ptrdiff_t kWebConnectBranchOffset = 8; // `75 ??` after `FF 15; 85 C0`
+        constexpr std::ptrdiff_t kIntroHookBackBytes = 6;    // 6 bytes before the resume match
+        constexpr std::ptrdiff_t kMenuCallOffsetV1002 = 23;  // E8 inside [1002-1008]
+        constexpr std::ptrdiff_t kMenuCallOffsetEarly = 2;   // E8 inside [1000]/[1001]
+
         // ModRM of `mov [imm32], ebx` (89 1D): the original's 1.0.0.x/1.0.1.0
         // variant changes the `mov [imm32], esi` operand's register field to ebx.
         // (This is the ModRM byte of `89 /r`, not the A3/A1 moffs form.)
@@ -122,6 +136,10 @@ namespace xla::patches
         }
 
         // ---- SkipMenu --------------------------------------------------------
+        // The original's menu-state arguments: 0 is the first-boot state; 6 skips
+        // straight into the loaded game (`a1 = 6` in dcc4f31 dllmain.cpp).
+        constexpr int kMenuStateFirstBoot = 0;
+        constexpr int kMenuStateSkip = 6;
         void(__cdecl* g_menuOriginal)(int) = nullptr;
 
         void __cdecl SkipMenuBody(int value)
@@ -129,12 +147,13 @@ namespace xla::patches
             static bool once = false;
             if (!once)
             {
-                if (value == 0)
+                if (value == kMenuStateFirstBoot)
                 {
-                    const bool noLoad = (::GetAsyncKeyState(VK_SHIFT) & kKeyDownMask) != 0;
-                    if (!noLoad)
+                    // Latches only on the first-boot value; SHIFT keeps the menu.
+                    const bool keepMenu = (::GetAsyncKeyState(VK_SHIFT) & kKeyDownMask) != 0;
+                    if (!keepMenu)
                     {
-                        value = 6;
+                        value = kMenuStateSkip;
                     }
                     once = true;
                 }
@@ -156,6 +175,11 @@ namespace xla::patches
         }
     } // namespace
 
+    // Section index for the 290-line body (all one recovered sequence; do not
+    // reorder): files.txt/integrity checks -> RGSC gating -> EFC20 -> fixed
+    // sequences -> missing-test rows (v1005 and neighbours) -> DLC token/first-play
+    // -> intro/menu/do-not-pause/VRAM (separate functions below). The signature
+    // golden pins the scan order; the write plan is reviewed section by section.
     void InstallCore(const Image& image, build::Id build)
     {
         (void)image;
@@ -231,15 +255,15 @@ namespace xla::patches
             0, 4, "core: RGSC connect [1002-1005]");
 
         // data integrity checks VDS102 [v1002 - v1004]
-        patch::WriteByte("C7 06 ? ? ? ? 74 19", 6, Byte(Opcode::kJmpRel8),
+        patch::WriteByte("C7 06 ? ? ? ? 74 19", kVds102JccOffset, Byte(Opcode::kJmpRel8),
                          "core: VDS102 [1002-1004]");
 
         // data integrity checks VDS102 [v1005 - v1008]
-        patch::WriteByte("83 C4 ? 3B 46 20", 12, Byte(Opcode::kJmpRel8),
+        patch::WriteByte("83 C4 ? 3B 46 20", kVds102LateJccOffset, Byte(Opcode::kJmpRel8),
                          "core: VDS102 [1005-1008]");
 
         // data integrity checks VDS100 [v1006 - v1008]
-        patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", 0,
+        patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", kVds100JccOffset,
                          Byte(Opcode::kJmpRel8), "core: VDS100 [1006-1008]");
 
         // NOP - RGSC initialization check [v1000 - v1001]
@@ -249,7 +273,7 @@ namespace xla::patches
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
                 injector::MakeNOP(injector::raw_ptr(site), 2, true);
-                injector::MakeNOP(injector::raw_ptr(site + 5), 2, true);
+                injector::MakeNOP(injector::raw_ptr(site + kRgscInitSecondNopOffset), 2, true);
                 log::Write("core: RGSC init [1000-1001] nops applied");
             }
             else
@@ -277,10 +301,12 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 3), kXorEaxEax,
-                                                     true); // xor eax,eax
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 10), kNopMovMoffsEax,
-                                                     true); // nop; mov [],eax
+                injector::WriteMemory<std::uint16_t>(
+                    injector::raw_ptr(site + kRgscResultJccOffset), kXorEaxEax,
+                    true); // xor eax,eax
+                injector::WriteMemory<std::uint16_t>(
+                    injector::raw_ptr(site + kRgscResultStoreOffset), kNopMovMoffsEax,
+                    true); // nop; mov [],eax
                 log::Write("core: RGSC result reset [1002-1004] applied");
             }
             else
@@ -294,6 +320,7 @@ namespace xla::patches
                         "core: EFC20 [1003-1004]");
 
         // fix messed sequences (the original patches the first two matches)
+        // 0xBAC160 / 0xBAC190: `mov al,1; retn` (dcc4f31 dllmain.cpp).
         {
             hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
             if (pattern.size() >= 2)
@@ -311,6 +338,7 @@ namespace xla::patches
         }
 
         // fix messed sequences (the original patches the last two matches)
+        // 0xBAC180 / 0xBAC1C0: `mov al,1; retn` (dcc4f31 dllmain.cpp).
         {
             hook::pattern pattern{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
             if (pattern.size() >= 2)
@@ -337,7 +365,8 @@ namespace xla::patches
                 auto* site = pattern.get(0).get<std::uint8_t>();
                 injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax,
                                                      true); // xor eax,eax
-                injector::MakeJMP(injector::raw_ptr(site + 2), injector::raw_ptr(efc), true);
+                injector::MakeJMP(injector::raw_ptr(site + kRgscEfcJumpOffset),
+                                  injector::raw_ptr(efc), true);
                 log::Write("core: RGSC/EFC skip [1005-1008] applied");
             }
             else
@@ -453,12 +482,13 @@ namespace xla::patches
         (void)image;
 
         // [v1000 - v1001]
-        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 18", 8, 2, "web: InternetGetConnectedState [1000]");
+        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 18", kWebConnectBranchOffset, 2,
+                        "web: InternetGetConnectedState [1000]");
         // [v1002 - v1005]
-        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 04 32", 8, 2,
+        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 04 32", kWebConnectBranchOffset, 2,
                         "web: InternetGetConnectedState [1002-1005]");
         // [v1006 - v1008]
-        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 07 A0", 8, 2,
+        patch::NopFirst("FF 15 ? ? ? ? 85 C0 75 07 A0", kWebConnectBranchOffset, 2,
                         "web: InternetGetConnectedState [1006-1008]");
 
         // health check [v1003 - v1008]
@@ -480,7 +510,7 @@ namespace xla::patches
         {
             g_skipIntroResume = static_cast<std::uint32_t>(
                 reinterpret_cast<std::uintptr_t>(pattern.get(0).get<void>()));
-            injector::MakeJMP(injector::raw_ptr(pattern.get_first(-6)),
+            injector::MakeJMP(injector::raw_ptr(pattern.get_first(-kIntroHookBackBytes)),
                               injector::raw_ptr(reinterpret_cast<void*>(&SkipIntroBody)), true);
             log::Info("intro: 300 ms body installed (resume {:08X})", g_skipIntroResume);
         }
@@ -499,7 +529,7 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(23)),
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetV1002)),
                                    injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1002-1008]");
@@ -512,7 +542,7 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(2)),
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetEarly)),
                                    injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1000]");
@@ -524,7 +554,7 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(2)),
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetEarly)),
                                    injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1001]");
@@ -538,6 +568,7 @@ namespace xla::patches
     {
         (void)image;
 
+        // NOP the `75 ?` branch; original site 0x402D5A (dcc4f31 dllmain.cpp).
         patch::NopFirst("75 ? 8B 0D ? ? ? ? 51 FF 15 ? ? ? ? 85 C0 75 ? 8B 15", 0, 2,
                         "input: do not pause on minimize");
     }

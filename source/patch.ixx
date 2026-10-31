@@ -5,6 +5,12 @@
 // Hooking.Patterns finds the site, injector performs the store. Each helper
 // logs whether the signature was found and what was written, which is what makes
 // a user's log say exactly which patches applied on their build.
+//
+// These helpers deliberately take no `Image`: they scan the live game module and
+// trust the match. Bounds-checked passes (skip_launcher, savegames, rom_window)
+// take an Image and use `Image::contains` themselves. Installers that take a
+// `const Image&` but discard it keep the parameter for that install-time contract;
+// it is not a gate.
 
 module;
 

@@ -5,11 +5,11 @@
 # same data with dcc4f31 and found 0 differences. Do not hand-edit: regenerate
 # from the pre-modular source and review the diff.
 #
-# Records are grouped by kind (entries, then each entry's writes, collectors,
-# capture, installs, collected targets/install), matching the declaration order
-# in source/skip_launcher.ixx. That is NOT ApplySkipLauncher's runtime order: it
-# scans the main entries, captures and publishes the DFA slot, writes the DFA
-# installs, writes the collected installs and only then writes the ROM installs.
+# Records are grouped by kind (entries with their writes, then collectors,
+# capture, installs, collected targets/install): that is the table layout, not a
+# runtime sequence. It is NOT ApplySkipLauncher's runtime order either - it scans
+# the main entries, captures and publishes the DFA slot, writes the DFA installs,
+# writes the collected installs and only then writes the ROM installs.
 #
 # Format: one record per line, tab-separated.
 #   entry          <index> <signature>

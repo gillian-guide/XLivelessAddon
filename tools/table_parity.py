@@ -267,74 +267,95 @@ def parse_integer(expr: str, constants: dict[str, int], what: str) -> int:
     raise SystemExit(f"table_parity: cannot resolve {what} {expr!r}")
 
 
-def parse_fill(expr: str, opcodes: dict[str, int]) -> int | None:
-    expr = expr.strip()
-    if expr in ("0", ""):
-        return None
-    match = re.fullmatch(r"Byte\(Opcode::(\w+)\)", expr)
-    if match:
-        return opcodes[match.group(1)]
-    if expr == "kNopByte":
-        # The pre-modular source spelled the shared fill byte this way; the
-        # golden derivation parses that source, so keep resolving it.
-        return 0x90
-    if re.fullmatch(r"\d+", expr):
-        value = int(expr)
-        return value or None
-    raise SystemExit(f"table_parity: cannot resolve fill {expr!r}")
+# The named builders that expand to one recovered byte window. `WriteBytes`
+# takes the window as an argument; these are the single-instruction aliases.
+FORCED_OPS = {
+    "ForceEaxZero": "kXorEaxEax",
+    "ForceEaxZeroRetNop": "kXorEaxRetNop",
+    "ForceRet": "kRet",
+}
 
 
-def parse_writes(text: str, arrays: dict[str, list[int]], opcodes: dict[str, int],
-                 jump_target: int, constants: dict[str, int]) -> dict[str, list[dict]]:
-    writes: dict[str, list[dict]] = {}
-    for name, body in blocks(
-            text, r"(?:constexpr\s+|const\s+)?SkipLauncherWrite\s+(\w+)\s*\[\s*\]\s*="):
+def parse_patch_ops(text: str, arrays: dict[str, list[int]], jump_target: int,
+                    constants: dict[str, int]) -> dict[str, list[dict]]:
+    """Parse every `PatchOp <name>[] = { WriteBytes(...), NopFill(...), ... }`.
+
+    A byte row's length is derived from the span it names (there is no second
+    number in the table); a fill row carries its count and the recovered NOP
+    byte; a jump row is the four rel32 bytes the branch builder rewrites.
+    """
+    tables: dict[str, list[dict]] = {}
+    for name, body in blocks(text, r"PatchOp\s+(\w+)\s*\[\s*\]\s*="):
         rows: list[dict] = []
-        for group in brace_groups(body):
-            fields = split_fields(group)
-            if len(fields) != 5:
-                raise SystemExit(f"table_parity: {name}: expected 5 fields, got {len(fields)}")
-            offset = parse_integer(fields[0], constants, "write offset")
-            length = parse_integer(fields[1], constants, "write length")
-            bytes_value = resolve_bytes(fields[2], arrays)
-            fill = parse_fill(fields[3], opcodes)
-            jump_expr = fields[4].strip()
-            if jump_expr in ("kNoJumpTarget",):
-                jump = None
-            elif jump_expr in ("kSkipLauncherJumpTargetEntry",):
-                jump = jump_target
-            elif re.fullmatch(r"\d+", jump_expr):
-                jump = int(jump_expr)
+        for expression in split_fields(body):
+            expression = expression.strip()
+            if not expression:
+                continue
+            call = re.fullmatch(r"(\w+)\s*\((.*)\)", expression, re.S)
+            if not call:
+                raise SystemExit(f"table_parity: {name}: cannot parse op {expression!r}")
+            helper = call.group(1)
+            arguments = split_fields(call.group(2))
+            if helper == "WriteBytes":
+                if len(arguments) != 2:
+                    raise SystemExit(f"table_parity: {name}: WriteBytes needs 2 arguments")
+                offset = parse_integer(arguments[0], constants, "write offset")
+                stored = resolve_bytes(arguments[1], arrays)
+                if stored is None:
+                    raise SystemExit(f"table_parity: {name}: WriteBytes(nullptr)")
+                rows.append({"offset": offset, "length": len(stored), "bytes": stored,
+                             "fill": None, "jump": None})
+            elif helper == "NopFill":
+                if len(arguments) != 2:
+                    raise SystemExit(f"table_parity: {name}: NopFill needs 2 arguments")
+                offset = parse_integer(arguments[0], constants, "fill offset")
+                count = parse_integer(arguments[1], constants, "fill count")
+                rows.append({"offset": offset, "length": count, "bytes": None,
+                             "fill": 0x90, "jump": None})
+            elif helper == "Jump":
+                if len(arguments) != 2:
+                    raise SystemExit(f"table_parity: {name}: Jump needs 2 arguments")
+                offset = parse_integer(arguments[0], constants, "jump offset")
+                target_expr = arguments[1].strip()
+                target = jump_target if target_expr == "kSkipLauncherJumpTargetEntry" \
+                    else parse_integer(target_expr, constants, "jump target")
+                rows.append({"offset": offset, "length": 4, "bytes": None,
+                             "fill": None, "jump": target})
+            elif helper in FORCED_OPS:
+                if len(arguments) != 1:
+                    raise SystemExit(f"table_parity: {name}: {helper} needs 1 argument")
+                offset = parse_integer(arguments[0], constants, "write offset")
+                stored = arrays[FORCED_OPS[helper]]
+                rows.append({"offset": offset, "length": len(stored), "bytes": stored,
+                             "fill": None, "jump": None})
             else:
-                raise SystemExit(f"table_parity: {name}: unknown jump {jump_expr!r}")
-            rows.append({"offset": offset, "length": length, "bytes": bytes_value,
-                         "fill": fill, "jump": jump})
-        writes[name] = rows
-    return writes
+                raise SystemExit(f"table_parity: {name}: unknown patch helper {helper!r}")
+        tables[name] = rows
+    return tables
 
 
-def parse_entries(text: str) -> list[dict]:
-    body = block_body(text, r"SkipLauncherEntry\s+kSkipLauncherEntries\s*\[\s*\]\s*=")
+def parse_entries(text: str, op_tables: dict[str, list[dict]]) -> list[dict]:
+    body = block_body(text, r"EntryPatch\s+kSkipLauncherEntries\s*\[\s*\]\s*=")
     if body is None:
         raise SystemExit("table_parity: kSkipLauncherEntries not found")
     entries: list[dict] = []
     for group in brace_groups(body):
         fields = split_fields(group)
-        if len(fields) != 3:
+        if len(fields) != 2:
             raise SystemExit(f"table_parity: entry row has {len(fields)} fields")
         signature = fields[0].strip()
         if not (signature.startswith('"') and signature.endswith('"')):
             raise SystemExit(f"table_parity: entry signature {signature!r}")
-        writes = fields[1].strip()
-        entries.append({"signature": signature[1:-1],
-                        "writes": None if writes == "nullptr" else writes,
-                        "count_expr": fields[2].strip()})
+        ops_expr = fields[1].strip()
+        if ops_expr.endswith("{}"):
+            # The empty span spells "this entry has no edits" (`{}` or the
+            # explicit `std::span<const PatchOp>{}`).
+            entries.append({"signature": signature[1:-1], "writes": None})
+        elif ops_expr in op_tables:
+            entries.append({"signature": signature[1:-1], "writes": ops_expr})
+        else:
+            raise SystemExit(f"table_parity: {signature[1:-1]!r}: unknown ops {ops_expr!r}")
     return entries
-
-
-def parse_length(expr: str, constants: dict[str, int]) -> int:
-    expr = expr.strip()
-    return parse_integer(expr, constants, "length")
 
 
 def parse_collectors(text: str, arrays: dict[str, list[int]],
@@ -360,7 +381,7 @@ def parse_collectors(text: str, arrays: dict[str, list[int]],
         # `kCollectorStubLength` is std::size(ops::kMovAl1RetNop) in the source;
         # derive it from the stub the row names instead of hard-coding 4 here.
         length = len(stub_bytes) if length_expr == "kCollectorStubLength" \
-            else parse_length(length_expr, constants)
+            else parse_integer(length_expr, constants, "collector length")
         collectors.append({"pattern": pattern, "target": target,
                            "bytes": stub_bytes, "length": length})
     return collectors
@@ -451,38 +472,33 @@ def validate(tables: dict) -> None:
     entries = tables["entries"]
     require(len(entries) == 25, f"expected 25 entries, parsed {len(entries)}")
     write_rows = 0
+    referenced = set()
     for index, entry in enumerate(entries):
         require(bool(entry["signature"].strip()), f"entry {index} has an empty signature")
         if entry["writes"] is None:
-            require(entry["count_expr"] == "0", f"entry {index}: nullptr writes with count "
-                                                f"{entry['count_expr']!r}")
             continue
+        referenced.add(entry["writes"])
         require(entry["writes"] in tables["writes"],
-                f"entry {index}: unknown write table {entry['writes']!r}")
+                f"entry {index}: unknown op table {entry['writes']!r}")
         rows = tables["writes"][entry["writes"]]
-        require(bool(rows), f"entry {index}: empty write table")
-        count_match = re.fullmatch(r"(?:std::size|CountOf)\((\w+)\)", entry["count_expr"])
-        require(count_match is not None,
-                f"entry {index}: count is {entry['count_expr']!r}, expected std::size(...)")
-        require(count_match.group(1) == entry["writes"],
-                f"entry {index}: count names {count_match.group(1)!r}, writes are "
-                f"{entry['writes']!r}")
+        require(bool(rows), f"entry {index}: empty op table")
         for row in rows:
             write_rows += 1
-            require(row["length"] > 0, f"entry {index}: zero-length write row")
-            require(row["offset"] >= 0, f"entry {index}: negative write offset")
+            require(row["length"] > 0, f"entry {index}: zero-length op row")
+            require(row["offset"] >= 0, f"entry {index}: negative op offset")
             if row["bytes"] is not None:
                 require(row["fill"] is None,
                         f"entry {index} +{row['offset']}: bytes and fill both set")
                 require(row["length"] == len(row["bytes"]),
                         f"entry {index} +{row['offset']}: length {row['length']} != "
                         f"{len(row['bytes'])} stored bytes")
-            else:
-                if row["jump"] is None:
-                    require(row["fill"] == 0x90,
-                            f"entry {index} +{row['offset']}: the installer writes NOPs, so "
-                            f"fill must be kNop (0x90), got {row['fill']!r}")
-    require(write_rows == 32, f"expected 32 write rows, parsed {write_rows}")
+            elif row["jump"] is None:
+                require(row["fill"] == 0x90,
+                        f"entry {index} +{row['offset']}: the installer writes NOPs, so "
+                        f"fill must be kNop (0x90), got {row['fill']!r}")
+    require(write_rows == 32, f"expected 32 patch rows, parsed {write_rows}")
+    for name in tables["writes"]:
+        require(name in referenced, f"patch table {name} is not referenced by any entry")
     require(len(tables["collectors"]) == 2,
             f"expected 2 collectors, parsed {len(tables['collectors'])}")
     for index, collector in enumerate(tables["collectors"]):
@@ -517,8 +533,8 @@ def parse_tables(text: str, common: str, jump_target: int) -> dict:
     opcodes = parse_opcodes(common)
     arrays = parse_byte_arrays(common, opcodes) | parse_byte_arrays(text, opcodes)
     constants = parse_int_constants(text)
-    writes = parse_writes(text, arrays, opcodes, jump_target, constants)
-    entries = parse_entries(text)
+    writes = parse_patch_ops(text, arrays, jump_target, constants)
+    entries = parse_entries(text, writes)
     collectors = parse_collectors(text, arrays, constants)
     capture = parse_capture(text)
     installs = parse_installs(text, opcodes, constants)

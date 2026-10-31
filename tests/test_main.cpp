@@ -845,42 +845,43 @@ namespace
     {
         const auto entries = xla::SkipLauncherEntries();
         CHECK_EQ(entries.size(), std::size_t{25});
-        CHECK_EQ(entries[0].writes[0].offset, 34);
-        CHECK_EQ(entries[0].writes[1].offset, 223);
-        CHECK_EQ(entries[8].writes[0].length, static_cast<std::uint16_t>(447));
-        CHECK_EQ(entries[9].writes[2].jumpToEntry, xla::kSkipLauncherJumpTargetEntry);
+        CHECK_EQ(entries[0].ops[0].offset, 34);
+        CHECK_EQ(entries[0].ops[1].offset, 223);
+        CHECK_EQ(entries[8].ops[0].count, static_cast<std::uint16_t>(447));
+        CHECK_EQ(entries[9].ops[2].target, xla::kSkipLauncherJumpTargetEntry);
         CHECK_EQ(xla::SkipLauncherCollectors().size(), std::size_t{2});
         CHECK_EQ(xla::SkipLauncherDfaInstalls().size(), std::size_t{6});
         CHECK_EQ(xla::SkipLauncherRomInstalls().size(), std::size_t{2});
         CHECK_EQ(xla::SkipLauncherDfaCollected().size(), std::size_t{1});
 
-        // Shape invariants independent of the byte golden: a fill row must carry a
-        // fill opcode, a byte row must not, and every jump target must exist.
-        std::size_t writeRows = 0;
-        for (const xla::SkipLauncherEntry& entry : entries)
+        // Shape invariants independent of the byte golden: a write op must carry
+        // bytes, a fill op must be a NOP fill with a count, and every jump target
+        // must exist. The byte lengths are derived, so there is nothing to compare
+        // against a second number.
+        std::size_t patchRows = 0;
+        for (const xla::EntryPatch& entry : entries)
         {
             CHECK(!entry.signature.empty());
-            if (entry.writeCount == 0)
+            for (const xla::PatchOp& op : entry.ops)
             {
-                CHECK(entry.writes == nullptr);
-                continue;
-            }
-            CHECK(entry.writes != nullptr);
-            for (std::size_t index = 0; index < entry.writeCount; ++index)
-            {
-                const xla::SkipLauncherWrite& write = entry.writes[index];
-                ++writeRows;
-                CHECK(write.length > 0);
-                CHECK(write.offset >= 0);
-                if (write.jumpToEntry == xla::kNoJumpTarget)
+                ++patchRows;
+                CHECK(op.offset >= 0);
+                switch (op.kind)
                 {
-                    CHECK_EQ(write.bytes == nullptr, write.fill != 0);
+                case xla::PatchOp::Kind::write:
+                    CHECK(!op.bytes.empty());
+                    break;
+                case xla::PatchOp::Kind::fill:
+                    CHECK(op.count > 0);
+                    CHECK_EQ(op.fill, xla::Byte(xla::Opcode::kNop));
+                    break;
+                case xla::PatchOp::Kind::jump:
+                    CHECK(op.target < entries.size());
+                    break;
                 }
-                CHECK(write.jumpToEntry == xla::kNoJumpTarget ||
-                      write.jumpToEntry < entries.size());
             }
         }
-        CHECK_EQ(writeRows, std::size_t{32});
+        CHECK_EQ(patchRows, std::size_t{32});
 
         for (const xla::SkipLauncherCollector& collector : xla::SkipLauncherCollectors())
         {

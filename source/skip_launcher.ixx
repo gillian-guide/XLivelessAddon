@@ -61,35 +61,70 @@ import xla.common;
 
 export namespace xla
 {
-    // One store relative to a signature match. Exactly one of three kinds:
-    //   * bytes != nullptr     store `length` recovered bytes at match + offset
-    //   * jumpToEntry != kNoJumpTarget
-    //                          the rel32 of an E9 whose opcode the preceding
-    //                          row wrote; the installer rewrites the whole
-    //                          5-byte branch to that entry's match
-    //   * otherwise            repeat `fill` `length` times (the recovered fill
-    //                          rows are all NOPs)
-    // `length` is always the number of bytes the row owns (for a jump row, the
-    // four rel32 bytes the branch builder overwrites).
-    struct SkipLauncherWrite
+    // One in-place edit of a matched launcher window. These are instruction
+    // patches, not hook bodies: the recovered handler overwrites the game's own
+    // launcher check at the match (a NOP, an xor, a one-byte branch, a short
+    // jump), so nothing here is callable and there is no ABI to keep.
+    struct PatchOp
     {
-        std::int32_t offset;
-        std::uint16_t length;
-        const std::uint8_t* bytes; // null on a fill or jump row
-        std::uint8_t fill;         // must be Byte(Opcode::kNop) on a fill row
-        std::uint32_t jumpToEntry; // kNoJumpTarget, or an entry index
+        enum class Kind : std::uint8_t
+        {
+            write, // store `bytes` at match + offset
+            fill,  // store `count` copies of `fill` (the recovered rows are NOPs)
+            jump,  // rewrite the 5-byte branch at match + offset - 1 to `target`
+        };
+
+        Kind kind{};
+        std::int32_t offset{};
+        std::span<const std::uint8_t> bytes{}; // write: the exact bytes
+        std::uint16_t count{};                 // fill: the byte count
+        std::uint8_t fill{};                   // fill: the repeated byte
+        std::uint32_t target{};                // jump: the target entry index
     };
 
-    // "This row installs no jump" sentinel; compare with == and never write it.
-    inline constexpr std::uint32_t kNoJumpTarget = std::numeric_limits<std::uint32_t>::max();
+    // The patch builders. A row says what it does, and a byte row's length is the
+    // size of its own data: there is no second number to keep in sync.
+    [[nodiscard]] constexpr PatchOp WriteBytes(std::int32_t offset,
+                                               std::span<const std::uint8_t> bytes) noexcept
+    {
+        return {PatchOp::Kind::write, offset, bytes, 0, 0, 0};
+    }
 
-    // One row of the recovered main table: a signature and the stores it makes.
-    // Entry 1 has no stores: it is the jump target of entry 9.
-    struct SkipLauncherEntry
+    [[nodiscard]] constexpr PatchOp NopFill(std::int32_t offset, std::uint16_t count) noexcept
+    {
+        return {PatchOp::Kind::fill, offset, {}, count, Byte(Opcode::kNop), 0};
+    }
+
+    // The rel32 of an E9 whose opcode a preceding row wrote. The installer
+    // rewrites the whole branch, so the row names the rel32's offset and the
+    // target entry's match supplies the destination.
+    [[nodiscard]] constexpr PatchOp Jump(std::int32_t offset, std::uint32_t target) noexcept
+    {
+        return {PatchOp::Kind::jump, offset, {}, 0, 0, target};
+    }
+
+    // The byte rows that are one instruction: the name is the effect, not the op.
+    [[nodiscard]] constexpr PatchOp ForceEaxZero(std::int32_t offset) noexcept
+    {
+        return WriteBytes(offset, ops::kXorEaxEax);
+    }
+
+    [[nodiscard]] constexpr PatchOp ForceEaxZeroRetNop(std::int32_t offset) noexcept
+    {
+        return WriteBytes(offset, ops::kXorEaxRetNop);
+    }
+
+    [[nodiscard]] constexpr PatchOp ForceRet(std::int32_t offset) noexcept
+    {
+        return WriteBytes(offset, ops::kRet);
+    }
+
+    // One recovered main-table entry: one signature scan and the edits made at
+    // its first match. An empty span is the row with no edits (entry 1).
+    struct EntryPatch
     {
         std::string_view signature;
-        const SkipLauncherWrite* writes;
-        std::size_t writeCount;
+        std::span<const PatchOp> ops;
     };
 
     // Multi-hit collector: the original patches the first two matches of one
@@ -211,7 +246,7 @@ export namespace xla
         SkipLauncherStage::dfa | SkipLauncherStage::rom;
 
     // Table accessors; the spans cover the recovered rows in the golden's order.
-    std::span<const SkipLauncherEntry> SkipLauncherEntries() noexcept;
+    std::span<const EntryPatch> SkipLauncherEntries() noexcept;
     std::span<const SkipLauncherCollector> SkipLauncherCollectors() noexcept;
     std::span<const SkipLauncherInstall> SkipLauncherDfaInstalls() noexcept;
     std::span<const SkipLauncherInstall> SkipLauncherRomInstalls() noexcept;
@@ -301,203 +336,238 @@ namespace xla
         constexpr std::int32_t kRomSetSite = -67;
         constexpr std::int32_t kRomResetCall = 6;
 
-        // ---- the main table's write rows (0x10045CE0) ----------------------
+        // ---- the main table's inline patches (0x10045CE0) ------------------
         //
-        // One array per entry, in the original's order: {offset, length, bytes
-        // (null = fill or jump), fill byte, jump-target entry}.
+        // These are in-place instruction-window patches, not hook bodies: the
+        // recovered handler overwrites the launcher check at the signature match
+        // (NOPs, an xor, a one-byte branch or a short jump), so nothing here is
+        // callable and there is no ABI to keep. The rows, their order and the
+        // bytes are 1:1 with the handler.
+        //
+        // A byte row is WriteBytes: the original stored literal bytes (memcpy).
+        // A fill row is NopFill: the original memset a repeated byte (the long
+        // wipes). Both forms are in the golden, so the distinction is data even
+        // where the resulting bytes would be equal.
+        inline constexpr std::int32_t kMaxPatchExtent = 0x200;
 
         // Entry 0: `test bl,bl; jne +0x143; lea ecx,[esp+28]; mov eax,ecx`.
-        // Both rows write the single `EB` opcode of a short branch in the same
-        // function. The condition byte is outside the matched window, so the
-        // signature does not say which branch it was; `EB` makes it unconditional.
-        constexpr SkipLauncherWrite kSkipEntryWrites_0[] = {
-            {kEntry0Branch0, 1, ops::kJmpRel8, 0, kNoJumpTarget}, // jz/jnz -> jmp
-            {kEntry0Branch1, 1, ops::kJmpRel8, 0, kNoJumpTarget},
+        // Both rows write the single `EB` of a short branch in the same function;
+        // its condition byte is outside the matched window, so `EB` just forces it.
+        constexpr PatchOp kEntry0Ops[] = {
+            WriteBytes(kEntry0Branch0, ops::kJmpRel8), // jz/jnz -> jmp
+            WriteBytes(kEntry0Branch1, ops::kJmpRel8),
         };
         // Entry 2: `74 EC` (jz), `cmp [esi+6],bl`, `74 E7` (jz), `push imm32`.
-        // Both conditional jumps are removed with two NOPs.
-        constexpr SkipLauncherWrite kSkipEntryWrites_2[] = {
-            {0, 2, ops::kNop2, 0, kNoJumpTarget},
-            {kEntry2Branch1, 2, ops::kNop2, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry2Ops[] = {
+            WriteBytes(0, ops::kNop2),
+            WriteBytes(kEntry2Branch1, ops::kNop2),
         };
         // Entry 3: `74 C4` (jz), `mov eax,[edi]`, `cmp eax,[esi+18]`, `75 BD`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_3[] = {
-            {0, 2, ops::kNop2, 0, kNoJumpTarget}, // the leading jz
+        constexpr PatchOp kEntry3Ops[] = {
+            WriteBytes(0, ops::kNop2),
         };
-        // Entry 4: `cmp edx,[esi+18]; jne rel32`; NOP6 covers the whole jcc.
-        constexpr SkipLauncherWrite kSkipEntryWrites_4[] = {
-            {kEntry4Jcc, 6, ops::kNop6, 0, kNoJumpTarget},
+        // Entry 4: `cmp edx,[esi+18]; jne rel32`; the 6 bytes are the whole jcc.
+        constexpr PatchOp kEntry4Ops[] = {
+            WriteBytes(kEntry4Jcc, ops::kNop6),
         };
-        // Entry 5: `cmp ecx,[esi+18]; jne rel32`; same 6-byte jcc.
-        constexpr SkipLauncherWrite kSkipEntryWrites_5[] = {
-            {kEntry5Jcc, 6, ops::kNop6, 0, kNoJumpTarget},
+        // Entry 5: `cmp ecx,[esi+18]; jne rel32`.
+        constexpr PatchOp kEntry5Ops[] = {
+            WriteBytes(kEntry5Jcc, ops::kNop6),
         };
         // Entry 6: `jne rel32; mov ecx,[esp+..]; pop edi/esi/ebx; xor ecx,esp`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_6[] = {
-            {0, 6, ops::kNop6, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry6Ops[] = {
+            WriteBytes(0, ops::kNop6),
         };
         // Entry 7: `cmp eax,[esi+18]; jne -0x43`. +3 replaces the `75 BD` with
         // `33 C0` (xor eax,eax); +10 is 5 bytes past the window: `90 A3`
         // (nop; mov [imm32],eax).
-        constexpr SkipLauncherWrite kSkipEntryWrites_7[] = {
-            {kEntry7Jcc, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
-            {kEntry7Store, 2, ops::kNopMovMoffsEax, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry7Ops[] = {
+            ForceEaxZero(kEntry7Jcc),
+            WriteBytes(kEntry7Store, ops::kNopMovMoffsEax),
         };
         // Entry 8: `push edi; push ecx` then three `C7 44 24` immediate stores.
         // The recovered handler memsets 0x1BF (447) bytes starting at +1.
-        constexpr SkipLauncherWrite kSkipEntryWrites_8[] = {
-            {kEntry8Memset, kEntry8MemsetLength, nullptr, Byte(Opcode::kNop),
-             kNoJumpTarget},
+        constexpr PatchOp kEntry8Ops[] = {
+            NopFill(kEntry8Memset, kEntry8MemsetLength),
         };
         // Entry 9: `mov edx,[esi+1C]; cmp edx,[esi+20]; ?? ??; push 0; push 0`.
         // The first 7 bytes become `33 C0 E9 rel32`: xor eax,eax, then a jump to
         // entry 1's match (the launcher entry the original keeps for this row).
-        constexpr SkipLauncherWrite kSkipEntryWrites_9[] = {
-            {0, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
-            {kEntry9JmpOpcode, 1, ops::kJmpRel32, 0, kNoJumpTarget},
-            {kEntry9JmpRel32, 4, nullptr, 0, kSkipLauncherJumpTargetEntry}, // rel32
+        constexpr PatchOp kEntry9Ops[] = {
+            ForceEaxZero(0),
+            WriteBytes(kEntry9JmpOpcode, ops::kJmpRel32),
+            Jump(kEntry9JmpRel32, kSkipLauncherJumpTargetEntry),
         };
         // Entry 10: `mov [imm32],esi; call; add esp,4; test al,al`. `90 A3`
         // keeps the store but takes EAX instead of ESI (the `89` becomes `90`).
-        constexpr SkipLauncherWrite kSkipEntryWrites_10[] = {
-            {0, 2, ops::kNopMovMoffsEax, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry10Ops[] = {
+            WriteBytes(0, ops::kNopMovMoffsEax),
         };
         // Entry 11: `mov edx,[eax+2C]; cmp edx,[eax+30]` -> `33 C0` + NOP4, so
         // the caller receives eax = 0.
-        constexpr SkipLauncherWrite kSkipEntryWrites_11[] = {
-            {0, 2, ops::kXorEaxEax, 0, kNoJumpTarget},
-            {kEntry11Nop, 4, ops::kNop4, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry11Ops[] = {
+            ForceEaxZero(0),
+            WriteBytes(kEntry11Nop, ops::kNop4),
         };
         // Entry 12: `mov ecx,[eax+2C]; sub esp,0x78`, then the function body.
         // NOP3 removes the load; NOP11 fills the 11 bytes after the 6-byte window.
-        constexpr SkipLauncherWrite kSkipEntryWrites_12[] = {
-            {0, 3, ops::kNop3, 0, kNoJumpTarget},
-            {kEntry12Tail, 11, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
+        constexpr PatchOp kEntry12Ops[] = {
+            WriteBytes(0, ops::kNop3),
+            NopFill(kEntry12Tail, 11),
         };
         // Entry 13: the same with `sub esp,0x74`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_13[] = {
-            {0, 3, ops::kNop3, 0, kNoJumpTarget},
-            {kEntry13Tail, 11, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
+        constexpr PatchOp kEntry13Ops[] = {
+            WriteBytes(0, ops::kNop3),
+            NopFill(kEntry13Tail, 11),
         };
         // Entry 14: `mov ecx,[eax+2C]; cmp ecx,[eax+30]; jz +3`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_14[] = {
-            {0, 11, ops::kNop11, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry14Ops[] = {
+            WriteBytes(0, ops::kNop11),
         };
         // Entry 15: the same compare followed by `push ebx`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_15[] = {
-            {0, 32, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
+        constexpr PatchOp kEntry15Ops[] = {
+            NopFill(0, 32),
         };
         // Entry 16: the same compare followed by `jz +0x11`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_16[] = {
-            {0, 25, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
+        constexpr PatchOp kEntry16Ops[] = {
+            NopFill(0, 25),
         };
         // Entry 17/18: `mov ecx,[eax+2C]; cmp ecx,[eax+30]; jne -0x24;
         // lea edx,[esp+18/1C]`. The 8-byte compare-and-branch window is NOP'd.
-        constexpr SkipLauncherWrite kSkipEntryWrites_17[] = {
-            {0, 8, ops::kNop8, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry17Ops[] = {
+            WriteBytes(0, ops::kNop8),
         };
-        constexpr SkipLauncherWrite kSkipEntryWrites_18[] = {
-            {0, 8, ops::kNop8, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry18Ops[] = {
+            WriteBytes(0, ops::kNop8),
         };
         // Entry 19: `mov ecx,[imm32]; mov edx,[ecx+2C]`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_19[] = {
-            {0, 14, ops::kNop14, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry19Ops[] = {
+            WriteBytes(0, ops::kNop14),
         };
         // Entry 20: prologue pushes, `mov edi,[imm32]; mov eax,[edi+2C]`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_20[] = {
-            {0, 1, ops::kRet, 0, kNoJumpTarget}, // the whole function becomes `ret`
+        constexpr PatchOp kEntry20Ops[] = {
+            ForceRet(0), // the whole function becomes `ret`
         };
         // Entry 21: `cmp eax,edi; jne rel32; test eax,eax`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_21[] = {
-            {0, 16, nullptr, Byte(Opcode::kNop), kNoJumpTarget},
+        constexpr PatchOp kEntry21Ops[] = {
+            NopFill(0, 16),
         };
         // Entry 22: `jne rel32; test eax,eax; je rel32; call rel32; test edx,edx`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_22[] = {
-            {0, 14, ops::kNop14, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry22Ops[] = {
+            WriteBytes(0, ops::kNop14),
         };
         // Entry 23: `sub esp,0x24; mov eax,[imm32]; mov ecx,[eax+14]; push ...`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_23[] = {
-            {0, 4, ops::kXorEaxRetNop, 0, kNoJumpTarget}, // xor eax,eax; ret; nop
+        constexpr PatchOp kEntry23Ops[] = {
+            ForceEaxZeroRetNop(0), // xor eax,eax; ret; nop
         };
         // Entry 24: `sub esp,8; mov ecx,[imm32]; mov edx,[ecx+14]; lea eax,[esp]`.
-        constexpr SkipLauncherWrite kSkipEntryWrites_24[] = {
-            {0, 4, ops::kXorEaxRetNop, 0, kNoJumpTarget},
+        constexpr PatchOp kEntry24Ops[] = {
+            ForceEaxZeroRetNop(0),
         };
 
         // ---- the main table (0x10045CE0) ----------------------------------
 
-        // In the original's order. Entry 1 is the only row with no stores: entry
+        // In the original's order. Entry 1 is the only row with no edits: entry
         // 9's E9 jumps to its match, so the handler keeps its address and writes
-        // nothing into it. `std::size` keeps each count next to its array.
-        constexpr SkipLauncherEntry kSkipLauncherEntries[] = {
+        // nothing into it.
+        constexpr EntryPatch kSkipLauncherEntries[] = {
             // 0: `test bl,bl; jne` launcher check; two EB hook sites
-            {"84 DB 0F 85 43 01 00 00 8D 4C 24 28 8B C1", kSkipEntryWrites_0,
-             std::size(kSkipEntryWrites_0)},
-            // 1: target of entry 9's jump; no writes of its own
-            {"68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84", nullptr, 0},
+            {"84 DB 0F 85 43 01 00 00 8D 4C 24 28 8B C1", kEntry0Ops},
+            // 1: target of entry 9's jump; no edits of its own
+            {"68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84",
+             std::span<const PatchOp>{}},
             // 2: `74 EC` / `74 E7` conditional launcher jumps
-            {"74 EC 38 5E 06 74 E7 68", kSkipEntryWrites_2, std::size(kSkipEntryWrites_2)},
+            {"74 EC 38 5E 06 74 E7 68", kEntry2Ops},
             // 3: `74 C4` leading conditional jump
-            {"74 C4 8B 07 3B 46 18 75 BD 68", kSkipEntryWrites_3,
-             std::size(kSkipEntryWrites_3)},
+            {"74 C4 8B 07 3B 46 18 75 BD 68", kEntry3Ops},
             // 4: `cmp edx,[esi+18]; jne rel32`
-            {"3B 56 18 0F 85", kSkipEntryWrites_4, std::size(kSkipEntryWrites_4)},
+            {"3B 56 18 0F 85", kEntry4Ops},
             // 5: `cmp ecx,[esi+18]; jne rel32`
-            {"3B 4E 18 0F 85", kSkipEntryWrites_5, std::size(kSkipEntryWrites_5)},
+            {"3B 4E 18 0F 85", kEntry5Ops},
             // 6: leading `jne rel32` of an epilogue sequence
-            {"0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6", kSkipEntryWrites_6,
-             std::size(kSkipEntryWrites_6)},
+            {"0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6", kEntry6Ops},
             // 7: `cmp eax,[esi+18]; jne -0x43` and a following store
-            {"3B 46 18 75 BD", kSkipEntryWrites_7, std::size(kSkipEntryWrites_7)},
+            {"3B 46 18 75 BD", kEntry7Ops},
             // 8: `push edi; push ecx` + three `C7 44 24` immediate stores
-            {"57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24",
-             kSkipEntryWrites_8, std::size(kSkipEntryWrites_8)},
+            {"57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", kEntry8Ops},
             // 9: `mov edx,[esi+1C]; cmp edx,[esi+20]` -> xor eax,eax; jmp entry 1
-            {"8B 56 1C 3B 56 20 ? ? 6A 00 6A 00", kSkipEntryWrites_9,
-             std::size(kSkipEntryWrites_9)},
+            {"8B 56 1C 3B 56 20 ? ? 6A 00 6A 00", kEntry9Ops},
             // 10: `mov [imm32],esi; call; add esp,4; test al,al`
-            {"89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0", kSkipEntryWrites_10,
-             std::size(kSkipEntryWrites_10)},
+            {"89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0", kEntry10Ops},
             // 11: `mov edx,[eax+2C]; cmp edx,[eax+30]` -> eax = 0
-            {"8B 50 2C 3B 50 30", kSkipEntryWrites_11, std::size(kSkipEntryWrites_11)},
+            {"8B 50 2C 3B 50 30", kEntry11Ops},
             // 12: `mov ecx,[eax+2C]; sub esp,0x78` + body tail
-            {"8B 48 2C 83 EC 78", kSkipEntryWrites_12, std::size(kSkipEntryWrites_12)},
+            {"8B 48 2C 83 EC 78", kEntry12Ops},
             // 13: the same with `sub esp,0x74`
-            {"8B 48 2C 83 EC 74", kSkipEntryWrites_13, std::size(kSkipEntryWrites_13)},
+            {"8B 48 2C 83 EC 74", kEntry13Ops},
             // 14: `mov ecx,[eax+2C]; cmp ecx,[eax+30]; jz +3`
-            {"8B 48 2C 3B 48 30 74 03", kSkipEntryWrites_14,
-             std::size(kSkipEntryWrites_14)},
+            {"8B 48 2C 3B 48 30 74 03", kEntry14Ops},
             // 15: the same compare followed by `push ebx`
-            {"8B 48 2C 3B 48 30 53", kSkipEntryWrites_15, std::size(kSkipEntryWrites_15)},
+            {"8B 48 2C 3B 48 30 53", kEntry15Ops},
             // 16: the same compare followed by `jz +0x11`
-            {"8B 48 2C 3B 48 30 74 11", kSkipEntryWrites_16,
-             std::size(kSkipEntryWrites_16)},
+            {"8B 48 2C 3B 48 30 74 11", kEntry16Ops},
             // 17: `... jne -0x24; lea edx,[esp+18]`
-            {"8B 48 2C 3B 48 30 75 DC 8D 54 24 18", kSkipEntryWrites_17,
-             std::size(kSkipEntryWrites_17)},
+            {"8B 48 2C 3B 48 30 75 DC 8D 54 24 18", kEntry17Ops},
             // 18: `... jne -0x24; lea edx,[esp+1C]`
-            {"8B 48 2C 3B 48 30 75 DC 8D 54 24 1C", kSkipEntryWrites_18,
-             std::size(kSkipEntryWrites_18)},
+            {"8B 48 2C 3B 48 30 75 DC 8D 54 24 1C", kEntry18Ops},
             // 19: `mov ecx,[imm32]; mov edx,[ecx+2C]`
-            {"8B 0D ? ? ? ? 8B 51 2C", kSkipEntryWrites_19, std::size(kSkipEntryWrites_19)},
+            {"8B 0D ? ? ? ? 8B 51 2C", kEntry19Ops},
             // 20: prologue pushes + `mov edi,[imm32]; mov eax,[edi+2C]`
-            {"51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C", kSkipEntryWrites_20,
-             std::size(kSkipEntryWrites_20)},
+            {"51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C", kEntry20Ops},
             // 21: `cmp eax,edi; jne rel32; test eax,eax`
-            {"3B C7 0F 85 ? ? ? ? 85 C0", kSkipEntryWrites_21,
-             std::size(kSkipEntryWrites_21)},
+            {"3B C7 0F 85 ? ? ? ? 85 C0", kEntry21Ops},
             // 22: `jne rel32; test eax,eax; je rel32; call rel32; test edx,edx`
-            {"0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2", kSkipEntryWrites_22,
-             std::size(kSkipEntryWrites_22)},
+            {"0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2", kEntry22Ops},
             // 23: `sub esp,0x24; mov eax,[imm32]; mov ecx,[eax+14]; push ...`
-            {"83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57", kSkipEntryWrites_23,
-             std::size(kSkipEntryWrites_23)},
+            {"83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57", kEntry23Ops},
             // 24: `sub esp,8; mov ecx,[imm32]; mov edx,[ecx+14]; lea eax,[esp]`
-            {"83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52",
-             kSkipEntryWrites_24, std::size(kSkipEntryWrites_24)},
+            {"83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52", kEntry24Ops},
         };
 
         static_assert(std::size(kSkipLauncherEntries) == 25);
+
+        // The builders are constexpr, so the extent of every recovered row is
+        // checked at compile time: a slipped offset or count fails the build
+        // instead of landing on the wrong instruction at run time.
+        [[nodiscard]] constexpr std::int32_t PatchOpLength(const PatchOp& op) noexcept
+        {
+            switch (op.kind)
+            {
+            case PatchOp::Kind::write:
+                return static_cast<std::int32_t>(op.bytes.size());
+            case PatchOp::Kind::fill:
+                return static_cast<std::int32_t>(op.count);
+            case PatchOp::Kind::jump:
+                return 4; // the rel32 the branch builder overwrites
+            }
+            return 0;
+        }
+
+        [[nodiscard]] constexpr bool PatchOpsFit(std::span<const PatchOp> ops) noexcept
+        {
+            for (const PatchOp& op : ops)
+            {
+                if (op.offset < 0 || op.offset + PatchOpLength(op) > kMaxPatchExtent)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] constexpr bool TablePatchesFit() noexcept
+        {
+            for (const EntryPatch& entry : kSkipLauncherEntries)
+            {
+                if (!PatchOpsFit(entry.ops))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(TablePatchesFit());
+
 
         // ---- the multi-hit collectors --------------------------------------
 
@@ -595,7 +665,7 @@ namespace xla
         static_assert(std::size(kDfaCollectedTargets_0) == 2);
     } // namespace
 
-    std::span<const SkipLauncherEntry> SkipLauncherEntries() noexcept
+    std::span<const EntryPatch> SkipLauncherEntries() noexcept
     {
         return kSkipLauncherEntries;
     }
@@ -658,27 +728,30 @@ namespace xla
         }
 
         // One scanned entry: its recovered row and the first signature match, or
-        // null when the signature is absent on this image. Jump rows resolve their
+        // null when the signature is absent on this image. Jump ops resolve their
         // target through the plan list, so nothing is scanned twice.
         struct EntryPlan
         {
-            const SkipLauncherEntry* entry{};
+            const EntryPatch* entry{};
             std::uint8_t* match{};
         };
 
         using EntryPlanList = std::vector<EntryPlan>;
 
-        // True when every jump row's target entry matched. The original shares one
-        // guard between the E9 and its 33 C0/rel32 rows, so an absent target skips
+        // The recovered handler's single-match finder: one site per table row.
+        // Used for the report below, never as a gate.
+        constexpr std::size_t kSingleSite = 1;
+
+        // True when every jump op's target entry matched. The original shares one
+        // guard between the E9 and its 33 C0/rel32 ops, so an absent target skips
         // the whole entry, not just the jump.
-        [[nodiscard]] bool JumpTargetsPresent(const SkipLauncherEntry& entry,
+        [[nodiscard]] bool JumpTargetsPresent(const EntryPatch& entry,
                                               const EntryPlanList& plans) noexcept
         {
-            for (std::size_t index = 0; index < entry.writeCount; ++index)
+            for (const PatchOp& op : entry.ops)
             {
-                const std::uint32_t targetEntry = entry.writes[index].jumpToEntry;
-                if (targetEntry != kNoJumpTarget &&
-                    (targetEntry >= plans.size() || plans[targetEntry].match == nullptr))
+                if (op.kind == PatchOp::Kind::jump &&
+                    (op.target >= plans.size() || plans[op.target].match == nullptr))
                 {
                     return false;
                 }
@@ -694,28 +767,29 @@ namespace xla
             return target == SkipLauncherCollector::Target::first_two ? hit < 2 : hit + 2 >= hits;
         }
 
-        // Applies one write row:
-        //   * jump row: rewrite the whole branch one byte before the rel32 (the
-        //     preceding row wrote the E9) so the displacement is measured from the
-        //     end of the instruction, not from the literal dword;
-        //   * byte row: store the recovered bytes;
-        //   * fill row: repeat the row's fill byte (NOP in the recovered data).
-        PatchOutcome ApplyWriteRow(std::span<std::byte> image, std::uint8_t* match,
-                                   const SkipLauncherWrite& write,
-                                   const EntryPlanList& plans, SkipLauncherReport& report)
+        // Applies one patch op:
+        //   * write: store the op's bytes;
+        //   * fill:  repeat the op's byte (NOP in the recovered data);
+        //   * jump:  rewrite the whole branch one byte before the rel32 (the
+        //            preceding write op put the E9 there), so the displacement is
+        //            measured from the end of the instruction, not from the
+        //            literal dword.
+        PatchOutcome ApplyPatchOp(std::span<std::byte> image, std::uint8_t* match,
+                                  const PatchOp& op, const EntryPlanList& plans,
+                                  SkipLauncherReport& report)
         {
-            std::uint8_t* site = MatchAt(match, write.offset);
+            std::uint8_t* site = MatchAt(match, op.offset);
 
-            if (write.jumpToEntry != kNoJumpTarget)
+            switch (op.kind)
             {
-                std::uint8_t* target = write.jumpToEntry < plans.size()
-                                           ? plans[write.jumpToEntry].match
-                                           : nullptr;
+            case PatchOp::Kind::jump:
+            {
+                std::uint8_t* target = op.target < plans.size() ? plans[op.target].match
+                                                                : nullptr;
                 if (target == nullptr)
                 {
-                    // The entry-level jump check already rejected this case; keep
-                    // the guard because this is the only place the row's target is
-                    // dereferenced.
+                    // The entry-level check already rejected this case; keep the
+                    // guard because this is the only place the target is read.
                     return {};
                 }
 
@@ -730,31 +804,39 @@ namespace xla
                 ++report.writes;
                 return {};
             }
-
-            if (!InBounds(image, site, write.length))
+            case PatchOp::Kind::write:
             {
-                return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
-                                                  "site out of bounds"});
-            }
-
-            if (write.bytes != nullptr)
-            {
+                if (!InBounds(image, site, op.bytes.size()))
+                {
+                    return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
+                                                      "site out of bounds"});
+                }
                 injector::WriteMemoryRaw(injector::raw_ptr(site),
-                                         const_cast<std::uint8_t*>(write.bytes), write.length,
-                                         true);
+                                         const_cast<std::uint8_t*>(op.bytes.data()),
+                                         op.bytes.size(), true);
+                ++report.writes;
+                return {};
             }
-            else
+            case PatchOp::Kind::fill:
             {
-                // The installer writes the row's own fill byte instead of assuming
+                if (!InBounds(image, site, op.count))
+                {
+                    return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
+                                                      "site out of bounds"});
+                }
+                // The installer writes the op's own fill byte instead of assuming
                 // 0x90; xla_table_parity rejects a non-NOP fill on these rows.
-                injector::MemoryFill(injector::raw_ptr(site), write.fill, write.length, true);
+                injector::MemoryFill(injector::raw_ptr(site), op.fill, op.count, true);
+                ++report.writes;
+                return {};
+            }
             }
 
-            ++report.writes;
-            return {};
+            return std::unexpected(PatchError{PatchErrorCode::invalid_input,
+                                              "unsupported patch op"});
         }
 
-        // Applies one matched entry. The rows are in the recovered order and share
+        // Applies one matched entry. The ops are in the recovered order and share
         // the entry's single jump-target guard.
         PatchOutcome ApplyEntry(std::span<std::byte> image, const EntryPlan& plan,
                                 const EntryPlanList& plans, SkipLauncherReport& report)
@@ -764,10 +846,9 @@ namespace xla
                 return {};
             }
 
-            for (std::size_t index = 0; index < plan.entry->writeCount; ++index)
+            for (const PatchOp& op : plan.entry->ops)
             {
-                const auto status =
-                    ApplyWriteRow(image, plan.match, plan.entry->writes[index], plans, report);
+                const auto status = ApplyPatchOp(image, plan.match, op, plans, report);
                 if (!status)
                 {
                     return status;
@@ -782,13 +863,12 @@ namespace xla
         // order is part of the contract).
         PatchOutcome ApplyMainTable(std::span<std::byte> image, SkipLauncherReport& report)
         {
-            const std::span<const SkipLauncherEntry> entries = SkipLauncherEntries();
+            const std::span<const EntryPatch> entries = SkipLauncherEntries();
             EntryPlanList plans(entries.size());
 
             for (std::size_t index = 0; index < entries.size(); ++index)
             {
-                const SkipLauncherEntry& entry = entries[index];
-                plans[index].entry = &entry;
+                const EntryPatch& entry = entries[index];
 
                 hook::pattern pattern = Scan(image, entry.signature);
                 if (pattern.empty())
@@ -797,7 +877,19 @@ namespace xla
                     continue;
                 }
 
-                plans[index].match = pattern.get(0).get<std::uint8_t>();
+                // The recovered row is a single-site patch. A duplicate signature
+                // is still applied at the first match, exactly like the original's
+                // single-match finder; the count is reported, never gated. get(0)
+                // (not get_first) because get_first's own count check would assert
+                // on that duplicate in a checked build.
+                const std::size_t hits = pattern.size();
+                if (hits != kSingleSite)
+                {
+                    log::Info("skipLauncher: entry {} matched {} site(s), expected {}", index,
+                              hits, kSingleSite);
+                }
+
+                plans[index] = {&entry, pattern.get(0).get<std::uint8_t>()};
                 ++report.entriesFound;
 
                 const auto status = ApplyEntry(image, plans[index], plans, report);
@@ -810,39 +902,59 @@ namespace xla
         }
 
         // Stage main, part 2: the two multi-hit collectors. The recovered stub
-        // ("mov al,1; ret; nop") is stored over the first/last matches, never
-        // over the signature itself.
+        // ("mov al,1; ret; nop") is stored over the first/last matches, never over
+        // the signature itself. The original's multi-match finder returns a
+        // data-dependent number of sites, so the count is reported, not asserted
+        // against a build number; the rule keeps at most two per pattern.
         PatchOutcome ApplyCollectors(std::span<std::byte> image, SkipLauncherReport& report)
         {
+            std::size_t collectorIndex = 0;
             for (const SkipLauncherCollector& collector : SkipLauncherCollectors())
             {
                 hook::pattern pattern = Scan(image, collector.pattern);
                 const std::size_t hits = pattern.size();
                 if (hits == 0)
                 {
+                    ++collectorIndex;
                     continue;
                 }
 
                 ++report.collectorsFound;
-                for (std::size_t hit = 0; hit < hits; ++hit)
+                std::size_t hit = 0;
+                std::size_t applied = 0;
+                PatchOutcome status;
+                pattern.for_each_result(
+                    [&](hook::pattern_match match)
+                    {
+                        const std::size_t index = hit++;
+                        if (!status || !CollectorTakes(collector.target, index, hits))
+                        {
+                            return;
+                        }
+
+                        std::uint8_t* site = match.get<std::uint8_t>();
+                        if (!InBounds(image, site, collector.length))
+                        {
+                            status = std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
+                                                                "site out of bounds"});
+                            return;
+                        }
+
+                        injector::WriteMemoryRaw(injector::raw_ptr(site),
+                                                 const_cast<std::uint8_t*>(collector.bytes),
+                                                 collector.length, true);
+                        ++report.collectorWrites;
+                        ++applied;
+                    });
+
+                if (!status)
                 {
-                    if (!CollectorTakes(collector.target, hit, hits))
-                    {
-                        continue;
-                    }
-
-                    std::uint8_t* site = pattern.get(hit).get<std::uint8_t>();
-                    if (!InBounds(image, site, collector.length))
-                    {
-                        return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
-                                                          "site out of bounds"});
-                    }
-
-                    injector::WriteMemoryRaw(injector::raw_ptr(site),
-                                             const_cast<std::uint8_t*>(collector.bytes),
-                                             collector.length, true);
-                    ++report.collectorWrites;
+                    return status;
                 }
+
+                log::Info("skipLauncher: collector {} matched {} site(s), patched {}",
+                          collectorIndex, hits, applied);
+                ++collectorIndex;
             }
             return {};
         }
@@ -856,8 +968,8 @@ namespace xla
             hook::pattern capture = Scan(image, kDfaCapturePattern);
             if (!capture.empty())
             {
-                report.createFileSlot = injector::ReadMemory<std::uint32_t>(
-                    injector::raw_ptr(capture.get(0).get<std::uint8_t>() + kDfaCaptureSlotOffset));
+                // `FF 15 <rel32>`: the operand at +2 is the IAT slot VA.
+                report.createFileSlot = *capture.get_first<std::uint32_t>(kDfaCaptureSlotOffset);
             }
 
             PublishCreateFileSlot(report);
@@ -887,7 +999,7 @@ namespace xla
                     continue;
                 }
 
-                std::uint8_t* site = MatchAt(hookSite.get(0).get<std::uint8_t>(), install.offset);
+                std::uint8_t* site = MatchAt(hookSite.get_first<std::uint8_t>(), install.offset);
                 if (!InBounds(image, site, kBranchLength))
                 {
                     return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
@@ -951,9 +1063,9 @@ namespace xla
                                                           "site out of bounds"});
                     }
 
-                    injector::MakeJMP(
-                        injector::raw_ptr(site),
-                        injector::raw_ptr(targetPattern.get(0).get<std::uint8_t>()), true);
+                    injector::MakeJMP(injector::raw_ptr(site),
+                                      injector::raw_ptr(targetPattern.get_first<std::uint8_t>()),
+                                      true);
                     ++report.collectedInstalls;
                 }
             }
@@ -1382,3 +1494,4 @@ namespace xla
         return 0;
     }
 } // namespace xla
+

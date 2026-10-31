@@ -187,6 +187,13 @@ def pattern_scans(text: str) -> list[tuple[int, tuple[str, ...]]]:
             break
 
         literal = "".join(value)
+        # Hooking.Patterns emits one wildcard byte per '?', so "??" is two bytes.
+        # Every signature in this tree spells one wildcard as "?"; a copied-in
+        # "??" would silently widen the pattern, so reject it outright.
+        if "??" in literal:
+            raise MalformedSignature(
+                f"'??' in {literal!r}: Hooking.Patterns reads it as two wildcard bytes; "
+                "write \"? ?\" for two wildcards or \"?\" for one")
         units = canonical_units(literal)
         if units is not None:
             found.append((start_line, tuple(units)))
@@ -329,6 +336,12 @@ def self_test() -> None:
         pass
     else:
         raise Failure("parser self-test: a dangling hex digit was not rejected")
+    try:
+        pattern_scans('auto x = "8A ?? 0D";')
+    except MalformedSignature:
+        pass
+    else:
+        raise Failure("parser self-test: '??' was not rejected")
     # Hooking.Patterns ignores spaces, so these are the same scan.
     if normalize("?88 90") != normalize("? 88 90"):
         raise Failure("parser self-test: whitespace handling is not byte-exact")

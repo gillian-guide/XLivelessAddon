@@ -324,10 +324,20 @@ namespace xla::patches
                 log::Write("core: missing-test skip [v1005] (1/9) missing");
             }
         }
-        patch::NopFirst("8B 48 2C 83 EC 78", 0, 3, "core: missing-test [v1005] (2/9) head");
-        patch::NopFirst("8B 48 2C 83 EC 78", 6, 11, "core: missing-test [v1005] (2/9) tail");
-        patch::NopFirst("8B 48 2C 83 EC 74", 0, 3, "core: missing-test [v1005] (3/9) head");
-        patch::NopFirst("8B 48 2C 83 EC 74", 6, 11, "core: missing-test [v1005] (3/9) tail");
+        // (2/9) and (3/9) each need two NOPs from ONE scan: the 3-byte head NOP
+        // overwrites the start of the signature, so a second scan of the same
+        // string would miss and silently drop the 11-byte tail NOP.
+        constexpr std::array<std::pair<std::string_view, std::string_view>, 2>
+            kMissingTestSites{{
+                {"8B 48 2C 83 EC 78", "core: missing-test [v1005] (2/9)"},
+                {"8B 48 2C 83 EC 74", "core: missing-test [v1005] (3/9)"},
+            }};
+        for (const auto& [signature, label] : kMissingTestSites)
+        {
+            const patch::Site site = patch::Find(signature, label);
+            patch::Nop(site, 0, 3, label);
+            patch::Nop(site, 6, 11, label);
+        }
         patch::NopFirst("8B 48 2C 3B 48 30 74 03", 0, 11, "core: missing-test [v1005] (4/9)");
         patch::NopFirst("8B 48 2C 3B 48 30 53", 0, 32, "core: missing-test [v1005] (5/9)");
         patch::NopFirst("8B 48 2C 3B 48 30 74 11", 0, 25, "core: missing-test [v1005] (6/9)");

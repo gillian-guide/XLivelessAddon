@@ -11,7 +11,7 @@
 //
 // What lives where
 //   1. public surface — types, report, stage mask, pass entry point
-//   2. recovered data — named site offsets, write rows, entries, collectors,
+//   2. recovered data — named site offsets, typed patch rows, entries, collectors,
 //                       the IAT capture pattern and the install rows
 //   3. the pass       — ApplySkipLauncher: main table -> collectors -> DFA
 //                       capture/publish -> DFA hooks -> collected jumps -> ROM
@@ -194,7 +194,7 @@ export namespace xla
         // Main table only (0x10045CE0): the 25 signature rows and 2 collectors.
         std::size_t entriesFound{};
         std::size_t entriesMissing{};
-        std::size_t writes{}; // write rows applied, jump rows included
+        std::size_t writes{}; // patch ops applied, jumps included
         std::size_t collectorsFound{};
         std::size_t collectorWrites{};
         bool jumpInstalled{};

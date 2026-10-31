@@ -19,10 +19,11 @@ namespace xla::ini
 
     namespace
     {
-        // mINI splits lines on "\r\n" on Windows, so an INI saved with bare LF is read
-        // as a single line. Rewrite such a file once with CRLF; users edit these INIs
-        // with whatever editor they have, and silently ignored options are the worst
-        // failure mode a config loader can have.
+        // mINI splits on '\n', so a bare-LF file parses correctly already. The
+        // CRLF rewrite is inherited from the original loader (editor and
+        // round-trip compatibility) and is value-preserving; it is *not* needed
+        // for parsing. It rewrites the user's file once, and that is the whole
+        // behaviour change if it is ever removed.
         void NormalizeLineEndings(const std::filesystem::path& path)
         {
             std::ifstream in{path, std::ios::binary};

@@ -65,19 +65,21 @@ export namespace xla
 
     // The x86 opcodes the recovered tables store. Naming them keeps a byte in a
     // table read as an instruction instead of a number (research 07's taxonomy).
+    // Each value is the instruction's first byte; ModRM values are named next to
+    // the opcode they belong to.
     enum class Opcode : std::uint8_t
     {
-        kNop = 0x90,
-        kRet = 0xC3,
-        kRetImm16 = 0xC2,
-        kCallRel32 = 0xE8,
-        kJmpRel32 = 0xE9,
-        kJmpRel8 = 0xEB,
-        kMovAlImm8 = 0xB0,
-        kMovMoffsEax = 0xA3,
-        kMovEaxImm32 = 0xB8,
-        kMovR32Rm32 = 0x8B,
-        kMovRm32R32 = 0x89,
+        kNop = 0x90,         // nop
+        kRet = 0xC3,         // ret
+        kRetImm16 = 0xC2,    // ret imm16
+        kCallRel32 = 0xE8,   // call rel32
+        kJmpRel32 = 0xE9,    // jmp rel32
+        kJmpRel8 = 0xEB,     // jmp rel8
+        kMovAlImm8 = 0xB0,   // mov al, imm8
+        kMovMoffsEax = 0xA3, // mov moffs32, eax
+        kMovEaxImm32 = 0xB8, // mov eax, imm32
+        kMovR32Rm32 = 0x8B,  // mov r32, r/m32
+        kMovRm32R32 = 0x89,  // mov r/m32, r32
         kXorEaxEax = 0x33,   // first byte of `xor eax,eax`
         kModRmEaxEax = 0xC0, // its ModRM
     };
@@ -149,9 +151,11 @@ export namespace xla
         inline constexpr std::uint8_t kXorEaxRetNop[]{Byte(Opcode::kXorEaxEax),
                                                       Byte(Opcode::kModRmEaxEax),
                                                       Byte(Opcode::kRet), Byte(Opcode::kNop)};
-        inline constexpr std::uint8_t kMovAl1RetNop[]{Byte(Opcode::kMovAlImm8), 0x01,
-                                                      Byte(Opcode::kRet), Byte(Opcode::kNop)};
-        inline constexpr std::uint8_t kRet8[]{Byte(Opcode::kRetImm16), 0x08, 0x00};
+        inline constexpr std::uint8_t kMovAl1RetNop[]{
+            Byte(Opcode::kMovAlImm8), 0x01, // mov al, 1 (imm8)
+            Byte(Opcode::kRet), Byte(Opcode::kNop)};
+        inline constexpr std::uint8_t kRet8[]{
+            Byte(Opcode::kRetImm16), 0x08, 0x00}; // ret 8 (imm16, little-endian)
     } // namespace ops
 
     namespace paths
@@ -271,10 +275,11 @@ export namespace xla
     inline bool MakeImageWritable(const Image& image) noexcept
     {
         // PE sections are page-aligned; round VirtualSize up to the section
-        // alignment before VirtualProtect.
-        constexpr DWORD kSectionAlignment = 0x1000;
+        // alignment before VirtualProtect. 0x1000 is the PE32 section alignment
+        // the game image uses; the mask is derived from it.
+        constexpr DWORD kSectionAlignment = 0x1000; // 4 KiB
         constexpr DWORD kSectionAlignmentMask = kSectionAlignment - 1;
-        static_assert(kSectionAlignmentMask == 0xFFF);
+        static_assert(kSectionAlignmentMask == 0xFFF); // derived: 0x1000 - 1
         static_assert((kSectionAlignment & kSectionAlignmentMask) == 0);
 
         if (image.empty())

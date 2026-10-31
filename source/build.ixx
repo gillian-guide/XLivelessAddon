@@ -43,41 +43,43 @@ export namespace xla::build
         Id id;
     };
 
-    // opaque: the first four code bytes at kSignatureOffset on each build - a
-    // fingerprint of machine code. They are compared, never decoded, because the
-    // instruction at that offset differs per build and has no other meaning.
+    // opaque: the first four code bytes at kSignatureOffset; a fingerprint of
+    // machine code, compared and never decoded.
     // provenance: the original add-on's classification switch (its `gv()` lambda),
-    // reproduced from the pre-split source (dcc4f31 source/dllmain.cpp:677-708).
-    // why: a fingerprint of someone else's code has no derivable expression.
+    // reproduced byte-for-byte from dcc4f31 source/dllmain.cpp:677-708.
+    // why: the bytes are another module's code and change per build, so no
+    // expression can derive them; each row names the build it identifies.
     inline constexpr std::array<Signature, 13> kSignatures{{
-        {0xC25DE58Bu, Id::v1000},
-        {0x831F7518u, Id::v1010},
-        {0xC483FFE4u, Id::v1020},
-        {0x280F0000u, Id::v1030},
-        {0x110FF300u, Id::v1040},
-        {0xF3385058u, Id::v1050},
-        {0x00A42494u, Id::v1060},
-        {0x1006E857u, Id::v1070},
-        {0x404B100Fu, Id::v1080},
-        {0x5C0FF301u, Id::v1100},
-        {0x0F14247Cu, Id::v1110},
-        {0x0D5C0FF3u, Id::v1120},
-        {0x04C1F600u, Id::v1130},
+        {0xC25DE58Bu, Id::v1000},  // 1.0.0.0
+        {0x831F7518u, Id::v1010},  // 1.0.1.0
+        {0xC483FFE4u, Id::v1020},  // 1.0.2.0
+        {0x280F0000u, Id::v1030},  // 1.0.3.0
+        {0x110FF300u, Id::v1040},  // 1.0.4.0
+        {0xF3385058u, Id::v1050},  // 1.0.0.4
+        {0x00A42494u, Id::v1060},  // 1.0.6.0
+        {0x1006E857u, Id::v1070},  // 1.0.7.0
+        {0x404B100Fu, Id::v1080},  // 1.0.8.0
+        {0x5C0FF301u, Id::v1100},  // 1.1.0.0
+        {0x0F14247Cu, Id::v1110},  // 1.1.1.0
+        {0x0D5C0FF3u, Id::v1120},  // 1.1.2.0
+        {0x04C1F600u, Id::v1130},  // 1.1.3.0
     }};
 
     // The game executable's PE ImageBase on every supported build (the recovered
     // mechanism reads through the load address, so the offset is base-relative).
-    inline constexpr std::uintptr_t kGtaImageBase = 0x400000;
+    inline constexpr std::uintptr_t kGtaImageBase = 0x400000; // = 4 MiB, PE ImageBase
     static_assert(kGtaImageBase == (1u << 22));
 
-    // The dword the original reads, as an RVA from the image base.
-    inline constexpr std::uintptr_t kRecoveredSignatureRva = 0x608C34;
+    // The original's absolute VA of the classification dword: its `gv()` lambda
+    // reads `0x608C34 + base - 0x400000`, so this is the recovered VA and the
+    // next constant is the base-relative offset it turns into.
+    inline constexpr std::uintptr_t kRecoveredSignatureVa = 0x608C34;
 
-    // 0x608C34 - 0x400000: the file offset the original read through the load
-    // address (the image is linked at 0x400000).
+    // The image offset (RVA) the original read: recovered VA minus the image
+    // base, 0x608C34 - 0x400000 = 0x208C34. `Detect` adds it to the mapped base.
     inline constexpr std::uintptr_t kSignatureOffset =
-        kRecoveredSignatureRva - kGtaImageBase;
-    static_assert(kSignatureOffset == 0x208C34);
+        kRecoveredSignatureVa - kGtaImageBase;
+    static_assert(kSignatureOffset == 0x208C34); // derived: 0x608C34 - 0x400000
 
     // A duplicate fingerprint would make two ids indistinguishable; a compile-time
     // check is cheaper than noticing it in the field.

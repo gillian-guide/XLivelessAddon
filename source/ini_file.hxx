@@ -19,8 +19,9 @@ namespace xla::ini
     class File
     {
     public:
-        // Opens `path`, normalising an LF-only file to CRLF first (mINI splits on
-        // CRLF on Windows). Returns nothing when the file cannot be read.
+        // Opens `path`, rewriting a bare-LF file to CRLF first (inherited from the
+        // original loader; mINI itself splits on '\n'). Returns nothing when the
+        // file cannot be read.
         static std::optional<File> Open(const std::filesystem::path& path);
 
         File(File&&) noexcept;

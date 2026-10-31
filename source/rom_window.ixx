@@ -77,18 +77,19 @@ namespace xla::rom_window
         }
 
         // The original add-on's window recipe, preserved value for value:
-        // CS_VREDRAW|CS_HREDRAW (3), class "banana", and a background brush of the
+        // CS_VREDRAW|CS_HREDRAW, class "banana", and a background brush of the
         // COLOR_WINDOW system-colour index as-is (5, not the documented +1 form),
         // because that is what the original passed. The window is a hidden message
-        // window (WS_DISABLED|WS_CLIPSIBLINGS|WS_CAPTION, 0x0CC00000).
+        // window (WS_DISABLED|WS_CLIPSIBLINGS|WS_CAPTION). The asserts below pin the
+        // named constants back to the recovered literals (provenance, not values).
         constexpr std::uintptr_t kRomBackgroundColor = COLOR_WINDOW;
         constexpr DWORD kRomWindowStyle = WS_DISABLED | WS_CLIPSIBLINGS | WS_CAPTION;
         // IDC_ARROW's numeric id (32512, i.e. 0x7F00); the header's macro is the
         // ANSI resource form and LoadCursorW wants the wide one.
         constexpr WORD kArrowCursorId = 32512;
-        static_assert(kRomBackgroundColor == 5);
-        static_assert(kRomWindowStyle == 0x0CC00000);
-        static_assert(kArrowCursorId == 0x7F00);
+        static_assert(kRomBackgroundColor == 5);        // recovered: COLOR_WINDOW index 5
+        static_assert(kRomWindowStyle == 0x0CC00000);  // recovered: disabled|clipsiblings|caption
+        static_assert(kArrowCursorId == 0x7F00);       // recovered: IDC_ARROW id
 
         HWND CreateRomWindow()
         {

@@ -50,50 +50,58 @@ namespace xla::patches
         constexpr std::uint32_t kXorEaxRetNop = Dword(ops::kXorEaxRetNop);
         constexpr std::uint16_t kXorEaxEax = Word(ops::kXorEaxEax);
         constexpr std::uint16_t kNopMovMoffsEax = Word(ops::kNopMovMoffsEax);
-        // The recovered values stay as proofs of the byte catalogues above.
-        static_assert(kMovAl1RetNop == 0x90C301B0);   // mov al,1; ret; nop
-        static_assert(kXorEaxRetNop == 0x90C3C033);   // xor eax,eax; ret; nop
-        static_assert(kXorEaxEax == 0xC033);          // xor eax,eax
-        static_assert(kNopMovMoffsEax == 0xA390);     // nop; mov [imm32],eax
+        // The hex on the right of these asserts is the original's recovered
+        // dword/word (byte order shown next to it, provenance only); the named
+        // window on the left is what the code writes, so a change to either side
+        // breaks the build.
+        static_assert(kMovAl1RetNop == 0x90C301B0); // B0 01 C3 90
+        static_assert(kXorEaxRetNop == 0x90C3C033); // 33 C0 C3 90
+        static_assert(kXorEaxEax == 0xC033);        // 33 C0
+        static_assert(kNopMovMoffsEax == 0xA390);   // 90 A3
 
         // ModRM of `mov [imm32], ebx` (89 1D): the original's 1.0.0.x/1.0.1.0
         // variant changes the `mov [imm32], esi` operand's register field to ebx.
-        constexpr std::uint8_t kMoffsModRmEbX = 0x1D;
+        // (This is the ModRM byte of `89 /r`, not the A3/A1 moffs form.)
+        constexpr std::uint8_t kStoreEbXModRm = 0x1D;
 
         // 447-byte NOP fill of the EFC20 row [v1003 - v1004] (the original's
         // 0x1BF; spelled as the byte count it is).
         constexpr std::size_t kEfc20NopBytes = 447;
-        static_assert(kEfc20NopBytes == 0x1BF);
+        static_assert(kEfc20NopBytes == 0x1BF); // recovered: the original's NOP count
 
-        // GetAsyncKeyState's "key is down" mask (its high bit).
+        // GetAsyncKeyState returns a SHORT whose high bit (0x8000) means "down".
+        // The original masks with the whole top nibble 0xF000 instead; kept as
+        // recovered so the SHIFT-held behaviour is byte-for-byte the original's.
         constexpr SHORT kKeyDownMask = static_cast<SHORT>(0xF000);
 
         // The JZ rel8 at +3 (`74 19`) in the [1002 - 1004] row: site + 3, two
         // bytes long, displacement 0x19 - so the continuation is at +0x1E.
         constexpr std::ptrdiff_t kJzOffset = 3;
         constexpr std::ptrdiff_t kJzLength = 2;
-        constexpr std::int8_t kJzDisplacement = 0x19;
+        constexpr std::int8_t kJzDisplacement = 0x19; // recovered `74 19` displacement
         constexpr std::ptrdiff_t kJzTarget = kJzOffset + kJzLength + kJzDisplacement;
-        static_assert(kJzTarget == 0x1E);
+        static_assert(kJzTarget == 0x1E); // derived: +3 + 2 + 0x19
 
         // The two recovered `EB rel8` pokes: the DLC token activation jumps over
-        // the check (-0x37), the first-time-play ask skips it (+0x0D).
-        constexpr std::int8_t kDlcTokenJump = -0x37;
-        constexpr std::int8_t kFirstPlayJump = 0x0D;
-        static_assert(JmpShort(kDlcTokenJump) == 0xC9EB);
-        static_assert(JmpShort(kFirstPlayJump) == 0x0DEB);
+        // the check (-0x37, recovered `EB C9`), the first-time-play ask skips it
+        // (+0x0D, recovered `EB 0D`).
+        constexpr std::int8_t kDlcTokenJump = -0x37; // recovered `EB C9`
+        constexpr std::int8_t kFirstPlayJump = 0x0D; // recovered `EB 0D`
+        static_assert(JmpShort(kDlcTokenJump) == 0xC9EB);  // recovered: EB C9
+        static_assert(JmpShort(kFirstPlayJump) == 0x0DEB); // recovered: EB 0D
 
         // The intro skip's register contract: ecx *= 400 (ms per tick), then edx
-        // is forced to 300 ms while it is below 8000 ms.
+        // is forced to 300 ms while it is below 8000 ms. The recovered immediates
+        // are the asserts' right-hand side (provenance), the named values are used.
         enum : std::uint32_t
         {
             kIntroTickMilliseconds = 400,   // recovered: imul ecx,ecx,0x190
             kIntroFloorMilliseconds = 8000, // recovered: cmp edx,0x1f40
             kIntroForcedMilliseconds = 300, // recovered: mov edx,0x12c
         };
-        static_assert(kIntroTickMilliseconds == 0x190);
-        static_assert(kIntroFloorMilliseconds == 0x1F40);
-        static_assert(kIntroForcedMilliseconds == 0x12C);
+        static_assert(kIntroTickMilliseconds == 0x190);   // recovered: imul ecx,ecx,0x190
+        static_assert(kIntroFloorMilliseconds == 0x1F40); // recovered: cmp edx,0x1f40
+        static_assert(kIntroForcedMilliseconds == 0x12C); // recovered: mov edx,0x12c
 
         // ---- SkipIntro -------------------------------------------------------
         // Same contract as the original inline hook: ecx *= 400, edx is forced to
@@ -352,7 +360,7 @@ namespace xla::patches
                 else
                 {
                     injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1),
-                                                        kMoffsModRmEbX, true);
+                                                        kStoreEbXModRm, true);
                 }
                 log::Write("core: RGSC store neutralised");
             }

@@ -44,3 +44,7 @@ desktop.ini
 
 # Scratch space
 .scratch/
+
+# Python bytecode (the parity/layout checkers)
+__pycache__/
+*.pyc

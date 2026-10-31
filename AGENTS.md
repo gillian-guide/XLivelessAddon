@@ -75,7 +75,9 @@ Rules learned the hard way:
 
 Submodules stay pinned. Bumping one = update `NOTICE` (revision + licence), rebuild, run the
 tests, and commit `deps: bump <name> to <sha>`. Don't import code from a submodule into `source/`
-without attribution and licence compatibility.
+without attribution and licence compatibility. A local fix in a vendored submodule is committed
+in that submodule, recorded in `NOTICE` with its revision, and the parent commit updates the
+gitlink; never patch around it in `source/`.
 
 ## Git
 

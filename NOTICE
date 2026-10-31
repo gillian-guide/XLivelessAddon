@@ -47,6 +47,12 @@ The nested injector submodules are initialised recursively (`git submodule updat
 header-only patching helpers, Hooking.Patterns and IniReader are compiled; the rest are carried
 by the pinned injector revision.
 
+The pinned `external/injector` revision carries one local fix: upstream `MakeRET` stored the
+opcode through a deduced `int` and therefore wrote four bytes for both `ret` and `ret imm16`;
+revision `fcc0c83` stores the opcode as one byte and the immediate as two (three bytes total for
+`ret imm16`). The gitlink records the patched revision; the zlib licence is unchanged. Any
+further local submodule fix is committed in that submodule and recorded here with its revision.
+
 ## Game assets
 
 Grand Theft Auto IV and Episodes from Liberty City are property of Rockstar Games and Take-Two

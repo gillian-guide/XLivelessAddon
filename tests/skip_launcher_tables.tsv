@@ -1,0 +1,96 @@
+# XLivelessAddon recovered launcher tables - golden.
+#
+# Captured from the pre-modular source at dcc4f31 (source/skip_launcher.cpp) with
+# the same parser as tools/table_parity.py; the audit independently compared the
+# same data with dcc4f31 and found 0 differences. Do not hand-edit: regenerate
+# from the pre-modular source and review the diff.
+#
+# Records are grouped by kind (entries, then each entry's writes, collectors,
+# capture, installs, collected targets/install), matching the declaration order
+# in source/skip_launcher.ixx. That is NOT ApplySkipLauncher's runtime order: it
+# scans the main entries, captures and publishes the DFA slot, writes the DFA
+# installs, writes the collected installs and only then writes the ROM installs.
+#
+# Format: one record per line, tab-separated.
+#   entry          <index> <signature>
+#   write          <entry> <offset> <length> <bytes hex|-> <fill hex|-> <jump entry|->
+#   collector      <index> <pattern> <target> <bytes hex> <length>
+#   capture        <pattern> <slot offset>
+#   install        <dfa|rom> <index> <signature> <offset> <opcode hex> <hook>
+#   collectedtarget <index> <target index> <signature>
+#   collectedinstall <index> <collector pattern> <target count>
+#
+# `bytes` is the exact sequence written; `-` means a fill row and the fill byte
+# is in the next column. Every write row's length must equal its byte count, and
+# every collector's length must equal its stub byte count.
+entry	0	84 DB 0F 85 43 01 00 00 8D 4C 24 28 8B C1
+entry	1	68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84
+entry	2	74 EC 38 5E 06 74 E7 68
+entry	3	74 C4 8B 07 3B 46 18 75 BD 68
+entry	4	3B 56 18 0F 85
+entry	5	3B 4E 18 0F 85
+entry	6	0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6
+entry	7	3B 46 18 75 BD
+entry	8	57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24
+entry	9	8B 56 1C 3B 56 20 ? ? 6A 00 6A 00
+entry	10	89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0
+entry	11	8B 50 2C 3B 50 30
+entry	12	8B 48 2C 83 EC 78
+entry	13	8B 48 2C 83 EC 74
+entry	14	8B 48 2C 3B 48 30 74 03
+entry	15	8B 48 2C 3B 48 30 53
+entry	16	8B 48 2C 3B 48 30 74 11
+entry	17	8B 48 2C 3B 48 30 75 DC 8D 54 24 18
+entry	18	8B 48 2C 3B 48 30 75 DC 8D 54 24 1C
+entry	19	8B 0D ? ? ? ? 8B 51 2C
+entry	20	51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C
+entry	21	3B C7 0F 85 ? ? ? ? 85 C0
+entry	22	0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2
+entry	23	83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57
+entry	24	83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52
+write	0	34	1	EB	-	-
+write	0	223	1	EB	-	-
+write	2	0	2	9090	-	-
+write	2	5	2	9090	-	-
+write	3	0	2	9090	-	-
+write	4	3	6	909090909090	-	-
+write	5	3	6	909090909090	-	-
+write	6	0	6	909090909090	-	-
+write	7	3	2	33C0	-	-
+write	7	10	2	90A3	-	-
+write	8	1	447	-	90	-
+write	9	0	2	33C0	-	-
+write	9	2	1	E9	-	-
+write	9	3	4	-	-	1
+write	10	0	2	90A3	-	-
+write	11	0	2	33C0	-	-
+write	11	2	4	90909090	-	-
+write	12	0	3	909090	-	-
+write	12	6	11	-	90	-
+write	13	0	3	909090	-	-
+write	13	6	11	-	90	-
+write	14	0	11	9090909090909090909090	-	-
+write	15	0	32	-	90	-
+write	16	0	25	-	90	-
+write	17	0	8	9090909090909090	-	-
+write	18	0	8	9090909090909090	-	-
+write	19	0	14	9090909090909090909090909090	-	-
+write	20	0	1	C3	-	-
+write	21	0	16	-	90	-
+write	22	0	14	9090909090909090909090909090	-	-
+write	23	0	4	33C0C390	-	-
+write	24	0	4	33C0C390	-	-
+collector	0	A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75	first_two	B001C390	4
+collector	1	33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3	last_two	B001C390	4
+capture	FF 15 ? ? ? ? 8B F0 83 FE FF 74 24	2
+install	dfa	0	E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00	0	E8	dfa_init
+install	dfa	1	55 8B EC 6A 00 E8	0	E9	create_file
+install	dfa	2	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 0C 33 C0 C3	0	E9	close_handle
+install	dfa	3	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 ? 83 C8 FF C3	0	E9	set_file_pointer
+install	dfa	4	56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 C1 89 06 5E 8B C1 C3	0	E9	get_file_size_ex
+install	dfa	5	FF 50 60 83 C4 14 39 75 F8 89 45 FC	-165	E9	read_file
+install	rom	0	89 46 3C 89 4E 40 E8	6	E8	rom_reset
+install	rom	1	0F 85 ? ? ? ? 68 03 01 00 00 68 ? ? ? ? 68 04 01 00 00	-67	E9	rom_set
+collectedtarget	0	0	80 BC 24 ? ? ? ? ? 6A 00
+collectedtarget	1	1	6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57
+collectedinstall	0	A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6	2

@@ -1,0 +1,17 @@
+# XLivelessAddon [v1005] missing-test plan - golden.
+#
+# From dcc4f31:source/dllmain.cpp:946-994: each row scans its signature once and
+# applies the listed NOPs. The 2/9 and 3/9 rows need a 3-byte head at +0 and an
+# 11-byte tail at +6 - the tail is what the pre-split source did and what the
+# double-scan regression silently dropped.
+#
+# Format: <label> <signature> <off:len;off:len;...>
+1/9	8B 50 2C 3B 50 30	0:2;2:4
+2/9	8B 48 2C 83 EC 78	0:3;6:11
+3/9	8B 48 2C 83 EC 74	0:3;6:11
+4/9	8B 48 2C 3B 48 30 74 03	0:11
+5/9	8B 48 2C 3B 48 30 53	0:32
+6/9	8B 48 2C 3B 48 30 74 11	0:25
+7/9	8B 48 2C 3B 48 30 75 DC 8D 54 24 18	0:8
+8/9	8B 48 2C 3B 48 30 75 DC 8D 54 24 1C	0:8
+9/9	8B 0D ? ? ? ? 8B 51 2C	0:14

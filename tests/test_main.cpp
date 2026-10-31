@@ -374,7 +374,8 @@ namespace
         const auto loaded = xla::config::Load(directory);
         CHECK_EQ(loaded.options.skipIntro, true);
         CHECK_EQ(loaded.options.skipMenu, true);
-        // The loader normalises the file once (mINI splits on CRLF on Windows).
+        // The loader normalises the file once. mINI actually splits on '\n', so
+        // this rewrite is inherited editor-compatibility, not a parse requirement.
         CHECK(ReadFile(ini).find("\r\n") != std::string::npos);
 
         std::error_code error;
@@ -385,16 +386,51 @@ namespace
     {
         // Independent copy of the recovered windows: every table write goes
         // through these bytes, so a change here is a write-set change.
-        constexpr std::array<std::uint8_t, 4> kMovAl1RetNop{0xB0, 0x01, 0xC3, 0x90};
-        CHECK(std::memcmp(xla::ops::kMovAl1RetNop, kMovAl1RetNop.data(),
-                          kMovAl1RetNop.size()) == 0);
-        constexpr std::array<std::uint8_t, 4> kXorEaxRetNop{0x33, 0xC0, 0xC3, 0x90};
-        CHECK(std::memcmp(xla::ops::kXorEaxRetNop, kXorEaxRetNop.data(),
-                          kXorEaxRetNop.size()) == 0);
+        const auto check = [](std::span<const std::uint8_t> actual,
+                              std::span<const std::uint8_t> expected, const char* name) {
+            if (actual.size() != expected.size() ||
+                std::memcmp(actual.data(), expected.data(), actual.size()) != 0)
+            {
+                std::fprintf(stderr, "opcode catalogue: %s differs\n", name);
+                ++g_failures;
+            }
+        };
+
+        constexpr std::array<std::uint8_t, 1> kJmpRel8{0xEB};
+        constexpr std::array<std::uint8_t, 1> kJmpRel32{0xE9};
+        constexpr std::array<std::uint8_t, 1> kRet{0xC3};
+        constexpr std::array<std::uint8_t, 2> kNopMovMoffsEax{0x90, 0xA3};
         constexpr std::array<std::uint8_t, 2> kXorEaxEax{0x33, 0xC0};
-        CHECK(std::memcmp(xla::ops::kXorEaxEax, kXorEaxEax.data(), kXorEaxEax.size()) == 0);
+        constexpr std::array<std::uint8_t, 4> kXorEaxRetNop{0x33, 0xC0, 0xC3, 0x90};
+        constexpr std::array<std::uint8_t, 4> kMovAl1RetNop{0xB0, 0x01, 0xC3, 0x90};
         constexpr std::array<std::uint8_t, 3> kRet8{0xC2, 0x08, 0x00};
-        CHECK(std::memcmp(xla::ops::kRet8, kRet8.data(), kRet8.size()) == 0);
+        constexpr std::array<std::uint8_t, 2> kNop2{0x90, 0x90};
+        constexpr std::array<std::uint8_t, 3> kNop3{0x90, 0x90, 0x90};
+        constexpr std::array<std::uint8_t, 4> kNop4{0x90, 0x90, 0x90, 0x90};
+        constexpr std::array<std::uint8_t, 6> kNop6{0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+        constexpr std::array<std::uint8_t, 8> kNop8{0x90, 0x90, 0x90, 0x90,
+                                                    0x90, 0x90, 0x90, 0x90};
+        constexpr std::array<std::uint8_t, 11> kNop11{0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+                                                      0x90, 0x90, 0x90, 0x90, 0x90};
+        constexpr std::array<std::uint8_t, 14> kNop14{0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+                                                      0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+                                                      0x90, 0x90};
+
+        check(xla::ops::kJmpRel8, kJmpRel8, "kJmpRel8");
+        check(xla::ops::kJmpRel32, kJmpRel32, "kJmpRel32");
+        check(xla::ops::kRet, kRet, "kRet");
+        check(xla::ops::kNopMovMoffsEax, kNopMovMoffsEax, "kNopMovMoffsEax");
+        check(xla::ops::kXorEaxEax, kXorEaxEax, "kXorEaxEax");
+        check(xla::ops::kXorEaxRetNop, kXorEaxRetNop, "kXorEaxRetNop");
+        check(xla::ops::kMovAl1RetNop, kMovAl1RetNop, "kMovAl1RetNop");
+        check(xla::ops::kRet8, kRet8, "kRet8");
+        check(xla::ops::kNop2, kNop2, "kNop2");
+        check(xla::ops::kNop3, kNop3, "kNop3");
+        check(xla::ops::kNop4, kNop4, "kNop4");
+        check(xla::ops::kNop6, kNop6, "kNop6");
+        check(xla::ops::kNop8, kNop8, "kNop8");
+        check(xla::ops::kNop11, kNop11, "kNop11");
+        check(xla::ops::kNop14, kNop14, "kNop14");
 
         CHECK_EQ(xla::Byte(xla::Opcode::kNop), std::uint8_t{0x90});
         CHECK_EQ(xla::Byte(xla::Opcode::kCallRel32), std::uint8_t{0xE8});
@@ -403,6 +439,34 @@ namespace
         CHECK_EQ(xla::JmpShort(0x0D), std::uint16_t{0x0DEB});
         CHECK_EQ(xla::Dword(kMovAl1RetNop), std::uint32_t{0x90C301B0});
         CHECK_EQ(xla::Word(kXorEaxEax), std::uint16_t{0xC033});
+    }
+
+    void TestMissingTestTailNops()
+    {
+        // The [v1005] 2/9 and 3/9 rows are ONE scan followed by two NOPs: the
+        // 3-byte head at +0 and the 11-byte tail at +6. Re-scanning after the head
+        // (the old bug) cannot match again, because the head overwrote the
+        // signature; the helpers must simply compose the two writes.
+        std::array<std::byte, 24> buffer{};
+        buffer.fill(std::byte{0xCC});
+        const xla::patch::Site site{buffer.data() + 4};
+        CHECK(xla::patch::Nop(site, 0, 3, "test: v1005 head"));
+        CHECK(xla::patch::Nop(site, 6, 11, "test: v1005 tail"));
+        for (std::size_t index = 0; index < buffer.size(); ++index)
+        {
+            const bool nop = (index >= 4 && index < 7) || (index >= 10 && index < 21);
+            CHECK_EQ(buffer[index], nop ? std::byte{0x90} : std::byte{0xCC});
+        }
+    }
+
+    void TestShippedLauncherStages()
+    {
+        // The shipping path must never apply the recovered main table; it broke
+        // the GFWL session in the original (see the rationale in skip_launcher.ixx).
+        CHECK(!xla::HasStage(xla::kShippedStages, xla::SkipLauncherStage::main));
+        CHECK(xla::HasStage(xla::kShippedStages, xla::SkipLauncherStage::dfa));
+        CHECK(xla::HasStage(xla::kShippedStages, xla::SkipLauncherStage::rom));
+        CHECK_EQ(static_cast<int>(xla::kShippedStages), 6);
     }
 
     // The exact effective init order, frozen. This list is the behavioural
@@ -787,6 +851,94 @@ namespace
         CHECK_EQ(xla::SkipLauncherCollectors().size(), std::size_t{2});
         CHECK_EQ(xla::SkipLauncherDfaInstalls().size(), std::size_t{6});
         CHECK_EQ(xla::SkipLauncherRomInstalls().size(), std::size_t{2});
+        CHECK_EQ(xla::SkipLauncherDfaCollected().size(), std::size_t{1});
+
+        // Shape invariants independent of the byte golden: a fill row must carry a
+        // fill opcode, a byte row must not, and every jump target must exist.
+        std::size_t writeRows = 0;
+        for (const xla::SkipLauncherEntry& entry : entries)
+        {
+            CHECK(!entry.signature.empty());
+            if (entry.writeCount == 0)
+            {
+                CHECK(entry.writes == nullptr);
+                continue;
+            }
+            CHECK(entry.writes != nullptr);
+            for (std::size_t index = 0; index < entry.writeCount; ++index)
+            {
+                const xla::SkipLauncherWrite& write = entry.writes[index];
+                ++writeRows;
+                CHECK(write.length > 0);
+                CHECK(write.offset >= 0);
+                if (write.jumpToEntry == xla::kNoJumpTarget)
+                {
+                    CHECK_EQ(write.bytes == nullptr, write.fill != 0);
+                }
+                CHECK(write.jumpToEntry == xla::kNoJumpTarget ||
+                      write.jumpToEntry < entries.size());
+            }
+        }
+        CHECK_EQ(writeRows, std::size_t{32});
+
+        for (const xla::SkipLauncherCollector& collector : xla::SkipLauncherCollectors())
+        {
+            CHECK(!collector.pattern.empty());
+            CHECK(collector.bytes != nullptr);
+            CHECK_EQ(collector.length, std::size(xla::ops::kMovAl1RetNop));
+            CHECK(std::memcmp(collector.bytes, xla::ops::kMovAl1RetNop,
+                              std::size(xla::ops::kMovAl1RetNop)) == 0);
+        }
+
+        const auto checkInstalls = [](std::span<const xla::SkipLauncherInstall> installs,
+                                      std::size_t expected) {
+            CHECK_EQ(installs.size(), expected);
+            for (const xla::SkipLauncherInstall& install : installs)
+            {
+                CHECK(!install.signature.empty());
+                CHECK(install.opcode == xla::Opcode::kCallRel32 ||
+                      install.opcode == xla::Opcode::kJmpRel32);
+            }
+        };
+        checkInstalls(xla::SkipLauncherDfaInstalls(), 6);
+        checkInstalls(xla::SkipLauncherRomInstalls(), 2);
+
+        const auto collected = xla::SkipLauncherDfaCollected()[0];
+        CHECK(collected.targets != nullptr);
+        CHECK_EQ(collected.targetCount, std::size_t{2});
+        for (std::size_t index = 0; index < collected.targetCount; ++index)
+        {
+            CHECK(!collected.targets[index].targetSignature.empty());
+            CHECK(collected.targets[index].index < 2);
+        }
+    }
+
+    void TestShippedLauncherDoesNotApplyMain()
+    {
+        // The shipping path must never apply the recovered main table (it broke
+        // the GFWL session in the original). Seed an image with entry 0's
+        // signature; a main pass would write +34, the shipped stages must not.
+        const auto signature = BytesOf(xla::SkipLauncherEntries()[0].signature);
+        std::vector<std::byte> image(0x1000, std::byte{0});
+        const std::size_t offset = 0x100;
+        std::copy(signature.begin(), signature.end(), image.begin() + offset);
+
+        const auto result =
+            xla::ApplySkipLauncher(image, &xla::ResolveSkipHook, nullptr, xla::kShippedStages);
+        CHECK(result.has_value());
+        if (!result)
+        {
+            return;
+        }
+        CHECK_EQ(result->entriesFound, std::size_t{0});
+        CHECK_EQ(result->entriesMissing, std::size_t{0});
+        CHECK_EQ(result->writes, std::size_t{0});
+        CHECK_EQ(result->jumpInstalled, false);
+        CHECK_EQ(image[offset + 34], std::byte{0});
+        CHECK_EQ(result->dfaInstalls, std::size_t{0});
+        CHECK_EQ(result->dfaMissing, xla::SkipLauncherDfaInstalls().size());
+        CHECK_EQ(result->romInstalls, std::size_t{0});
+        CHECK_EQ(result->romMissing, xla::SkipLauncherRomInstalls().size());
     }
 
     void TestSkipLauncherBounds()
@@ -922,6 +1074,8 @@ int main(int argc, char** argv)
     run("config whitespace, comments and quotes", TestConfigWhitespaceCommentsQuotes);
     run("config line endings", TestConfigLineEndings);
     run("opcode catalogue", TestOpcodeCatalogue);
+    run("missing-test tail NOPs", TestMissingTestTailNops);
+    run("shipped launcher stages", TestShippedLauncherStages);
     run("pipeline order", TestPipelineOrder);
     run("pipeline order independent of declaration", TestPipelineOrderIndependentOfDeclaration);
     run("pipeline rejects broken orders", TestPipelineRejectsBrokenOrders);
@@ -933,6 +1087,7 @@ int main(int argc, char** argv)
     run("windowed guards", TestWindowedGuards);
     run("RomSet stub bytes", TestRomSetStubBytes);
     run("skip launcher table shape", TestSkipLauncherTableShape);
+    run("skip launcher shipped stages", TestShippedLauncherDoesNotApplyMain);
     run("skip launcher missing signatures", TestSkipLauncherMissingSignatures);
     run("skip launcher bounds", TestSkipLauncherBounds);
     run("skip launcher main rows", TestSkipLauncherAppliesMainRows);

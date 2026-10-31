@@ -206,6 +206,16 @@ if(XLA_BUILD_TESTS)
                     --source "${CMAKE_CURRENT_SOURCE_DIR}/source"
                     --golden "${CMAKE_CURRENT_SOURCE_DIR}/tests/signature_golden.tsv")
 
+        # The recovered launcher tables and the [v1005] NOP plan are data: this
+        # fails if any row's offsets/lengths/bytes/fill/jump/opcode/hook, the
+        # collectors or the restored head+tail NOPs change.
+        add_test(NAME xla_table_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/table_parity.py"
+                    --source "${CMAKE_CURRENT_SOURCE_DIR}/source"
+                    --tables "${CMAKE_CURRENT_SOURCE_DIR}/tests/skip_launcher_tables.tsv"
+                    --v1005 "${CMAKE_CURRENT_SOURCE_DIR}/tests/patches_v1005.tsv")
+
         # The .ixx layout (one unit per feature, only two plain TUs, CXX_MODULES
         # file set) is a contract; this fails if a file drifts out of it.
         add_test(NAME xla_module_layout
@@ -214,7 +224,7 @@ if(XLA_BUILD_TESTS)
                     --source "${CMAKE_CURRENT_SOURCE_DIR}/source")
     else()
         message(WARNING
-            "Python 3 not found: the xla_signature_parity test is not registered.")
+            "Python 3 not found: the signature, table and layout checks are not registered.")
     endif()
 
     # The shipped ASI must be a Win32 DLL at the add-on's preferred base with the

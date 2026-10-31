@@ -263,7 +263,7 @@ namespace xla
             {
                 const auto applied =
                     ApplySkipLauncher(state.image.bytes(), &ResolveSkipHook, nullptr,
-                                      SkipLauncherStage::dfa | SkipLauncherStage::rom);
+                                      kShippedStages);
                 if (applied)
                 {
                     const SkipLauncherReport& report = *applied;

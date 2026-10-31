@@ -1,11 +1,19 @@
-# XLivelessAddon signature golden - the original scan list, in effective order.
+# XLivelessAddon signature golden - the original scan list, per-unit source order.
 #
 # Captured from the pre-modular source at git revision dcc4f31 (the import from
 # OpenPreCEPatch, before the .ixx split). Provenance per row is the original
-# file:line. `target` is the module interface unit that owns the scan today;
-# `-` marks an occurrence that the refactor consolidated into another row (see
-# the `note` column). Generated once with .scratch/parity/derive_golden.py and
-# reviewed; tools/signature_parity.py is the test that consumes it.
+# absolute file:line. `target` is the module interface unit that owns the scan
+# today; `-` marks an occurrence that the refactor consolidated into another row
+# (see the `note` column). Generated once with .scratch/parity/derive_golden.py
+# and reviewed; tools/signature_parity.py is the test that consumes it.
+#
+# `order` is the original *definition* order within each unit (source order), not
+# the runtime pipeline order: that one is declared in source/order.ixx and pinned
+# by xla_tests. All origins are absolute source lines (the patch section starts
+# at dcc4f31:source/dllmain.cpp:796). The skip_launcher group is in
+# table/declaration order, which differs from ApplySkipLauncher's runtime order
+# for the collected-install block (the ROM installs are declared before the
+# collected targets but run after them).
 #
 # The `signature` column is the canonical byte sequence: space-separated units,
 # `?` for a wildcard and two hex digits for a byte. Hooking.Patterns ignores
@@ -64,69 +72,69 @@
 48	windowed	3	windowed	windowed.cpp:691	80 3D ? ? ? ? ? 74 07 BF	
 49	windowed	4	windowed	windowed.cpp:695	E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04	
 50	windowed	5	windowed	windowed.cpp:701	E8 ? ? ? ? 8B 0D ? ? ? ? 8B 15 ? ? ? ? 83 C4 04 83 3D	
-51	patch	0	patches	dllmain.cpp:3	68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84	
-52	patch	1	patches	dllmain.cpp:8	68 88 13 00 00 FF 15	
-53	patch	2	patches	dllmain.cpp:13	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? 00 00 53 56 8B 35 ? ? ? ? 68	
-54	patch	3	patches	dllmain.cpp:18	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 8B 9C 24 ? ? ? ? 55 8B AC ? ? ? ? ? 8B 45 00	
-55	patch	4	patches	dllmain.cpp:23	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? ? ? 83 3D	
-56	patch	5	patches	dllmain.cpp:28	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? 83 3D	
-57	patch	6	patches	dllmain.cpp:33	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 56 68 ? ? ? ? 68 ? ? ? ? 68	
-58	patch	7	patches	dllmain.cpp:38	3B 56 20 74 19	
-59	patch	8	patches	dllmain.cpp:46	74 F7 8B CE	
-60	patch	9	patches	dllmain.cpp:51	83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C 24 3C 68	
-61	patch	10	patches	dllmain.cpp:56	83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 0F 85	
-62	patch	11	patches	dllmain.cpp:61	C7 06 ? ? ? ? 74 19	
-63	patch	12	patches	dllmain.cpp:66	83 C4 ? 3B 46 20	
-64	patch	13	patches	dllmain.cpp:71	75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C	
-65	patch	14	patches	dllmain.cpp:76	74 EC 38 5E 06 74 E7 68	
-66	patch	15	patches	dllmain.cpp:84	74 C4 8B 07 3B 46 18 75 BD 68	
-67	patch	16	patches	dllmain.cpp:89	3B 56 18 0F 85	
-68	patch	17	patches	dllmain.cpp:94	3B 4E 18 0F 85	
-69	patch	18	patches	dllmain.cpp:99	0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6	
-70	patch	19	patches	dllmain.cpp:104	3B 46 18 75 BD	
-71	patch	20	patches	dllmain.cpp:112	57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24	
-72	patch	21	patches	dllmain.cpp:118	A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75	
-73	patch	22	patches	dllmain.cpp:125	33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3	
-74	patch	23	patches	dllmain.cpp:134	8B 56 1C 3B 56 20 ? ? 6A 00 6A 00	
-75	patch	24	patches	dllmain.cpp:142	89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0	
-76	patch	25	patches	dllmain.cpp:153	8B 50 2C 3B 50 30	
-77	patch	26	patches	dllmain.cpp:160	8B 48 2C 83 EC 78	
-78	patch	27	patches	dllmain.cpp:168	8B 48 2C 83 EC 74	
-79	patch	28	patches	dllmain.cpp:176	8B 48 2C 3B 48 30 74 03	
-80	patch	29	patches	dllmain.cpp:180	8B 48 2C 3B 48 30 53	
-81	patch	30	patches	dllmain.cpp:184	8B 48 2C 3B 48 30 74 11	
-82	patch	31	patches	dllmain.cpp:188	8B 48 2C 3B 48 30 75 DC 8D 54 24 18	
-83	patch	32	patches	dllmain.cpp:192	8B 48 2C 3B 48 30 75 DC 8D 54 24 1C	
-84	patch	33	patches	dllmain.cpp:196	8B 0D ? ? ? ? 8B 51 2C	
-85	patch	34	patches	dllmain.cpp:202	51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C	
-86	patch	35	patches	dllmain.cpp:207	3B C7 0F 85 ? ? ? ? 85 C0	
-87	patch	36	patches	dllmain.cpp:212	0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2	
-88	patch	37	patches	dllmain.cpp:217	83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57	
-89	patch	38	patches	dllmain.cpp:222	83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52	
-90	patch	39	patches	dllmain.cpp:240	8B 54 24 04 52 A3	
-91	patch	40	patches	dllmain.cpp:245	83 F8 01 75 30 A3	
-92	patch	41	patches	dllmain.cpp:253	C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7	
-93	patch	42	dfa	dllmain.cpp:261	E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00	
-94	patch	43	dfa	dllmain.cpp:266	55 8B EC 6A 00 E8	
-95	patch	44	dfa	dllmain.cpp:271	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 0C 33 C0 C3	
-96	patch	45	dfa	dllmain.cpp:276	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 ? 83 C8 FF C3	
-97	patch	46	dfa	dllmain.cpp:281	56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 C1 89 06 5E 8B C1 C3	
-98	patch	47	dfa	dllmain.cpp:286	55 8B EC 51 51 53 56 8B C5	
-99	patch	48	dfa	dllmain.cpp:291	A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6	
-100	patch	49	dfa	dllmain.cpp:294	80 BC 24 ? ? ? ? ? 6A 00	
-101	patch	50	dfa	dllmain.cpp:295	6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57	
-102	patch	51	rom_window	dllmain.cpp:315	A1 ? ? ? ? 8B 0D ? ? ? ? 68 ? ? ? ? 53 50 51 FF 15	
-103	patch	52	rom_window	dllmain.cpp:328	FF 15 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 83 7C 24	
-104	patch	53	patches	dllmain.cpp:343	FF 15 ? ? ? ? 85 C0 75 18	
-105	patch	54	patches	dllmain.cpp:348	FF 15 ? ? ? ? 85 C0 75 04 32	
-106	patch	55	patches	dllmain.cpp:353	FF 15 ? ? ? ? 85 C0 75 07 A0	
-107	patch	56	patches	dllmain.cpp:358	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 ? 53 50 E8	
-108	patch	57	patches	dllmain.cpp:376	89 91 ? ? ? ? 8D 44 24 ? 68 ? ? ? ? 50	
-109	patch	58	patches	dllmain.cpp:388	83 F8 03 75 ? A1 ? ? ? ? 80 88 ? ? ? ? ? 84 DB 74 0A 6A 00 E8 ? ? ? ? 83 C4 04 5F 5E	
-110	patch	59	patches	dllmain.cpp:398	6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5D 5B 33 CC E8 ? ? ? ? 81 C4 ? ? ? ? C3	
-111	patch	60	patches	dllmain.cpp:407	6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC E8 ? ? ? ? 8B E5 5D C3	
-112	patch	61	patches	dllmain.cpp:420	75 ? 8B 0D ? ? ? ? 51 FF 15 ? ? ? ? 85 C0 75 ? 8B 15	
-113	patch	62	windowed	dllmain.cpp:428	FF 15 ? ? ? ? 5F 5E 5D 5B 83 C4 10 C2 10 00	
-114	patch	63	patches	dllmain.cpp:532	E8 ? ? ? ? D9 E8 85 C0	
-115	patch	64	patches	dllmain.cpp:539	E8 ? ? ? ? F3 0F 10 0D ? ? ? ? F3 0F 5C 0D	
-116	patch	65	patches	dllmain.cpp:546	E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24	
+51	patch	0	patches	dllmain.cpp:798	68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84	
+52	patch	1	patches	dllmain.cpp:803	68 88 13 00 00 FF 15	
+53	patch	2	patches	dllmain.cpp:808	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? 00 00 53 56 8B 35 ? ? ? ? 68	
+54	patch	3	patches	dllmain.cpp:813	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 8B 9C 24 ? ? ? ? 55 8B AC ? ? ? ? ? 8B 45 00	
+55	patch	4	patches	dllmain.cpp:818	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? ? ? 83 3D	
+56	patch	5	patches	dllmain.cpp:823	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? 83 3D	
+57	patch	6	patches	dllmain.cpp:828	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 56 68 ? ? ? ? 68 ? ? ? ? 68	
+58	patch	7	patches	dllmain.cpp:833	3B 56 20 74 19	
+59	patch	8	patches	dllmain.cpp:841	74 F7 8B CE	
+60	patch	9	patches	dllmain.cpp:846	83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C 24 3C 68	
+61	patch	10	patches	dllmain.cpp:851	83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 0F 85	
+62	patch	11	patches	dllmain.cpp:856	C7 06 ? ? ? ? 74 19	
+63	patch	12	patches	dllmain.cpp:861	83 C4 ? 3B 46 20	
+64	patch	13	patches	dllmain.cpp:866	75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C	
+65	patch	14	patches	dllmain.cpp:871	74 EC 38 5E 06 74 E7 68	
+66	patch	15	patches	dllmain.cpp:879	74 C4 8B 07 3B 46 18 75 BD 68	
+67	patch	16	patches	dllmain.cpp:884	3B 56 18 0F 85	
+68	patch	17	patches	dllmain.cpp:889	3B 4E 18 0F 85	
+69	patch	18	patches	dllmain.cpp:894	0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6	
+70	patch	19	patches	dllmain.cpp:899	3B 46 18 75 BD	
+71	patch	20	patches	dllmain.cpp:907	57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24	
+72	patch	21	patches	dllmain.cpp:913	A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75	
+73	patch	22	patches	dllmain.cpp:920	33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3	
+74	patch	23	patches	dllmain.cpp:929	8B 56 1C 3B 56 20 ? ? 6A 00 6A 00	
+75	patch	24	patches	dllmain.cpp:937	89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0	
+76	patch	25	patches	dllmain.cpp:948	8B 50 2C 3B 50 30	
+77	patch	26	patches	dllmain.cpp:955	8B 48 2C 83 EC 78	
+78	patch	27	patches	dllmain.cpp:963	8B 48 2C 83 EC 74	
+79	patch	28	patches	dllmain.cpp:971	8B 48 2C 3B 48 30 74 03	
+80	patch	29	patches	dllmain.cpp:975	8B 48 2C 3B 48 30 53	
+81	patch	30	patches	dllmain.cpp:979	8B 48 2C 3B 48 30 74 11	
+82	patch	31	patches	dllmain.cpp:983	8B 48 2C 3B 48 30 75 DC 8D 54 24 18	
+83	patch	32	patches	dllmain.cpp:987	8B 48 2C 3B 48 30 75 DC 8D 54 24 1C	
+84	patch	33	patches	dllmain.cpp:991	8B 0D ? ? ? ? 8B 51 2C	
+85	patch	34	patches	dllmain.cpp:997	51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C	
+86	patch	35	patches	dllmain.cpp:1002	3B C7 0F 85 ? ? ? ? 85 C0	
+87	patch	36	patches	dllmain.cpp:1007	0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2	
+88	patch	37	patches	dllmain.cpp:1012	83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57	
+89	patch	38	patches	dllmain.cpp:1017	83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52	
+90	patch	39	patches	dllmain.cpp:1035	8B 54 24 04 52 A3	
+91	patch	40	patches	dllmain.cpp:1040	83 F8 01 75 30 A3	
+92	patch	41	patches	dllmain.cpp:1048	C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7	
+93	patch	42	dfa	dllmain.cpp:1056	E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00	
+94	patch	43	dfa	dllmain.cpp:1061	55 8B EC 6A 00 E8	
+95	patch	44	dfa	dllmain.cpp:1066	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 0C 33 C0 C3	
+96	patch	45	dfa	dllmain.cpp:1071	6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 08 FF 60 ? 83 C8 FF C3	
+97	patch	46	dfa	dllmain.cpp:1076	56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 C1 89 06 5E 8B C1 C3	
+98	patch	47	dfa	dllmain.cpp:1081	55 8B EC 51 51 53 56 8B C5	
+99	patch	48	dfa	dllmain.cpp:1086	A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6	
+100	patch	49	dfa	dllmain.cpp:1089	80 BC 24 ? ? ? ? ? 6A 00	
+101	patch	50	dfa	dllmain.cpp:1090	6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57	
+102	patch	51	rom_window	dllmain.cpp:1110	A1 ? ? ? ? 8B 0D ? ? ? ? 68 ? ? ? ? 53 50 51 FF 15	
+103	patch	52	rom_window	dllmain.cpp:1123	FF 15 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 83 7C 24	
+104	patch	53	patches	dllmain.cpp:1138	FF 15 ? ? ? ? 85 C0 75 18	
+105	patch	54	patches	dllmain.cpp:1143	FF 15 ? ? ? ? 85 C0 75 04 32	
+106	patch	55	patches	dllmain.cpp:1148	FF 15 ? ? ? ? 85 C0 75 07 A0	
+107	patch	56	patches	dllmain.cpp:1153	81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 ? 53 50 E8	
+108	patch	57	patches	dllmain.cpp:1171	89 91 ? ? ? ? 8D 44 24 ? 68 ? ? ? ? 50	
+109	patch	58	patches	dllmain.cpp:1183	83 F8 03 75 ? A1 ? ? ? ? 80 88 ? ? ? ? ? 84 DB 74 0A 6A 00 E8 ? ? ? ? 83 C4 04 5F 5E	
+110	patch	59	patches	dllmain.cpp:1193	6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5D 5B 33 CC E8 ? ? ? ? 81 C4 ? ? ? ? C3	
+111	patch	60	patches	dllmain.cpp:1202	6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC E8 ? ? ? ? 8B E5 5D C3	
+112	patch	61	patches	dllmain.cpp:1215	75 ? 8B 0D ? ? ? ? 51 FF 15 ? ? ? ? 85 C0 75 ? 8B 15	
+113	patch	62	windowed	dllmain.cpp:1223	FF 15 ? ? ? ? 5F 5E 5D 5B 83 C4 10 C2 10 00	
+114	patch	63	patches	dllmain.cpp:1327	E8 ? ? ? ? D9 E8 85 C0	
+115	patch	64	patches	dllmain.cpp:1334	E8 ? ? ? ? F3 0F 10 0D ? ? ? ? F3 0F 5C 0D	
+116	patch	65	patches	dllmain.cpp:1341	E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24	

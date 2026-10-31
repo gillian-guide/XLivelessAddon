@@ -114,6 +114,14 @@ export namespace xla
     // The original's stages: main writes, then DFA (0x10004850) under its
     // XLivelessAddon/GTAC.dll/EFLC/one-shot guards, then ROM (0x10004620) always;
     // MiscFixes calls DFA again (0x10024018).
+    //
+    // The shipping path applies only `kShippedStages` (DFA + ROM). The recovered
+    // "main" table is ZolikaPatch's extra pass: XLivelessAddon only ever ran the
+    // DFA and ROM stages, and applying `main` after the add-on had hooked the
+    // launcher is what broke the GFWL session (dcc4f31 source/dllmain.cpp:770-773;
+    // the call itself passes `dfa | rom` at :774-776). It stays available to
+    // callers that pass it explicitly (tests, the parent handler's own pass), but
+    // it is not part of the shipping set.
     enum class SkipLauncherStage : std::uint8_t
     {
         main = 1,
@@ -134,6 +142,10 @@ export namespace xla
         return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(stage)) != 0;
     }
 
+    // The stages the add-on itself applies at startup: never `main`.
+    inline constexpr SkipLauncherStage kShippedStages =
+        SkipLauncherStage::dfa | SkipLauncherStage::rom;
+
     // Table accessors; the spans cover the recovered rows.
     std::span<const SkipLauncherEntry> SkipLauncherEntries() noexcept;
     std::span<const SkipLauncherCollector> SkipLauncherCollectors() noexcept;
@@ -147,10 +159,11 @@ export namespace xla
 
     // Applies the patches selected by `stages` to `image`. Missing signatures are
     // skipped, never guessed, exactly like the original; the hook stages need
-    // `resolve` and do not run without it.
+    // `resolve` and do not run without it. `stages` is required: the shipping set
+    // is `kShippedStages`, which deliberately excludes the recovered `main` table.
     std::expected<SkipLauncherReport, PatchError> ApplySkipLauncher(
         std::span<std::byte> image, SkipHookResolver resolve, void* resolverUser,
-        SkipLauncherStage stages = SkipLauncherStage::all);
+        SkipLauncherStage stages);
 
     // Records the CreateFile IAT slot captured from the game; 0 makes the hook
     // call CreateFileA directly.
@@ -174,7 +187,6 @@ namespace xla
         // The collectors write the shared "mov al,1; ret; nop" window.
         constexpr std::uint16_t kCollectorStubLength =
             static_cast<std::uint16_t>(std::size(ops::kMovAl1RetNop));
-
 
         // Entry i's stores: {match-relative offset, length, bytes (null = fill),
         // fill byte, jump-target entry (kNoJumpTarget = not a jump)}.
@@ -893,15 +905,18 @@ namespace xla
             }
 
             // `mov ecx,[esi+1c]; mov [esi+20],ecx; mov al,1; ret 8` - the eleven
-            // bytes of sub_10004610. The ModRM/displacement bytes are the recovered
-            // operands (esi+0x1c / esi+0x20); the opcodes are named.
+            // bytes of sub_10004610. The ModRM and displacement bytes are the
+            // recovered operands (0x4E = mod=01, reg, r/m=esi; 0x1C/0x20 = the
+            // esi-relative fields); the opcodes and `ret 8` come from the shared
+            // catalogue.
             constexpr std::uint8_t kCode[] = {
-                Byte(Opcode::kMovR32Rm32), 0x4E, 0x1C, // mov ecx, [esi + 0x1c]
-                Byte(Opcode::kMovRm32R32), 0x4E, 0x20, // mov [esi + 0x20], ecx
-                Byte(Opcode::kMovAlImm8), 0x01,        // mov al, 1
-                Byte(Opcode::kRetImm16), 0x08, 0x00,   // ret 8
+                Byte(Opcode::kMovR32Rm32), 0x4E, 0x1C, // mov ecx,[esi+0x1c]
+                Byte(Opcode::kMovRm32R32), 0x4E, 0x20, // mov [esi+0x20],ecx
+                Byte(Opcode::kMovAlImm8), 0x01,        // mov al,1 (imm8)
+                ops::kRet8[0], ops::kRet8[1], ops::kRet8[2], // ret 8
             };
             static_assert(std::size(kCode) == 11);
+            static_assert(std::size(ops::kRet8) == 3);
             std::memcpy(memory, kCode, sizeof(kCode));
             ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(kCode));
             cached.store(memory);

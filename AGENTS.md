@@ -21,7 +21,7 @@ its sources.
 - `external/` — pinned submodules (injector + its nested safetyhook/bddisasm/kananlib/minhook,
   Hooking.Patterns, IniReader). Init recursively.
 - `tests/test_main.cpp` — native tests; no game files needed.
-- `docs/` — BUILDING, INI, COMPATIBILITY, ARCHITECTURE, DEPENDENCIES, TESTING, TROUBLESHOOTING.
+- `README.md` — install, features, supported builds and the build commands.
 
 ## Build and test
 
@@ -53,17 +53,17 @@ Rules learned the hard way:
 
 ## Dependency policy
 
-Submodules stay pinned. Bumping one = update `docs/DEPENDENCIES.md` (revision + licence), rebuild,
-run the tests, and commit `deps: bump <name> to <sha>`. Don't import code from a submodule into
-`source/` without attribution and licence compatibility.
+Submodules stay pinned. Bumping one = update `NOTICE` (revision + licence), rebuild, run the
+tests, and commit `deps: bump <name> to <sha>`. Don't import code from a submodule into `source/`
+without attribution and licence compatibility.
 
 ## Git
 
-Commit coherent checkpoints on `main`; never push, tag or publish without the user asking. A
-commit that changes behaviour records why in `CHANGELOG.md`. Message style: `area: summary`
+Commit coherent checkpoints on `master`; never push, tag or publish without the user asking. A
+commit that changes behaviour says why in its message. Message style: `area: summary`
 (e.g. `fix: never write past the caller's buffer`).
 
 ## Docs
 
-Docs describe the current code. When behaviour changes, update `CHANGELOG.md` and the relevant
-`docs/` page in the same commit; no session narration.
+The README describes the current code. When behaviour or the build changes, update it in the same
+commit; no session narration.

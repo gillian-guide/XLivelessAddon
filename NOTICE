@@ -43,9 +43,9 @@ texts live in their own submodule trees.
 | `external/IniReader/mINI` | [metayeti/mINI](https://github.com/metayeti/mINI) (Danijel Durakovic) | MIT |
 
 The nested injector submodules are initialised recursively (`git submodule update --init
---recursive`) so a checkout is complete and buildable offline afterwards.
-`docs/DEPENDENCIES.md` records which one is actually compiled and why the others are only
-carried.
+--recursive`) so a checkout is complete and buildable offline afterwards. Only injector's
+header-only patching helpers, Hooking.Patterns and IniReader are compiled; the rest are carried
+by the pinned injector revision.
 
 ## Game assets
 

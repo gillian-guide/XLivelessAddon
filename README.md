@@ -1,146 +1,67 @@
 # XLivelessAddon
 
-A maintained, modernised fork of [XLivelessAddon](https://github.com/GTAmodding/XLivelessAddon)
-for **GTA IV** and **Episodes from Liberty City** (1.0.0.0 – 1.0.8.0, 1.1.0.0 – 1.1.3.0).
+[![Build](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml/badge.svg)](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml)
 
-It is a **companion** to [OpenPreCEPatch](https://github.com/OpenZDecomp/OpenPreCEPatch): install
-it next to that ASI, or on its own. It is its own repository and build; OpenPreCEPatch neither
-builds nor requires it.
+XLivelessAddon is an open-source successor to [XLivelessAddon](https://github.com/GTAmodding/XLivelessAddon),
+the GTA IV / Episodes from Liberty City loader add-on. It keeps the original's launcher bypass,
+save/settings handling and windowing fixes, rewrites them as readable, maintainable C++23, and
+modernises the loader, hooking and configuration layers around the same recovered signature data.
+
+It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV.EFLC.OpenPreCEPatch)
+as a companion, as some features belong there; it also works on its own.
 
 ## Features
 
-| INI key | What it does |
-| --- | --- |
-| `SkipLauncher` | Bypasses the launcher/SecuROM checks (the recovered DFA and ROM stages) so the game starts without `PlayGTAIV.exe`. |
-| `RemoveRegistryPathDependency` | Removes the `Rockstar Games` registry path dependency; the install folder is answered from the game's own directory. |
-| `SkipWebConnect` | Skips the GFWL web-connect and health checks. |
-| `SkipIntro` | Shortens the intro/load screens to 300 ms. |
-| `SkipMenu` | Skips the main menu. Hold **SHIFT** while starting to keep it. |
-| `CustomSavePath` | Redirects savegames to a folder of your choice. |
-| `LocalSettingsPath` | Moves saves and settings to `<game>\saves`. |
-| `DoNotPauseOnMinimize` | Keeps rendering while the borderless window is unfocused. |
-| `BorderlessWindowed` | Borderless window, centred on the monitor, style kept in sync on resize. |
-| `VRAMFix` | Fixes the VRAM detection so the settings are not locked out. |
+- Launcher/SecuROM bypass (`SkipLauncher`), including the recovered DFA and ROM stages.
+- Save and settings redirection (`CustomSavePath`, `LocalSettingsPath`) and the save-file CRC32 bypass.
+- Rockstar Games registry path dependency removal and GFWL web-connect/health-check skips.
+- Intro shortening (`SkipIntro`) and main-menu skip (`SkipMenu`, hold SHIFT to keep it).
+- Borderless window, focus-loss handling and the VRAM detection fix.
+- Every option is INI-gated and logged, and is gated off when FusionFix owns the same subsystem.
 
-Everything is logged: `XLivelessAddon.log` next to the game executable records the detected
-build and every patch that applied or was skipped, so a bug report can say exactly which binary
-ran and what it did.
+## Installation
 
-## Install
+1. Install [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest).
+2. Extract the archive next to `GTAIV.exe` and `EFLC.exe`.
+3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what applied.
 
-1. Copy `XLivelessAddon.asi` and `XLivelessAddon.ini` into the game folder (next to `GTAIV.exe`
-   or `EFLC.exe`).
-2. Start the game through `PlayGTAIV.exe` (or directly when `SkipLauncher` is off).
-3. Edit `XLivelessAddon.ini` to taste; the file is created with defaults when missing.
+## Supported game versions
 
-No other files are needed. `XLivelessAddon.log` and the optional `saves/` folder are created at
-runtime.
+| compact | version | status |
+| ---: | --- | --- |
+| 1000 | 1.0.0.0 | supported |
+| 1040 | 1.0.4.0 | supported |
+| 1060 | 1.0.6.0 | supported |
+| 1070 | 1.0.7.0 | supported |
+| 1080 | 1.0.8.0 | supported |
+| 1100 | 1.1.0.0 (EFLC) | supported |
+| 1110 | 1.1.1.0 (TLAD) | supported |
+| 1120 | 1.1.2.0 (TBoGT) | supported |
+| 1130 | 1.1.3.0 (EFLC) | supported |
 
-## Compatibility
+## Building
 
-* **OpenPreCEPatch** – designed to run alongside it; the two modules do not overlap.
-* **GTAIV.EFLC.FusionFix** – when a `*FusionFix*.asi` is present, the options whose subsystem
-  FusionFix owns (`SkipIntro`, `SkipMenu`, `BorderlessWindowed`, `DoNotPauseOnMinimize`,
-  `VRAMFix`, `LocalSettingsPath`, `CustomSavePath`, `CustomSettingsPath`) are switched off and
-  the log says why. Never run two modules that patch the same code.
-* **Other ASIs** – install-time patches are INI-gated and each install is logged; the
-  `CreateFile` hook forwards through the game's IAT slot, so a detour another ASI installed
-  there keeps working.
-
-See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the details.
-
-## Build
-
-Requirements: Windows, Visual Studio 2022 or newer with the **Win32/x86** C++ tools, CMake 3.28+,
-and Git (for the submodules).
+Requirements: Windows 10/11, Visual Studio 2022 17.10+ (or newer) with the **x86** C++ toolchain,
+CMake 3.28+, and the submodules checked out.
 
 ```bat
-git clone --recursive https://github.com/OpenZDecomp/XLivelessAddon.git
+git clone --recursive https://github.com/gillian-guide/XLivelessAddon
 cd XLivelessAddon
 cmake --preset win-x86
 cmake --build --preset release
 ctest --preset release
 ```
 
-Outputs:
+The output is `build/win-x86/bin/XLivelessAddon.asi` and its INI. CI publishes a single
+`XLivelessAddon.zip` containing just those two files.
 
-* `build/win-x86/bin/XLivelessAddon.asi`
-* `build/win-x86/bin/XLivelessAddon.ini`
-* `build/win-x86/bin/XLivelessAddon.map` (linker map, for debugging)
+## Credits
 
-To copy the result into a game folder after every build:
+- Original add-on by the **GTAmodding / XLivelessAddon** contributors.
+- Original mod behaviour recovered from **ZolikaPatch** by Zolika1351.
+- **GTAIV.EFLC.FusionFix** by ThirteenAG and contributors.
+- `injector` by LINK/2012 and ThirteenAG
+- `Hooking.Patterns` by CitizenFX and ThirteenAG
+- `IniReader` by ThirteenAG.
 
-```bat
-cmake --preset win-x86 -DXLA_GAME_DIR="D:/Games/GTA IV"
-cmake --build --preset release
-```
-
-or use the `win-x86-deploy` preset with `GTAIV_DIR` set in the environment.
-
-To build the release zip (`XLivelessAddon-<version>.zip` with the ASI, INI, README and licences):
-
-```bat
-cmake --build --preset package
-```
-
-Already have Visual Studio 2022 instead of 2026? Use `--preset win-x86-vs2022` and
-`--preset release-vs2022`.
-
-### Submodules
-
-The build needs the three pinned libraries under `external/`:
-
-| Path | Project |
-| --- | --- |
-| `external/injector` | [ThirteenAG/injector](https://github.com/ThirteenAG/injector) (with its nested `safetyhook`, `bddisasm`, `kananlib`, `minhook` submodules) |
-| `external/hooking` | [ThirteenAG/Hooking.Patterns](https://github.com/ThirteenAG/Hooking.Patterns) |
-| `external/IniReader` | [ThirteenAG/IniReader](https://github.com/ThirteenAG/IniReader) (with its vendored `mINI`) |
-
-Always initialise recursively: `git submodule update --init --recursive`. The nested
-`injector` submodules are needed for the checkout to be complete even though this build only
-uses injector's header-only patching helpers. See [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
-
-## Layout
-
-```
-source/            C++23 module interface units (.ixx) and common.hxx
-  common.ixx       image view, error type, logger, module paths
-  build.ixx        build recognition
-  config.ixx       INI defaults/loading and FusionFix gates
-  ini_file.cpp     plain-TU INI wrapper over IniReader/mINI
-  patch.ixx        find/store helpers over Hooking.Patterns + injector
-  skip_launcher.ixx  recovered launcher tables + hook bodies
-  dfa.ixx          legacy DFA file-API hooks
-  rom_window.ixx   legacy WM_ROM message window
-  savegames.ixx    custom save path + CRC32 bypass
-  registry.ixx     registry path dependency removal
-  userdata.ixx     LocalSettingsPath shell-folder redirect
-  windowed.ixx     borderless window, focus loss, DefWindowProc shims
-  patches.ixx      the recovered signature table (GFWL/RGSC/DLC/intro/VRAM)
-  addon.ixx        the init pipeline
-  dllmain.cpp      DLL entry point
-data/              the shipped XLivelessAddon.ini
-tests/             native test suite (runs without the game)
-tools/             helper scripts (PE verification)
-external/          pinned git submodules
-cmake/             version header template
-res/               PE version resource template
-docs/              build, INI, compatibility, architecture and testing notes
-```
-
-The module layout follows GTAIV.EFLC.FusionFix: every feature is a `.ixx` module, `common.hxx`
-holds the includes, and only `dllmain.cpp`/`ini_file.cpp` are plain translation units.
-
-## Status
-
-* The code builds with MSVC 19.4x/19.5x in C++23 mode, Win32 only (the game is 32-bit).
-* The native tests cover the INI loader, the build table, the patch primitives and the recovered
-  SkipLauncher tables/bodies; they need no game files.
-* `CustomSettingsPath` is read and logged but **not hooked** in this build (the original's
-  inline hook was not ported). Use `LocalSettingsPath`, `CustomSavePath`, or FusionFix's
-  `userdata.ixx` instead.
-
-## Licence
-
-GPL-3.0-or-later. See `LICENSE`, `NOTICE` and `CREDITS.md` for the attribution of the code this
-fork descends from.
+Licensed under the GNU General Public License, version 3 or later; see `LICENSE` and `NOTICE`.

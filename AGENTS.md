@@ -12,10 +12,13 @@ its sources.
 ## Layout
 
 - `source/*.ixx` — one C++23 module interface unit per feature (FusionFix layout); `common.hxx`
-  is the shared include header.
+  is the shared include header. They are listed in the `XLA_MODULES` `CXX_MODULES` file set;
+  `tools/module_layout.py` (CTest `xla_module_layout`) fails if a file drifts out of the shape.
 - `source/dllmain.cpp`, `source/ini_file.cpp` — the only plain translation units.
-- `source/patch.ixx` — every store goes through it (Hooking.Patterns for scans, injector for
+- `source/patch.ixx` — the primitive store helpers (Hooking.Patterns for scans, injector for
   writes); every helper logs applied/missing.
+- `source/patches.ixx` — the recovered patch list, in the original handler's order; its scan
+  sequence is pinned by `tests/signature_golden.tsv` (CTest `xla_signature_parity`).
 - `source/skip_launcher.ixx` — the recovered launcher tables and hook bodies. **Do not "clean
   up" the tables**: signature strings, offsets, stored bytes and stage order are recovered data.
 - `external/` — pinned submodules (injector + its nested safetyhook/bddisasm/kananlib/minhook,
@@ -42,8 +45,10 @@ Rules learned the hard way:
    fragment, then `import`. Including a std header after an `import` breaks MSVC's `istream`.
 2. **mINI/IniReader must stay in a plain TU** (`ini_file.cpp`). In module purview MSVC's
    serialisation of its stream internals is unreliable (it crashes at runtime).
-3. **No `__declspec(naked)` in a module**: MSVC rejects it on module members. Assemble the opcodes
-   instead (`rom::RomSetStub`) or use a plain TU.
+3. **`__declspec(naked)` on an exported module member is rejected by MSVC.** Assemble the opcodes
+   instead (`rom::RomSetStub`) or use a plain TU. The one internal-linkage naked body
+   (`SkipIntroBody` in `patches.ixx`) does compile in module purview on MSVC 2026; do not add new
+   ones.
 4. **Hook bodies are ABI contracts**: `CreateFile` is `__cdecl` (plain `ret`), `RomSet` is
    `ret 8` with the object in `ESI`, `SkipIntro` tail-jumps through `g_skipIntroResume` (never a
    `call`). Do not add parameters or change calling conventions.

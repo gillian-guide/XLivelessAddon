@@ -14,7 +14,6 @@ module;
 export module xla.rom_window;
 
 import xla.common;
-import xla.patch;
 
 export namespace xla::rom_window
 {

@@ -17,9 +17,6 @@ export module xla.patches;
 import xla.common;
 import xla.build;
 import xla.patch;
-import xla.dfa;
-import xla.rom_window;
-import xla.windowed;
 
 export namespace xla::patches
 {

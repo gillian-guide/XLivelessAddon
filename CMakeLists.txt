@@ -80,9 +80,11 @@ configure_file(res/version.rc.in
 # ---------------------------------------------------------------------------
 option(XLA_BUILD_TESTS "Build the native test suite" ON)
 
-set(XLA_LIB_SOURCES
+# The module interface units: one per feature, named xla.<stem>. They are a
+# CXX_MODULES file set so CMake scans them (and propagates their BMIs to the
+# ASI and test targets) instead of compiling them as ordinary sources.
+set(XLA_MODULES
     source/common.ixx
-    source/ini_file.cpp
     source/build.ixx
     source/config.ixx
     source/patch.ixx
@@ -94,11 +96,17 @@ set(XLA_LIB_SOURCES
     source/skip_launcher.ixx
     source/windowed.ixx
     source/patches.ixx
-    source/addon.ixx
+    source/addon.ixx)
+
+# The only plain translation units: the entry point and the INI parser (mINI
+# must stay out of module purview), plus the vendored Hooking.Patterns.
+set(XLA_PLAIN_SOURCES
+    source/ini_file.cpp
     external/hooking/Hooking.Patterns.cpp)
 
-add_library(xla_core STATIC ${XLA_LIB_SOURCES})
+add_library(xla_core STATIC ${XLA_PLAIN_SOURCES})
 set_target_properties(xla_core PROPERTIES CXX_SCAN_FOR_MODULES ON)
+target_sources(xla_core PUBLIC FILE_SET CXX_MODULES FILES ${XLA_MODULES})
 target_include_directories(xla_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/source"
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -196,6 +204,13 @@ if(XLA_BUILD_TESTS)
                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/signature_parity.py"
                     --source "${CMAKE_CURRENT_SOURCE_DIR}/source"
                     --golden "${CMAKE_CURRENT_SOURCE_DIR}/tests/signature_golden.tsv")
+
+        # The .ixx layout (one unit per feature, only two plain TUs, CXX_MODULES
+        # file set) is a contract; this fails if a file drifts out of it.
+        add_test(NAME xla_module_layout
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/module_layout.py"
+                    --source "${CMAKE_CURRENT_SOURCE_DIR}/source")
     else()
         message(WARNING
             "Python 3 not found: the xla_signature_parity test is not registered.")

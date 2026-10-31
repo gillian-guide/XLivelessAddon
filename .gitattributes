@@ -5,6 +5,7 @@
 *.cpp   text eol=crlf
 *.hpp   text eol=crlf
 *.hxx   text eol=crlf
+*.ixx   text eol=crlf
 *.h     text eol=crlf
 *.c     text eol=crlf
 *.inc   text eol=crlf

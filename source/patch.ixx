@@ -73,6 +73,10 @@ export namespace xla::patch
         return true;
     }
 
+    // Writes a `ret`/`ret N` exactly as wide as the instruction: one byte (C3)
+    // when N is 0, three bytes (C2 imm16, little-endian) otherwise. Never
+    // injector::MakeRET: it stores the opcode through an int, so it also
+    // overwrites the next two bytes with zeros (research 13 XA-1).
     inline bool Ret(Site site, std::ptrdiff_t offset, std::size_t pop_bytes, std::string_view label)
     {
         if (!site)
@@ -80,7 +84,14 @@ export namespace xla::patch
             return false;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        injector::MakeRET(injector::raw_ptr(target), static_cast<std::uint16_t>(pop_bytes), true);
+        const auto immediate = static_cast<std::uint16_t>(pop_bytes);
+        std::uint8_t bytes[3] = {
+            immediate == 0 ? Byte(Opcode::kRet) : Byte(Opcode::kRetImm16),
+            static_cast<std::uint8_t>(immediate & 0xFFu),
+            static_cast<std::uint8_t>((immediate >> 8) & 0xFFu),
+        };
+        const std::size_t length = immediate == 0 ? 1 : sizeof(bytes);
+        injector::WriteMemoryRaw(injector::raw_ptr(target), bytes, length, true);
         log::Info("{}: ret {} at {:08X}", label, pop_bytes,
                   reinterpret_cast<std::uintptr_t>(target));
         return true;

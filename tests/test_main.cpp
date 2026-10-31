@@ -554,10 +554,22 @@ namespace
         CHECK_EQ(buffer[8], std::byte{0x90});
         CHECK_EQ(buffer[10], std::byte{0x90});
 
-        CHECK(xla::patch::Ret(site, 12, 8, "test: ret"));
+        // Ret imm16: exactly three bytes (C2 imm16), not MakeRET's four. The
+        // sentinel after the instruction must survive.
+        buffer[15] = std::byte{0xCC};
+        CHECK(xla::patch::Ret(site, 12, 8, "test: ret 8"));
         CHECK_EQ(buffer[12], std::byte{0xC2});
         CHECK_EQ(buffer[13], std::byte{0x08});
         CHECK_EQ(buffer[14], std::byte{0x00});
+        CHECK_EQ(buffer[15], std::byte{0xCC}); // 4th byte untouched
+
+        // Ret: exactly one byte (C3); both following sentinels must survive.
+        buffer[31] = std::byte{0xCC};
+        buffer[32] = std::byte{0xCC};
+        CHECK(xla::patch::Ret(site, 30, 0, "test: ret"));
+        CHECK_EQ(buffer[30], std::byte{0xC3});
+        CHECK_EQ(buffer[31], std::byte{0xCC});
+        CHECK_EQ(buffer[32], std::byte{0xCC});
 
         // Jump: E9 + rel32 measured from the end of the instruction.
         const auto* destination = reinterpret_cast<const void*>(buffer.data() + 32);

@@ -19,11 +19,14 @@ its sources.
   writes); every helper logs applied/missing.
 - `source/patches.ixx` — the recovered patch list, in the original handler's order; its scan
   sequence is pinned by `tests/signature_golden.tsv` (CTest `xla_signature_parity`).
-- `source/addon.ixx` — the entry pipeline: it executes the order that
-  `source/order.ixx` declares (phases + named `after`/`prerequisites` edges, a
-  deterministic topological sort with cycle detection).
+- `source/addon.ixx` — the entry pipeline: one `constexpr` registration table of
+  `{phase, name, callback}` rows (probe, config, install, post). The runner executes the phases
+  in order and the rows in table order; the 25-name golden test pins the effective sequence.
+  There is no dependency graph — the publish-before-install contracts are commented at their rows.
 - `source/skip_launcher.ixx` — the recovered launcher tables and hook bodies. **Do not "clean
   up" the tables**: signature strings, offsets, stored bytes and stage order are recovered data.
+  The main table is a typed patch DSL (`WriteBytes`/`NopFill`/`Jump`); the rows are in-place
+  instruction-window patches, not callable bodies.
 - `external/` — pinned submodules (injector + its nested safetyhook/bddisasm/kananlib/minhook,
   Hooking.Patterns, IniReader). Init recursively.
 - `tests/test_main.cpp` — native tests; no game files needed. `tests/signature_golden.tsv` is the

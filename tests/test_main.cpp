@@ -7,10 +7,10 @@
 
 #include "common.hxx"
 
+import xla.addon;
 import xla.build;
 import xla.common;
 import xla.config;
-import xla.order;
 import xla.patch;
 import xla.registry;
 import xla.rom_window;
@@ -472,7 +472,8 @@ namespace
 
     // The exact effective init order, frozen. This list is the behavioural
     // contract of the pipeline: any insertion, removal or reordering has to be a
-    // reviewed change to this array (and the plan's edges), not a silent one.
+    // reviewed change to the registration table (and this array), not a silent
+    // one.
     constexpr std::array<std::string_view, 25> kPipelineGolden{{
         "banner",           "console",        "probe",           "paths",
         "config",           "fusionfix",      "report-config",   "image",
@@ -485,128 +486,21 @@ namespace
 
     void TestPipelineOrder()
     {
-        const std::span<const xla::order::Node> pipeline = xla::order::Pipeline();
-        const xla::order::Plan plan = xla::order::Build(pipeline);
-        CHECK(plan.valid);
-        CHECK_EQ(plan.order.size(), pipeline.size());
-        CHECK_EQ(plan.order.size(), kPipelineGolden.size());
-        if (plan.order.size() != kPipelineGolden.size())
+        const std::span<const std::string_view> order = xla::StepOrder();
+        CHECK_EQ(order.size(), kPipelineGolden.size());
+        if (order.size() != kPipelineGolden.size())
         {
             return;
         }
 
-        std::uint8_t previousPhase = 0;
-        for (std::size_t index = 0; index < plan.order.size(); ++index)
+        for (std::size_t index = 0; index < order.size(); ++index)
         {
-            const xla::order::Node& node = pipeline[plan.order[index]];
-            if (index != 0 && node.name != kPipelineGolden[index])
+            if (order[index] != kPipelineGolden[index])
             {
                 std::fprintf(stderr, "pipeline #%zu: expected %s, got %s\n", index,
                              std::string{kPipelineGolden[index]}.c_str(),
-                             std::string{node.name}.c_str());
+                             std::string{order[index]}.c_str());
                 ++g_failures;
-            }
-            const auto phase = static_cast<std::uint8_t>(node.phase);
-            CHECK(phase >= previousPhase); // phases never go backwards
-            previousPhase = phase;
-        }
-    }
-
-    void TestPipelineOrderIndependentOfDeclaration()
-    {
-        const std::span<const xla::order::Node> pipeline = xla::order::Pipeline();
-        std::vector<xla::order::Node> reversed(pipeline.rbegin(), pipeline.rend());
-        const xla::order::Plan forward = xla::order::Build(pipeline);
-        const xla::order::Plan backward = xla::order::Build(reversed);
-        CHECK(forward.valid);
-        CHECK(backward.valid);
-        CHECK_EQ(forward.order.size(), backward.order.size());
-        for (std::size_t index = 0;
-             index < std::min(forward.order.size(), backward.order.size()); ++index)
-        {
-            CHECK_EQ(pipeline[forward.order[index]].name,
-                     reversed[backward.order[index]].name);
-        }
-        // Same plan from the same facts, whatever order the table was handed over.
-        for (std::size_t index = 0; index < forward.order.size(); ++index)
-        {
-            CHECK(forward.order[index] == index); // the plan is a total chain today
-        }
-    }
-
-    void TestPipelineRejectsBrokenOrders()
-    {
-        using xla::order::Node;
-        using xla::order::Phase;
-
-        // A cycle fails closed: no order at all, and the diagnostic names the path.
-        {
-            static constexpr std::string_view kAfterA[]{"b"};
-            static constexpr std::string_view kAfterB[]{"a"};
-            constexpr Node nodes[] = {
-                {"a", Phase::install, kAfterA, {}},
-                {"b", Phase::install, kAfterB, {}},
-            };
-            const xla::order::Plan plan = xla::order::Build(nodes);
-            CHECK(!plan.valid);
-            CHECK(plan.order.empty());
-            CHECK(!plan.diagnostics.empty());
-            if (!plan.diagnostics.empty())
-            {
-                const std::string& line = plan.diagnostics.front();
-                CHECK(line.find("cycle") != std::string::npos);
-                CHECK(line.find("a") != std::string::npos);
-                CHECK(line.find("b") != std::string::npos);
-            }
-        }
-
-        // A dependency on a node that is not declared is a plan error, not a
-        // silently ignored edge.
-        {
-            static constexpr std::string_view kAfterMissing[]{"absent"};
-            constexpr Node nodes[] = {
-                {"x", Phase::install, kAfterMissing, {}},
-            };
-            const xla::order::Plan plan = xla::order::Build(nodes);
-            CHECK(!plan.valid);
-            CHECK(!plan.diagnostics.empty());
-        }
-
-        // An edge that points backwards across phases is rejected.
-        {
-            static constexpr std::string_view kAfterPost[]{"last"};
-            constexpr Node nodes[] = {
-                {"first", Phase::probe, kAfterPost, {}},
-                {"last", Phase::post, {}, {}},
-            };
-            const xla::order::Plan plan = xla::order::Build(nodes);
-            CHECK(!plan.valid);
-        }
-
-        // Duplicate names make the plan ambiguous.
-        {
-            constexpr Node nodes[] = {
-                {"same", Phase::probe, {}, {}},
-                {"same", Phase::install, {}, {}},
-            };
-            const xla::order::Plan plan = xla::order::Build(nodes);
-            CHECK(!plan.valid);
-        }
-
-        // A valid plan with a hard prerequisite keeps both steps and orders them.
-        {
-            static constexpr std::string_view kNeedsA[]{"a"};
-            constexpr Node nodes[] = {
-                {"b", Phase::install, {}, kNeedsA},
-                {"a", Phase::config, {}, {}},
-            };
-            const xla::order::Plan plan = xla::order::Build(nodes);
-            CHECK(plan.valid);
-            CHECK_EQ(plan.order.size(), std::size_t{2});
-            if (plan.order.size() == 2)
-            {
-                CHECK_EQ(nodes[plan.order[0]].name, std::string_view{"a"});
-                CHECK_EQ(nodes[plan.order[1]].name, std::string_view{"b"});
             }
         }
     }
@@ -1087,8 +981,6 @@ int main(int argc, char** argv)
     run("missing-test tail NOPs", TestMissingTestTailNops);
     run("shipped launcher stages", TestShippedLauncherStages);
     run("pipeline order", TestPipelineOrder);
-    run("pipeline order independent of declaration", TestPipelineOrderIndependentOfDeclaration);
-    run("pipeline rejects broken orders", TestPipelineRejectsBrokenOrders);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);
     run("savegame paths", TestSavegamePaths);
@@ -1112,3 +1004,5 @@ int main(int argc, char** argv)
     std::printf("xla tests: PASS\n");
     return 0;
 }
+
+

@@ -2,13 +2,13 @@
 //
 // xla.addon — the init pipeline. The first pass runs synchronously at
 // DLL_PROCESS_ATTACH; when the probe is absent it retries the whole pipeline once
-// on a worker thread (StepProbe -> DelayedInit). The order is the original
-// add-on's: probe, configuration, image/build detection, then the installers. It
-// is not hand-written here: `xla.order` declares the steps, their phases and
-// their named dependencies, sorts them deterministically, and this module
-// executes the result. Every optional installer is INI-gated; the core patch
-// list and the savegame CRC32 bypass are unconditional, as in the original. An
-// unsupported or non-writable image installs nothing and says why.
+// on a worker thread (StepProbe -> DelayedInit). The steps register themselves in
+// one constexpr table with a phase (probe, config, install, post); the runner
+// executes the phases in order and, inside a phase, the rows in table order. That
+// filtered sequence is the original add-on's order, pinned by the 25-name test;
+// there is no dependency graph. Every optional installer is INI-gated; the core
+// patch list and the savegame CRC32 bypass are unconditional, as in the original.
+// An unsupported or non-writable image installs nothing and says why.
 
 module;
 
@@ -20,7 +20,6 @@ import xla.build;
 import xla.common;
 import xla.config;
 import xla.dfa;
-import xla.order;
 import xla.patches;
 import xla.registry;
 import xla.rom_window;
@@ -34,6 +33,10 @@ export namespace xla
     // Entry point called from DllMain. Returns the process exit code the original
     // init used (0 = installed or waiting, 1 = gave up).
     int Run(HMODULE module);
+
+    // The effective step order the runner executes, phase by phase. The native
+    // test pins this exact 25-name sequence.
+    std::span<const std::string_view> StepOrder() noexcept;
 } // namespace xla
 
 namespace xla
@@ -48,8 +51,8 @@ namespace xla
 
         std::atomic<bool> g_delayed{false};
 
-        // Everything a step reads or publishes. Steps are plain functions so the
-        // plan's order is the only thing that decides the sequence.
+        // Everything a step reads or publishes. Steps are plain functions; the
+        // registration table is the only thing that decides the sequence.
         struct RunState
         {
             std::filesystem::path directory;
@@ -117,7 +120,7 @@ namespace xla
                       options.customSavePath);
         }
 
-        // ---- the steps (declared in xla.order's Pipeline(), same order) --------
+        // ---- the steps (registered in kSteps below, in this order) -------------
 
         Outcome StepBanner(RunState&)
         {
@@ -403,120 +406,136 @@ namespace xla
             return Outcome::next;
         }
 
-        using StepFn = Outcome (*)(RunState&);
-
-        struct StepEntry
+        // The init phases, in the order the runner executes them. A step
+        // registers itself with its phase; there is no dependency graph and no
+        // sort.
+        enum class Phase : std::uint8_t
         {
-            std::string_view name; // must match xla.order::Pipeline() at the same index
-            StepFn run;
+            probe,   // prove the executable and set up logging before any read
+            config,  // paths, INI, FusionFix gates, image and build detection
+            install, // the installers, in the recovered order
+            post,    // the final log line
         };
 
-        // One entry per xla.order::Pipeline() node, in declaration order.
-        constexpr StepEntry kSteps[] = {
-            {"banner", StepBanner},
-            {"console", StepConsole},
-            {"probe", StepProbe},
-            {"paths", StepPaths},
-            {"config", StepConfig},
-            {"fusionfix", StepFusionFix},
-            {"report-config", StepReportConfig},
-            {"image", StepImage},
-            {"writable", StepWritable},
-            {"build", StepBuild},
-            {"local-settings", StepLocalSettings},
-            {"savegames", StepSavegames},
-            {"skip-launcher", StepSkipLauncher},
-            {"borderless-hooks", StepBorderless},
-            {"focus-loss", StepFocusLoss},
-            {"core-patches", StepCorePatches},
-            {"launcher-stage", StepLauncherStage},
-            {"web-connect", StepWebConnect},
-            {"intro", StepIntro},
-            {"menu", StepMenu},
-            {"do-not-pause", StepDoNotPause},
-            {"defwindow-shims", StepDefWindowShims},
-            {"registry", StepRegistry},
-            {"vram", StepVram},
-            {"complete", StepComplete},
+        constexpr Phase kPhases[] = {Phase::probe, Phase::config, Phase::install, Phase::post};
+
+        // Every step registers here: phase, name (the golden's key) and callback.
+        // The runner walks the phases in kPhases order and, inside a phase, the
+        // rows in table order; that filtered sequence is the effective order,
+        // pinned by the 25-name golden test. Only the publish-before-install
+        // contracts need an edge, and they are commented at their rows.
+        struct Step
+        {
+            Phase phase;
+            std::string_view name;
+            Outcome (*run)(RunState&);
         };
 
-        // The names are the link between the schedule and the functions: a node
-        // inserted, removed or renamed without the matching step is a compile
-        // error, not a silently different install order.
-        [[nodiscard]] constexpr bool StepTableMatchesPipeline() noexcept
+        constexpr Step kSteps[] = {
+            // probe: nothing reads the image before the probe has seen it.
+            {Phase::probe, "banner", StepBanner},
+            {Phase::probe, "console", StepConsole},
+            {Phase::probe, "probe", StepProbe},
+
+            // config: everything the installers need to decide what to do.
+            {Phase::config, "paths", StepPaths},
+            {Phase::config, "config", StepConfig},
+            {Phase::config, "fusionfix", StepFusionFix},
+            {Phase::config, "report-config", StepReportConfig},
+            {Phase::config, "image", StepImage},
+            {Phase::config, "writable", StepWritable},
+            {Phase::config, "build", StepBuild},
+
+            // install: the installers, in the recovered order.
+            {Phase::install, "local-settings", StepLocalSettings},
+            {Phase::install, "savegames", StepSavegames},
+            // The CreateFile slot is captured and published inside
+            // ApplySkipLauncher's DFA stage, before its hook jumps are written;
+            // that publish-before-install edge is internal to the pass.
+            {Phase::install, "skip-launcher", StepSkipLauncher},
+            {Phase::install, "borderless-hooks", StepBorderless},
+            {Phase::install, "focus-loss", StepFocusLoss},
+            {Phase::install, "core-patches", StepCorePatches},
+            // SkipLauncher=0 only: the legacy DFA/ROM installers (a no-op on the
+            // builds where the launcher bypass already ran).
+            {Phase::install, "launcher-stage", StepLauncherStage},
+            {Phase::install, "web-connect", StepWebConnect},
+            // InstallIntro publishes g_skipIntroResume before its MakeJMP; publish
+            // after the jump and the body resumes into itself.
+            {Phase::install, "intro", StepIntro},
+            // InstallMenu captures the original E8 target (MakeCALL returns it)
+            // as the resume, in the same call that overwrites the site.
+            {Phase::install, "menu", StepMenu},
+            {Phase::install, "do-not-pause", StepDoNotPause},
+            {Phase::install, "defwindow-shims", StepDefWindowShims},
+            {Phase::install, "registry", StepRegistry},
+            {Phase::install, "vram", StepVram},
+
+            // post: the run is over, say so.
+            {Phase::post, "complete", StepComplete},
+        };
+
+        // The effective order: each phase's rows in table order. The test pins the
+        // 25 names; a row whose phase is missing from kPhases leaves an empty
+        // slot, which fails the static_assert below.
+        [[nodiscard]] constexpr std::array<std::string_view, std::size(kSteps)> BuildStepOrder()
         {
-            const std::span<const order::Node> pipeline = order::Pipeline();
-            if (std::size(kSteps) != pipeline.size())
+            std::array<std::string_view, std::size(kSteps)> order{};
+            std::size_t at = 0;
+            for (const Phase phase : kPhases)
             {
-                return false;
+                for (const Step& step : kSteps)
+                {
+                    if (step.phase == phase)
+                    {
+                        order[at++] = step.name;
+                    }
+                }
             }
-            for (std::size_t index = 0; index < pipeline.size(); ++index)
+            return order;
+        }
+
+        inline constexpr auto kStepOrder = BuildStepOrder();
+
+        [[nodiscard]] constexpr bool StepOrderComplete() noexcept
+        {
+            for (const std::string_view name : kStepOrder)
             {
-                if (kSteps[index].name != pipeline[index].name)
+                if (name.empty())
                 {
                     return false;
                 }
             }
             return true;
         }
-        static_assert(StepTableMatchesPipeline());
-
-        [[nodiscard]] std::size_t IndexOf(std::span<const order::Node> pipeline,
-                                          std::string_view name) noexcept
-        {
-            for (std::size_t index = 0; index < pipeline.size(); ++index)
-            {
-                if (pipeline[index].name == name)
-                {
-                    return index;
-                }
-            }
-            return pipeline.size();
-        }
+        static_assert(StepOrderComplete());
     } // namespace
+
+    std::span<const std::string_view> StepOrder() noexcept
+    {
+        return kStepOrder;
+    }
 
     int Run(HMODULE module)
     {
         (void)module;
 
-        const std::span<const order::Node> pipeline = order::Pipeline();
-        const order::Plan plan = order::Build(pipeline);
-        if (!plan.valid)
-        {
-            for (const std::string& diagnostic : plan.diagnostics)
-            {
-                log::Info("{}", diagnostic);
-            }
-            log::Write("init: order invalid; no patches applied");
-            return 1;
-        }
-
         RunState state;
-        std::vector<bool> executed(pipeline.size(), false);
-        for (const std::size_t index : plan.order)
+        for (const Phase phase : kPhases)
         {
-            // `prerequisites` is also enforced by the sorter (a missing target makes the
-            // plan invalid); the executor additionally refuses to run a step whose
-            // hard prerequisite has not executed, so a future conditional step
-            // cannot silently depend on one that was skipped.
-            for (const std::string_view required : pipeline[index].prerequisites)
+            for (const Step& step : kSteps)
             {
-                const std::size_t requiredIndex = IndexOf(pipeline, required);
-                if (requiredIndex == pipeline.size() || !executed[requiredIndex])
+                if (step.phase != phase)
                 {
-                    log::Info("init: order prerequisite '{}' for '{}' did not run", required,
-                              pipeline[index].name);
-                    return 1;
+                    continue;
                 }
-            }
-
-            const Outcome outcome = kSteps[index].run(state);
-            executed[index] = true;
-            if (outcome == Outcome::stop)
-            {
-                break;
+                if (step.run(state) == Outcome::stop)
+                {
+                    return state.exitCode;
+                }
             }
         }
         return state.exitCode;
     }
 } // namespace xla
+

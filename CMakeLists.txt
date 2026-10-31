@@ -96,7 +96,6 @@ set(XLA_MODULES
     source/skip_launcher.ixx
     source/windowed.ixx
     source/patches.ixx
-    source/order.ixx
     source/addon.ixx)
 
 # The only plain translation units: the entry point and the INI parser (mINI
@@ -260,3 +259,4 @@ set(CPACK_GENERATOR ZIP)
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
 set(CPACK_PACKAGE_CHECKSUM SHA256)
 include(CPack)
+

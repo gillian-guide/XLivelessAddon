@@ -19,11 +19,16 @@ its sources.
   writes); every helper logs applied/missing.
 - `source/patches.ixx` — the recovered patch list, in the original handler's order; its scan
   sequence is pinned by `tests/signature_golden.tsv` (CTest `xla_signature_parity`).
+- `source/addon.ixx` — the entry pipeline: it executes the order that
+  `source/order.ixx` declares (phases + named `after`/`prerequisites` edges, a
+  deterministic topological sort with cycle detection).
 - `source/skip_launcher.ixx` — the recovered launcher tables and hook bodies. **Do not "clean
   up" the tables**: signature strings, offsets, stored bytes and stage order are recovered data.
 - `external/` — pinned submodules (injector + its nested safetyhook/bddisasm/kananlib/minhook,
   Hooking.Patterns, IniReader). Init recursively.
-- `tests/test_main.cpp` — native tests; no game files needed.
+- `tests/test_main.cpp` — native tests; no game files needed. `tests/signature_golden.tsv` is the
+  recovered scan list (CTest `xla_signature_parity`), and `tools/module_layout.py` checks the
+  `.ixx` layout (CTest `xla_module_layout`).
 - `README.md` — install, features, supported builds and the build commands.
 
 ## Build and test
@@ -34,7 +39,9 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-Win32 only (the game is 32-bit; the hook bodies assume x86). The PE test in CTest asserts the
+Win32 only (the game is 32-bit; the hook bodies assume x86). `ctest` runs the native suite plus
+three checks: the recovered signature list/order (`xla_signature_parity`), the `.ixx` layout
+(`xla_module_layout`, needs Python 3) and the PE test (`xla_asi_headers`). The PE test asserts the
 artifact is a 32-bit DLL based at `0x10000000` with the GUI subsystem, a USER32 import and the
 static CRT (`/MT`; an MSVCP140/VCRUNTIME140 import is a failure, so the game folder needs no
 Visual C++ redistributable).

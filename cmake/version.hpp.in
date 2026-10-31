@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The add-on's identity. CMake generates `xla/version.hpp` from this template
+// so the log banner, the PE version resource and the release package always
+// agree with the tag that was built.
+
+#pragma once
+
+#define XLA_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define XLA_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define XLA_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define XLA_VERSION_STRING "@XLA_VERSION_STRING@"
+#define XLA_GIT_SHA "@XLA_GIT_SHA@"
+
+namespace xla
+{
+    inline constexpr std::string_view kProductName = "XLivelessAddon";
+    inline constexpr std::string_view kVersion = XLA_VERSION_STRING;
+    inline constexpr std::string_view kGitSha = XLA_GIT_SHA;
+
+    // The module this add-on is designed to sit next to.
+    inline constexpr std::string_view kCompanionName = "OpenPreCEPatch";
+} // namespace xla

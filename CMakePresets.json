@@ -1,0 +1,106 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "win-x86",
+      "displayName": "Windows x86 (Visual Studio 2022/2026)",
+      "description": "Win32 Release/Debug build of XLivelessAddon.asi plus the native tests.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/win-x86",
+      "cacheVariables": {
+        "XLA_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "win-x86-vs2022",
+      "displayName": "Windows x86 (Visual Studio 2022)",
+      "description": "For machines with VS 2022 instead of VS 2026.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/win-x86-vs2022",
+      "cacheVariables": {
+        "XLA_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "win-x86-deploy",
+      "displayName": "Windows x86 + deploy to %GTAIV_DIR%",
+      "description": "Configures the same build and copies the ASI/INI into GTAIV_DIR after a build.",
+      "inherits": "win-x86",
+      "binaryDir": "${sourceDir}/build/win-x86",
+      "cacheVariables": {
+        "XLA_GAME_DIR": "$env{GTAIV_DIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configurePreset": "win-x86",
+      "configuration": "Release"
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "configurePreset": "win-x86",
+      "configuration": "Debug"
+    },
+    {
+      "name": "release-vs2022",
+      "displayName": "Release (VS 2022)",
+      "configurePreset": "win-x86-vs2022",
+      "configuration": "Release"
+    },
+    {
+      "name": "package",
+      "displayName": "Release + CPack zip",
+      "configurePreset": "win-x86",
+      "configuration": "Release",
+      "targets": [ "package" ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "displayName": "Release",
+      "configurePreset": "win-x86",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "configurePreset": "win-x86",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release-vs2022",
+      "displayName": "Release (VS 2022)",
+      "configurePreset": "win-x86-vs2022",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "release",
+      "displayName": "Release zip",
+      "configurePreset": "win-x86",
+      "configurations": [ "Release" ]
+    }
+  ]
+}

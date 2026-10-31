@@ -5,8 +5,8 @@ The launcher tables and the `[v1005]` NOP plan are recovered data: signature
 strings, offsets, lengths, stored bytes, fill values, jump-target entries, the
 install rows (opcode + hook) and the collectors. This check parses the current
 sources, resolves every `ops::` window / `Byte(Opcode::…)` back to the bytes it
-writes, and compares the result with a committed golden captured from the
-pre-modular source:
+writes and every named `constexpr` site offset back to its integer, and compares
+the result with a committed golden captured from the pre-modular source:
 
   tests/skip_launcher_tables.tsv  25 entries, 32 write rows, 2 collectors,
                                   the DFA capture pattern/offset, 8 install rows,
@@ -243,6 +243,30 @@ def resolve_bytes(expr: str, arrays: dict[str, list[int]]) -> list[int] | None:
     return arrays[expr]
 
 
+def parse_int_constants(text: str) -> dict[str, int]:
+    """Resolve `constexpr <int type> kName = <literal>;` to its value.
+
+    The tables name their site offsets (a bare +34 or -165 in a row is not
+    reviewable), so the parser has to follow the identifier back to the number
+    before it can render the golden.
+    """
+    values: dict[str, int] = {}
+    for match in re.finditer(
+            r"(?:inline\s+)?constexpr\s+(?:std::)?(?:u?int(?:16|32)_t|size_t|int)\s+"
+            r"(\w+)\s*=\s*(-?(?:0[xX][0-9A-Fa-f]+|\d+))\s*;", text):
+        values[match.group(1)] = int(match.group(2), 0)
+    return values
+
+
+def parse_integer(expr: str, constants: dict[str, int], what: str) -> int:
+    expr = expr.strip()
+    if expr in constants:
+        return constants[expr]
+    if re.fullmatch(r"-?(?:0[xX][0-9A-Fa-f]+|\d+)", expr):
+        return int(expr, 0)
+    raise SystemExit(f"table_parity: cannot resolve {what} {expr!r}")
+
+
 def parse_fill(expr: str, opcodes: dict[str, int]) -> int | None:
     expr = expr.strip()
     if expr in ("0", ""):
@@ -261,7 +285,7 @@ def parse_fill(expr: str, opcodes: dict[str, int]) -> int | None:
 
 
 def parse_writes(text: str, arrays: dict[str, list[int]], opcodes: dict[str, int],
-                 jump_target: int) -> dict[str, list[dict]]:
+                 jump_target: int, constants: dict[str, int]) -> dict[str, list[dict]]:
     writes: dict[str, list[dict]] = {}
     for name, body in blocks(
             text, r"(?:constexpr\s+|const\s+)?SkipLauncherWrite\s+(\w+)\s*\[\s*\]\s*="):
@@ -270,8 +294,8 @@ def parse_writes(text: str, arrays: dict[str, list[int]], opcodes: dict[str, int
             fields = split_fields(group)
             if len(fields) != 5:
                 raise SystemExit(f"table_parity: {name}: expected 5 fields, got {len(fields)}")
-            offset = int(fields[0])
-            length = int(fields[1])
+            offset = parse_integer(fields[0], constants, "write offset")
+            length = parse_integer(fields[1], constants, "write length")
             bytes_value = resolve_bytes(fields[2], arrays)
             fill = parse_fill(fields[3], opcodes)
             jump_expr = fields[4].strip()
@@ -308,14 +332,13 @@ def parse_entries(text: str) -> list[dict]:
     return entries
 
 
-def parse_length(expr: str) -> int:
+def parse_length(expr: str, constants: dict[str, int]) -> int:
     expr = expr.strip()
-    if re.fullmatch(r"\d+", expr):
-        return int(expr)
-    raise SystemExit(f"table_parity: cannot resolve length {expr!r}")
+    return parse_integer(expr, constants, "length")
 
 
-def parse_collectors(text: str, arrays: dict[str, list[int]]) -> list[dict]:
+def parse_collectors(text: str, arrays: dict[str, list[int]],
+                     constants: dict[str, int]) -> list[dict]:
     body = block_body(text, r"SkipLauncherCollector\s+kSkipLauncherCollectors\s*\[\s*\]\s*=")
     if body is None:
         raise SystemExit("table_parity: kSkipLauncherCollectors not found")
@@ -337,7 +360,7 @@ def parse_collectors(text: str, arrays: dict[str, list[int]]) -> list[dict]:
         # `kCollectorStubLength` is std::size(ops::kMovAl1RetNop) in the source;
         # derive it from the stub the row names instead of hard-coding 4 here.
         length = len(stub_bytes) if length_expr == "kCollectorStubLength" \
-            else parse_length(length_expr)
+            else parse_length(length_expr, constants)
         collectors.append({"pattern": pattern, "target": target,
                            "bytes": stub_bytes, "length": length})
     return collectors
@@ -351,7 +374,8 @@ def parse_capture(text: str) -> tuple[str, int]:
     return pattern_match.group(1), int(offset_match.group(1))
 
 
-def parse_installs(text: str, opcodes: dict[str, int]) -> dict[str, list[dict]]:
+def parse_installs(text: str, opcodes: dict[str, int],
+                   constants: dict[str, int]) -> dict[str, list[dict]]:
     installs: dict[str, list[dict]] = {}
     for table in ("kSkipLauncherDfaInstalls", "kSkipLauncherRomInstalls"):
         body = block_body(text, rf"SkipLauncherInstall\s+{table}\s*\[\s*\]\s*=")
@@ -363,7 +387,7 @@ def parse_installs(text: str, opcodes: dict[str, int]) -> dict[str, list[dict]]:
             if len(fields) != 4:
                 raise SystemExit(f"table_parity: {table} row has {len(fields)} fields")
             signature = fields[0].strip().strip('"')
-            offset = int(fields[1])
+            offset = parse_integer(fields[1], constants, f"{table} site offset")
             opcode_expr = fields[2].strip()
             if opcode_expr.startswith("Opcode::"):
                 opcode = opcodes[opcode_expr.split("::", 1)[1]]
@@ -492,11 +516,12 @@ def validate(tables: dict) -> None:
 def parse_tables(text: str, common: str, jump_target: int) -> dict:
     opcodes = parse_opcodes(common)
     arrays = parse_byte_arrays(common, opcodes) | parse_byte_arrays(text, opcodes)
-    writes = parse_writes(text, arrays, opcodes, jump_target)
+    constants = parse_int_constants(text)
+    writes = parse_writes(text, arrays, opcodes, jump_target, constants)
     entries = parse_entries(text)
-    collectors = parse_collectors(text, arrays)
+    collectors = parse_collectors(text, arrays, constants)
     capture = parse_capture(text)
-    installs = parse_installs(text, opcodes)
+    installs = parse_installs(text, opcodes, constants)
     targets, collected = parse_collected(text)
     tables = {"entries": entries, "writes": writes, "collectors": collectors,
               "capture": capture, "installs": installs, "targets": targets,

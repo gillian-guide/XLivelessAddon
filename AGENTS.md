@@ -32,7 +32,9 @@ ctest --preset release
 ```
 
 Win32 only (the game is 32-bit; the hook bodies assume x86). The PE test in CTest asserts the
-artifact is a 32-bit DLL based at `0x10000000` with the GUI subsystem and a USER32 import.
+artifact is a 32-bit DLL based at `0x10000000` with the GUI subsystem, a USER32 import and the
+static CRT (`/MT`; an MSVCP140/VCRUNTIME140 import is a failure, so the game folder needs no
+Visual C++ redistributable).
 
 Rules learned the hard way:
 

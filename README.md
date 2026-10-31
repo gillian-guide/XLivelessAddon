@@ -25,6 +25,8 @@ as a companion, as some features belong there; it also works on its own.
 2. Extract the archive next to `GTAIV.exe` and `EFLC.exe`.
 3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what applied.
 
+The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
+
 ## Supported game versions
 
 | compact | version | status |

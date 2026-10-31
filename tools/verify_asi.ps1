@@ -82,6 +82,15 @@ else {
         if ($imports -notcontains 'user32.dll') {
             $failures.Add('USER32.dll is not imported')
         }
+
+        # The ASI links the static CRT, so the game folder needs no VC++
+        # redistributable. A dynamic-CRT import is a build-contract regression.
+        foreach ($runtime in @('msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+                               'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            if ($imports -contains $runtime) {
+                $failures.Add(("{0} is imported; the CRT must be linked statically (/MT)" -f $runtime))
+            }
+        }
     }
 }
 
@@ -90,5 +99,5 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Host ("{0}: PE32 i386, base 0x10000000, GUI subsystem, USER32 imported" -f $resolved)
+Write-Host ("{0}: PE32 i386, base 0x10000000, GUI subsystem, USER32 imported, static CRT" -f $resolved)
 exit 0

@@ -20,6 +20,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# The ASI must load on a machine that has no Visual C++ redistributable: the game
+# folder is the whole installation. FusionFix (staticruntime "On") and the other
+# OpenZDecomp modules link the static CRT the same way.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if(NOT MSVC)
     message(FATAL_ERROR "XLivelessAddon targets Windows/MSVC only (the ASI is a Win32 DLL).")
 endif()

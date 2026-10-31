@@ -21,11 +21,14 @@ jobs:
         with:
           submodules: recursive
 
+      # No -G: use whichever Visual Studio generator the image provides (the
+      # windows-latest image moves between VS 2022 and VS 2026). -A Win32 is the
+      # part that matters, because the game and the ASI are 32-bit.
       - name: Configure
-        run: >
-          cmake -S . -B build/win-x86
-          -G "Visual Studio 17 2022" -A Win32
-          -DXLA_BUILD_TESTS=ON
+        shell: pwsh
+        run: |
+          cmake --version
+          cmake -S . -B build/win-x86 -A Win32 -DXLA_BUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build/win-x86 --config Release -- /m
@@ -33,19 +36,24 @@ jobs:
       - name: Test
         run: ctest --test-dir build/win-x86 -C Release --output-on-failure
 
-      - name: Package
-        run: cpack --config build/win-x86/CPackConfig.cmake -C Release -B dist
+      # The CI artifact is deliberately just the two files a user installs.
+      - name: Package (ASI + INI)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Force `
+            -Path build/win-x86/bin/XLivelessAddon.asi, build/win-x86/bin/XLivelessAddon.ini `
+            -DestinationPath dist/XLivelessAddon.zip
+          $hash = (Get-FileHash dist/XLivelessAddon.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  XLivelessAddon.zip" | Set-Content dist/XLivelessAddon.zip.sha256
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: XLivelessAddon
           path: |
-            build/win-x86/bin/XLivelessAddon.asi
-            build/win-x86/bin/XLivelessAddon.map
-            build/win-x86/bin/XLivelessAddon.ini
-            dist/*.zip
-            dist/*.sha256
+            dist/XLivelessAddon.zip
+            dist/XLivelessAddon.zip.sha256
           if-no-files-found: error
 
   release:
@@ -56,15 +64,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: XLivelessAddon
           path: artifact
 
-      - name: Attach the release zip
+      - name: Attach the zip
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifact/dist/*.zip
-            artifact/dist/*.sha256
+            artifact/dist/XLivelessAddon.zip
+            artifact/dist/XLivelessAddon.zip.sha256

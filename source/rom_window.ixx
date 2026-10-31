@@ -123,9 +123,9 @@ namespace xla::rom_window
                                4))
             {
                 injector::WriteMemory<std::uint32_t>(
-                    static_cast<std::uintptr_t>(messageSlot), kMessage, true);
+                    injector::raw_ptr(static_cast<std::uintptr_t>(messageSlot)), kMessage, true);
                 injector::WriteMemory<std::uint32_t>(
-                    static_cast<std::uintptr_t>(windowSlot),
+                    injector::raw_ptr(static_cast<std::uintptr_t>(windowSlot)),
                     static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
                         rom_window::CreateServiceWindow())),
                     true);
@@ -148,8 +148,10 @@ namespace xla::rom_window
         if (!send.empty())
         {
             auto* site = send.get(0).get<void>();
-            injector::MakeNOP(site, 6, true);
-            injector::MakeCALL(site, reinterpret_cast<void*>(&SendMessageStub), true);
+            injector::MakeNOP(injector::raw_ptr(site), 6, true);
+            injector::MakeCALL(injector::raw_ptr(site),
+                               injector::raw_ptr(reinterpret_cast<void*>(&SendMessageStub)),
+                               true);
             log::Write("rom: SendMessage bypass installed");
         }
         else

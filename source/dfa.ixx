@@ -104,8 +104,10 @@ namespace xla::dfa
             hook::pattern second{"6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57"};
             if (!first.empty() && !second.empty())
             {
-                injector::MakeJMP(anchor.get(0).get<void>(), first.get(0).get<void>(), true);
-                injector::MakeJMP(anchor.get(1).get<void>(), second.get(0).get<void>(), true);
+                injector::MakeJMP(injector::raw_ptr(anchor.get(0).get<void>()),
+                                  injector::raw_ptr(first.get(0).get<void>()), true);
+                injector::MakeJMP(injector::raw_ptr(anchor.get(1).get<void>()),
+                                  injector::raw_ptr(second.get(0).get<void>()), true);
                 log::Write("dfa: secondary jump targets installed");
             }
             else

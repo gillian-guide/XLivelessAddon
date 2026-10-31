@@ -172,7 +172,6 @@ namespace xla
         constexpr std::uint8_t kNopByte = 0x90;
         constexpr std::uint8_t kCallOpcode = 0xE8;
         constexpr std::uint8_t kJumpOpcode = 0xE9;
-        constexpr std::size_t kDwordLength = 4;
         constexpr std::size_t kBranchLength = 5; // E8/E9 <rel32>
         constexpr std::uint16_t kCollectorStubLength = 4;
 
@@ -499,21 +498,18 @@ namespace xla
                         {
                             continue; // the original skips when the target entry was absent
                         }
-                        if (!InBounds(image, site, kDwordLength))
+                        // The recorded site is the rel32 itself; the E9 opcode sits one
+                        // byte before it (row offset 2 of the same entry writes it). The
+                        // branch is rewritten whole, so MakeJMP derives the displacement
+                        // from the end of the instruction instead of the literal dword.
+                        auto* branch = site - 1;
+                        if (!InBounds(image, branch, kBranchLength))
                         {
                             return std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
                                                               "site out of bounds"});
                         }
-
-                        // The recorded site is the rel32 itself; the E9 opcode sits one
-                        // byte before it, so the displacement is measured from the end
-                        // of the dword.
-                        injector::WriteMemory<std::uint32_t>(
-                            site,
-                            static_cast<std::uint32_t>(
-                                reinterpret_cast<std::uintptr_t>(target) -
-                                (reinterpret_cast<std::uintptr_t>(site) + kDwordLength)),
-                            true);
+                        injector::MakeJMP(injector::raw_ptr(branch), injector::raw_ptr(target),
+                                          true);
                         report.jumpInstalled = true;
                     }
                     else
@@ -526,13 +522,14 @@ namespace xla
 
                         if (write.bytes)
                         {
-                            injector::WriteMemoryRaw(
-                                site, const_cast<std::uint8_t*>(write.bytes), write.length, true);
+                            injector::WriteMemoryRaw(injector::raw_ptr(site),
+                                                     const_cast<std::uint8_t*>(write.bytes),
+                                                     write.length, true);
                         }
                         else
                         {
                             // Every fill row in the tables is kNopByte.
-                            injector::MakeNOP(site, write.length, true);
+                            injector::MakeNOP(injector::raw_ptr(site), write.length, true);
                         }
                     }
 
@@ -574,7 +571,7 @@ namespace xla
                                                           "site out of bounds"});
                     }
 
-                    injector::WriteMemoryRaw(site, const_cast<std::uint8_t*>(collector.bytes),
+                    injector::WriteMemoryRaw(injector::raw_ptr(site), const_cast<std::uint8_t*>(collector.bytes),
                                              collector.length, true);
                     ++report.collectorWrites;
                 }
@@ -589,7 +586,7 @@ namespace xla
             if (!capture.empty())
             {
                 report.createFileSlot = injector::ReadMemory<std::uint32_t>(
-                    capture.get(0).get<std::uint8_t>() + kDfaCaptureSlotOffset);
+                    injector::raw_ptr(capture.get(0).get<std::uint8_t>() + kDfaCaptureSlotOffset));
             }
 
             // Publish (or clear) the captured slot as part of the pass, so the
@@ -627,13 +624,23 @@ namespace xla
                                                           "site out of bounds"});
                     }
 
-                    injector::WriteMemory<std::uint8_t>(site, install.opcode, true);
-                    injector::WriteMemory<std::uint32_t>(
-                        site + 1,
-                        static_cast<std::uint32_t>(destination - (reinterpret_cast<std::uintptr_t>(
-                                                                       site) +
-                                                                   kBranchLength)),
-                        true);
+                    // The recovered table's opcode column is only ever E8 (call) or E9
+                    // (jump); anything else is a table defect, not a byte to write.
+                    if (install.opcode == kCallOpcode)
+                    {
+                        injector::MakeCALL(injector::raw_ptr(site),
+                                           injector::raw_ptr(destination), true);
+                    }
+                    else if (install.opcode == kJumpOpcode)
+                    {
+                        injector::MakeJMP(injector::raw_ptr(site),
+                                          injector::raw_ptr(destination), true);
+                    }
+                    else
+                    {
+                        return std::unexpected(PatchError{PatchErrorCode::invalid_input,
+                                                          "unsupported branch opcode"});
+                    }
                     ++applied;
                 }
                 return {};
@@ -675,14 +682,9 @@ namespace xla
                                                               "site out of bounds"});
                         }
 
-                        injector::WriteMemory<std::uint8_t>(site, kJumpOpcode, true);
-                        injector::WriteMemory<std::uint32_t>(
-                            site + 1,
-                            static_cast<std::uint32_t>(
-                                reinterpret_cast<std::uintptr_t>(
-                                    targetPattern.get(0).get<std::uint8_t>()) -
-                                (reinterpret_cast<std::uintptr_t>(site) + kBranchLength)),
-                            true);
+                        injector::MakeJMP(
+                            injector::raw_ptr(site),
+                            injector::raw_ptr(targetPattern.get(0).get<std::uint8_t>()), true);
                         ++report.collectedInstalls;
                     }
                 }

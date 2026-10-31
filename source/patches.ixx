@@ -151,8 +151,10 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint8_t>(site + 3, 0xE9, true);
-                injector::WriteMemory<std::uint32_t>(site + 4, 0x16, true);
+                // The JZ rel8 at +3 (`74 19`) continues at +0x1E. An E9 keeps the same
+                // destination, so the literal +0x16 the original stored is derived here.
+                injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + 0x1E),
+                                  true);
                 log::Write("core: branch rewrite [1002-1004] applied");
             }
             else
@@ -191,8 +193,8 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::MakeNOP(site, 2, true);
-                injector::MakeNOP(site + 5, 2, true);
+                injector::MakeNOP(injector::raw_ptr(site), 2, true);
+                injector::MakeNOP(injector::raw_ptr(site + 5), 2, true);
                 log::Write("core: RGSC init [1000-1001] nops applied");
             }
             else
@@ -220,8 +222,10 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(site + 3, 0xC033, true); // xor eax,eax
-                injector::WriteMemory<std::uint16_t>(site + 10, 0xA390, true); // nop; mov [],eax
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 3), 0xC033,
+                                                     true); // xor eax,eax
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site + 10), 0xA390,
+                                                     true); // nop; mov [],eax
                 log::Write("core: RGSC result reset [1002-1004] applied");
             }
             else
@@ -239,10 +243,10 @@ namespace xla::patches
             hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
             if (pattern.size() >= 2)
             {
-                injector::WriteMemory<std::uint32_t>(pattern.get(0).get<void>(), kMovAl1RetNop,
-                                                     true);
-                injector::WriteMemory<std::uint32_t>(pattern.get(1).get<void>(), kMovAl1RetNop,
-                                                     true);
+                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(0).get<void>()),
+                                                     kMovAl1RetNop, true);
+                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(1).get<void>()),
+                                                     kMovAl1RetNop, true);
                 log::Write("core: fixed sequences patched (two matches)");
             }
             else
@@ -256,10 +260,12 @@ namespace xla::patches
             hook::pattern pattern{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
             if (pattern.size() >= 2)
             {
-                injector::WriteMemory<std::uint32_t>(pattern.get(pattern.size() - 2).get<void>(),
-                                                     kMovAl1RetNop, true);
-                injector::WriteMemory<std::uint32_t>(pattern.get(pattern.size() - 1).get<void>(),
-                                                     kMovAl1RetNop, true);
+                injector::WriteMemory<std::uint32_t>(
+                    injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()), kMovAl1RetNop,
+                    true);
+                injector::WriteMemory<std::uint32_t>(
+                    injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()), kMovAl1RetNop,
+                    true);
                 log::Write("core: fixed sequences patched (last two matches)");
             }
             else
@@ -274,8 +280,9 @@ namespace xla::patches
             if (!pattern.empty() && efc != nullptr)
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(site, 0xC033, true); // xor eax,eax
-                injector::MakeJMP(site + 2, efc, true);
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xC033,
+                                                     true); // xor eax,eax
+                injector::MakeJMP(injector::raw_ptr(site + 2), injector::raw_ptr(efc), true);
                 log::Write("core: RGSC/EFC skip [1005-1008] applied");
             }
             else
@@ -292,11 +299,11 @@ namespace xla::patches
                 auto* site = pattern.get(0).get<std::uint8_t>();
                 if (!build::Is(build, {build::Id::v1000, build::Id::v1010}))
                 {
-                    injector::WriteMemory<std::uint16_t>(site, 0xA390, true);
+                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xA390, true);
                 }
                 else
                 {
-                    injector::WriteMemory<std::uint8_t>(site + 1, 0x1D, true);
+                    injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1), 0x1D, true);
                 }
                 log::Write("core: RGSC store neutralised");
             }
@@ -312,8 +319,8 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(site, 0xC033, true);
-                injector::MakeNOP(site + 2, 4, true);
+                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), 0xC033, true);
+                injector::MakeNOP(injector::raw_ptr(site + 2), 4, true);
                 log::Write("core: missing-test skip [v1005] (1/9) applied");
             }
             else
@@ -366,8 +373,9 @@ namespace xla::patches
             if (!pattern.empty())
             {
                 auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint8_t>(site, 0xB8, true); // mov eax, ...
-                injector::WriteMemory<std::uint32_t>(site + 1, 1, true);
+                injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site), 0xB8,
+                                                    true); // mov eax, ...
+                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(site + 1), 1, true);
                 log::Write("core: DLC token activation (2/2) applied");
             }
             else
@@ -413,8 +421,8 @@ namespace xla::patches
         {
             g_skipIntroResume =
                 static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pattern.get(0).get<void>()));
-            injector::MakeJMP(pattern.get_first(-6),
-                              reinterpret_cast<void*>(&SkipIntroBody), true);
+            injector::MakeJMP(injector::raw_ptr(pattern.get_first(-6)),
+                              injector::raw_ptr(reinterpret_cast<void*>(&SkipIntroBody)), true);
             log::Info("intro: 300 ms body installed (resume {:08X})", g_skipIntroResume);
         }
         else
@@ -432,8 +440,8 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(pattern.get(0).get<void>(23),
-                                   reinterpret_cast<void*>(&SkipMenuBody), true)
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(23)),
+                                   injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1002-1008]");
             return;
@@ -445,8 +453,8 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(pattern.get(0).get<void>(2),
-                                   reinterpret_cast<void*>(&SkipMenuBody), true)
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(2)),
+                                   injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1000]");
             return;
@@ -457,8 +465,8 @@ namespace xla::patches
         if (!pattern.empty())
         {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(pattern.get(0).get<void>(2),
-                                   reinterpret_cast<void*>(&SkipMenuBody), true)
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(2)),
+                                   injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
             log::Write("menu: skip installed [1001]");
             return;

@@ -525,9 +525,10 @@ namespace xla::windowed
             return false;
         }
 
-        g_inputOriginal = injector::MakeCALL(pattern.get(0).get<void>(),
-                                             reinterpret_cast<void*>(&FocusLossInput), true)
-                              .get<void*>();
+        g_inputOriginal =
+            injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>()),
+                               injector::raw_ptr(reinterpret_cast<void*>(&FocusLossInput)), true)
+                .get<void*>();
         if (g_inputOriginal == nullptr)
         {
             return false;
@@ -549,12 +550,12 @@ namespace xla::windowed
             return;
         }
 
-        injector::MakeNOP(pattern.get(0).get<void>(), 6, true);
-        injector::MakeCALL(pattern.get(0).get<void>(),
-                           reinterpret_cast<void*>(&DefWindowProcWProxy), true);
-        injector::MakeNOP(pattern.get(1).get<void>(), 6, true);
-        injector::MakeCALL(pattern.get(1).get<void>(),
-                           reinterpret_cast<void*>(&DefWindowProcAProxy), true);
+        injector::MakeNOP(injector::raw_ptr(pattern.get(0).get<void>()), 6, true);
+        injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>()),
+                           injector::raw_ptr(reinterpret_cast<void*>(&DefWindowProcWProxy)), true);
+        injector::MakeNOP(injector::raw_ptr(pattern.get(1).get<void>()), 6, true);
+        injector::MakeCALL(injector::raw_ptr(pattern.get(1).get<void>()),
+                           injector::raw_ptr(reinterpret_cast<void*>(&DefWindowProcAProxy)), true);
         log::Write("windowed: DefWindowProc shims installed");
     }
 } // namespace xla::windowed

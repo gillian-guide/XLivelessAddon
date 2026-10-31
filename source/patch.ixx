@@ -48,7 +48,7 @@ export namespace xla::patch
             return false;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        injector::WriteMemory<T>(target, value, true);
+        injector::WriteMemory<T>(injector::raw_ptr(target), value, true);
         log::Info("{}: wrote {:#x} at {:08X}", label, static_cast<std::uint64_t>(value),
                   reinterpret_cast<std::uintptr_t>(target));
         return true;
@@ -61,7 +61,7 @@ export namespace xla::patch
             return false;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        injector::MakeNOP(target, count, true);
+        injector::MakeNOP(injector::raw_ptr(target), count, true);
         log::Info("{}: nop {} byte(s) at {:08X}", label, count,
                   reinterpret_cast<std::uintptr_t>(target));
         return true;
@@ -74,7 +74,7 @@ export namespace xla::patch
             return false;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        injector::MakeRET(target, static_cast<std::uint16_t>(pop_bytes), true);
+        injector::MakeRET(injector::raw_ptr(target), static_cast<std::uint16_t>(pop_bytes), true);
         log::Info("{}: ret {} at {:08X}", label, pop_bytes,
                   reinterpret_cast<std::uintptr_t>(target));
         return true;
@@ -88,7 +88,8 @@ export namespace xla::patch
             return false;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        injector::MakeJMP(target, const_cast<void*>(destination), true);
+        injector::MakeJMP(injector::raw_ptr(target),
+                          injector::raw_ptr(const_cast<void*>(destination)), true);
         log::Info("{}: jmp to {:08X} at {:08X}", label,
                   reinterpret_cast<std::uintptr_t>(destination),
                   reinterpret_cast<std::uintptr_t>(target));
@@ -103,7 +104,9 @@ export namespace xla::patch
             return nullptr;
         }
         auto* target = static_cast<std::uint8_t*>(site.address) + offset;
-        void* previous = injector::MakeCALL(target, destination, true).get<void*>();
+        void* previous =
+            injector::MakeCALL(injector::raw_ptr(target), injector::raw_ptr(destination), true)
+                .get<void*>();
         log::Info("{}: call to {:08X} at {:08X} (was {:08X})", label,
                   reinterpret_cast<std::uintptr_t>(destination),
                   reinterpret_cast<std::uintptr_t>(target),

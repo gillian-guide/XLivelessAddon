@@ -187,16 +187,18 @@ def pattern_scans(text: str) -> list[tuple[int, tuple[str, ...]]]:
             break
 
         literal = "".join(value)
+        units = canonical_units(literal)
+        if units is None:
+            continue
         # Hooking.Patterns emits one wildcard byte per '?', so "??" is two bytes.
         # Every signature in this tree spells one wildcard as "?"; a copied-in
-        # "??" would silently widen the pattern, so reject it outright.
+        # "??" would silently widen the pattern, so reject it outright. Only
+        # signature-shaped literals are linted, so prose is not affected.
         if "??" in literal:
             raise MalformedSignature(
                 f"'??' in {literal!r}: Hooking.Patterns reads it as two wildcard bytes; "
                 "write \"? ?\" for two wildcards or \"?\" for one")
-        units = canonical_units(literal)
-        if units is not None:
-            found.append((start_line, tuple(units)))
+        found.append((start_line, tuple(units)))
     return found
 
 

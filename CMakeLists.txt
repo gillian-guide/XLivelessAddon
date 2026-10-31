@@ -174,6 +174,28 @@ if(XLA_BUILD_TESTS)
         COMMAND xla_tests "${CMAKE_CURRENT_SOURCE_DIR}/data"
                 "${CMAKE_CURRENT_BINARY_DIR}/test-work")
 
+    # The recovered scan list and its order are data: the parity check parses
+    # every module interface unit and compares it with the committed golden
+    # (tests/signature_golden.tsv) captured from the pre-modular source.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(NOT Python3_Interpreter_FOUND)
+        find_program(XLA_PYTHON_EXECUTABLE NAMES python3 python)
+        if(XLA_PYTHON_EXECUTABLE)
+            set(Python3_EXECUTABLE "${XLA_PYTHON_EXECUTABLE}")
+            set(Python3_Interpreter_FOUND TRUE)
+        endif()
+    endif()
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME xla_signature_parity
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/signature_parity.py"
+                    --source "${CMAKE_CURRENT_SOURCE_DIR}/source"
+                    --golden "${CMAKE_CURRENT_SOURCE_DIR}/tests/signature_golden.tsv")
+    else()
+        message(WARNING
+            "Python 3 not found: the xla_signature_parity test is not registered.")
+    endif()
+
     # The shipped ASI must be a Win32 DLL at the add-on's preferred base with the
     # expected subsystem and imports.
     find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)

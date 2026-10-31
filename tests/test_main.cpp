@@ -552,6 +552,9 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    // Keep the module log inside the work directory instead of next to the test exe.
+    xla::log::SetPath(g_workDirectory / "xla_tests.log");
+
     // Each case is named before it runs, so a crash points at the last line.
     const auto run = [&](const char* name, const auto& test) {
         std::printf("-- %s\n", name);

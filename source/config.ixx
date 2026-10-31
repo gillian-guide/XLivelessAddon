@@ -111,15 +111,79 @@ export namespace xla::config
 
     namespace detail
     {
-        inline bool ParseFlag(std::string_view value)
+        // `std::atoi`'s base-10 grammar without the library call: skip leading white
+        // space, accept one optional sign, consume digits, stop at the first other
+        // character. No digits (or an empty value) is 0, exactly like atoi. Never
+        // throws, which is the point: a bad INI value must not escape DllMain.
+        [[nodiscard]] constexpr long long ParseIntPrefix(std::string_view text) noexcept
         {
-            const std::string text{value};
-            return std::atoi(text.c_str()) != 0;
+            std::size_t index = 0;
+            while (index < text.size() &&
+                   (text[index] == ' ' || text[index] == '\t' || text[index] == '\n' ||
+                    text[index] == '\v' || text[index] == '\f' || text[index] == '\r'))
+            {
+                ++index;
+            }
+
+            bool negative = false;
+            if (index < text.size() && (text[index] == '+' || text[index] == '-'))
+            {
+                negative = text[index] == '-';
+                ++index;
+            }
+
+            long long value = 0;
+            for (; index < text.size() && text[index] >= '0' && text[index] <= '9'; ++index)
+            {
+                const int digit = text[index] - '0';
+                if (value > (LLONG_MAX - digit) / 10)
+                {
+                    value = LLONG_MAX;
+                    continue;
+                }
+                value = value * 10 + digit;
+            }
+            return negative ? -value : value;
         }
 
-        // First present key wins: the add-on's own INI, then the legacy one.
-        inline std::string ReadOption(const ini::File* own, const ini::File* legacy,
-                                      std::string_view key, std::string_view defaultValue)
+        // The table that maps each INI key to the `Options` member it fills. The
+        // member's initializer is the option's default, so a key that is absent from
+        // both files keeps it and there is no second copy of the default to drift.
+        struct BoolOption
+        {
+            std::string_view key;
+            bool Options::* member;
+        };
+
+        struct StringOption
+        {
+            std::string_view key;
+            std::string Options::* member;
+        };
+
+        inline constexpr std::array<BoolOption, 9> kBoolOptions{{
+            {"SkipLauncher", &Options::skipLauncher},
+            {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
+            {"SkipWebConnect", &Options::skipWebConnect},
+            {"SkipIntro", &Options::skipIntro},
+            {"SkipMenu", &Options::skipMenu},
+            {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},
+            {"BorderlessWindowed", &Options::borderlessWindowed},
+            {"VRAMFix", &Options::vramFix},
+            {"LocalSettingsPath", &Options::localSettingsPath},
+        }};
+
+        inline constexpr std::array<StringOption, 2> kStringOptions{{
+            {"CustomSavePath", &Options::customSavePath},
+            {"CustomSettingsPath", &Options::customSettingsPath},
+        }};
+
+        // The first present value for `key`: the add-on's own INI, then the legacy
+        // one, in `kSections` order (the list order is the precedence, not the file
+        // order - the shipped flat ZolikaPatch.ini relies on it).
+        inline std::optional<std::string> FindOption(const ini::File* own,
+                                                    const ini::File* legacy,
+                                                    std::string_view key)
         {
             if (own != nullptr)
             {
@@ -127,7 +191,7 @@ export namespace xla::config
                 {
                     if (auto value = own->Read(section, key))
                     {
-                        return *value;
+                        return value;
                     }
                 }
             }
@@ -137,13 +201,22 @@ export namespace xla::config
                 {
                     if (auto value = legacy->Read(section, key))
                     {
-                        return *value;
+                        return value;
                     }
                 }
             }
-            return std::string(defaultValue);
+            return std::nullopt;
         }
     } // namespace detail
+
+    // The add-on's flag rule, unchanged from the original's `atoi(value) != 0`: any
+    // non-zero integer prefix enables the option, so "2" and "-1" enable and an empty
+    // or non-numeric value disables (it does not fall back to the default).
+    // Exported so the test suite can pin the grammar.
+    [[nodiscard]] inline bool ParseFlag(std::string_view value) noexcept
+    {
+        return detail::ParseIntPrefix(value) != 0;
+    }
 
     // Creates XLivelessAddon.ini in `directory` when it does not exist and
     // returns its path.
@@ -207,25 +280,24 @@ export namespace xla::config
         const ini::File* ownFile = own ? &*own : nullptr;
         const ini::File* legacyFile = legacy ? &*legacy : nullptr;
 
-        const auto option = [&](std::string_view key, std::string_view defaultValue) {
-            return detail::ReadOption(ownFile, legacyFile, key, defaultValue);
-        };
-        const auto flag = [&](std::string_view key, std::string_view defaultValue) {
-            return detail::ParseFlag(option(key, defaultValue));
-        };
-
+        // One pass over the key→member table. A key that neither file has keeps the
+        // member's default; an empty or non-numeric flag value is false (the original
+        // `atoi("") != 0` rule), not the default.
         Options& options = result.options;
-        options.customSavePath = option("CustomSavePath", "");
-        options.customSettingsPath = option("CustomSettingsPath", "");
-        options.skipLauncher = flag("SkipLauncher", "1");
-        options.removeRegistryPathDependency = flag("RemoveRegistryPathDependency", "1");
-        options.skipWebConnect = flag("SkipWebConnect", "0");
-        options.skipIntro = flag("SkipIntro", "0");
-        options.skipMenu = flag("SkipMenu", "0");
-        options.doNotPauseOnMinimize = flag("DoNotPauseOnMinimize", "0");
-        options.borderlessWindowed = flag("BorderlessWindowed", "0");
-        options.vramFix = flag("VRAMFix", "1");
-        options.localSettingsPath = flag("LocalSettingsPath", "0");
+        for (const detail::BoolOption& row : detail::kBoolOptions)
+        {
+            if (auto value = detail::FindOption(ownFile, legacyFile, row.key))
+            {
+                options.*(row.member) = ParseFlag(*value);
+            }
+        }
+        for (const detail::StringOption& row : detail::kStringOptions)
+        {
+            if (auto value = detail::FindOption(ownFile, legacyFile, row.key))
+            {
+                options.*(row.member) = std::move(*value);
+            }
+        }
         return result;
     }
 

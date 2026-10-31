@@ -199,6 +199,187 @@ namespace
         std::filesystem::remove_all(directory, error);
     }
 
+    void TestConfigFlagGrammar()
+    {
+        struct Case
+        {
+            std::string_view text;
+            bool expected;
+        };
+        // The original add-on's rule is `atoi(value) != 0`: a non-zero integer prefix
+        // enables, an empty or non-numeric value disables (it does not use the
+        // default), and there is no boolean vocabulary.
+        constexpr std::array<Case, 16> cases{{
+            {"1", true},   {"01", true},  {" 1 ", true}, {"1abc", true},
+            {"+1", true},  {"-1", true},  {"2", true},   {"-2", true},
+            {"0", false},  {"-0", false}, {"", false},   {"   ", false},
+            {"abc", false}, {"0x1", false}, {"1.0", true}, {"--1", false},
+        }};
+        for (const Case& test : cases)
+        {
+            CHECK_EQ(xla::config::ParseFlag(test.text), test.expected);
+        }
+    }
+
+    void TestConfigOptionTable()
+    {
+        const auto directory = MakeTempDirectory("option-table");
+
+        // An INI with no keys keeps every member's initializer.
+        WriteFile(directory / "XLivelessAddon.ini", "[Options]\n");
+        auto loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.options.skipLauncher, true);
+        CHECK_EQ(loaded.options.removeRegistryPathDependency, true);
+        CHECK_EQ(loaded.options.skipWebConnect, false);
+        CHECK_EQ(loaded.options.skipIntro, false);
+        CHECK_EQ(loaded.options.skipMenu, false);
+        CHECK_EQ(loaded.options.doNotPauseOnMinimize, false);
+        CHECK_EQ(loaded.options.borderlessWindowed, false);
+        CHECK_EQ(loaded.options.vramFix, true);
+        CHECK_EQ(loaded.options.localSettingsPath, false);
+        CHECK(loaded.options.customSavePath.empty());
+        CHECK(loaded.options.customSettingsPath.empty());
+
+        // Every option set to the opposite of its default: a key missing from the
+        // key->member table would leave its member at the default and fail here.
+        WriteFile(directory / "XLivelessAddon.ini",
+                  "[Options]\n"
+                  "SkipLauncher=0\n"
+                  "RemoveRegistryPathDependency=0\n"
+                  "SkipWebConnect=1\n"
+                  "SkipIntro=1\n"
+                  "SkipMenu=1\n"
+                  "DoNotPauseOnMinimize=1\n"
+                  "BorderlessWindowed=1\n"
+                  "VRAMFix=0\n"
+                  "LocalSettingsPath=1\n"
+                  "CustomSavePath=Saves\n"
+                  "CustomSettingsPath=Settings\n");
+        loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.options.skipLauncher, false);
+        CHECK_EQ(loaded.options.removeRegistryPathDependency, false);
+        CHECK_EQ(loaded.options.skipWebConnect, true);
+        CHECK_EQ(loaded.options.skipIntro, true);
+        CHECK_EQ(loaded.options.skipMenu, true);
+        CHECK_EQ(loaded.options.doNotPauseOnMinimize, true);
+        CHECK_EQ(loaded.options.borderlessWindowed, true);
+        CHECK_EQ(loaded.options.vramFix, false);
+        CHECK_EQ(loaded.options.localSettingsPath, true);
+        CHECK_EQ(loaded.options.customSavePath, std::string{"Saves"});
+        CHECK_EQ(loaded.options.customSettingsPath, std::string{"Settings"});
+
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+    }
+
+    void TestConfigSectionOrderAndDuplicates()
+    {
+        // kSections order decides precedence, not the order of the blocks in the
+        // file: MAIN, then Options, then the legacy groups.
+        constexpr std::string_view first =
+            "[STABILITY]\n"
+            "SkipIntro=0\n"      // also in Options: Options wins
+            "SkipMenu=1\n"       // only here: found by the section scan
+            "[MAIN]\n"
+            "SkipWebConnect=1\n" // MAIN is searched first
+            "[Options]\n"
+            "SkipIntro=1\n"
+            "SkipWebConnect=0\n"
+            "[FIXES]\n";
+        constexpr std::string_view second =
+            "[Options]\n"
+            "SkipIntro=1\n"
+            "SkipWebConnect=0\n"
+            "[MAIN]\n"
+            "SkipWebConnect=1\n"
+            "[STABILITY]\n"
+            "SkipIntro=0\n"
+            "SkipMenu=1\n";
+
+        for (const std::string_view text : {first, second})
+        {
+            const auto directory = MakeTempDirectory("section-order");
+            WriteFile(directory / "XLivelessAddon.ini", text);
+            const auto loaded = xla::config::Load(directory);
+            CHECK_EQ(loaded.options.skipIntro, true);     // Options beats STABILITY
+            CHECK_EQ(loaded.options.skipWebConnect, true); // MAIN beats Options
+            CHECK_EQ(loaded.options.skipMenu, true);      // found outside Options
+            std::error_code error;
+            std::filesystem::remove_all(directory, error);
+        }
+
+        // Last value wins for a duplicated key, and a value in one of the group
+        // sections is found after the earlier sections.
+        const auto directory = MakeTempDirectory("duplicates");
+        WriteFile(directory / "XLivelessAddon.ini",
+                  "[Options]\n"
+                  "SkipIntro=1\n"
+                  "SkipIntro=0\n"
+                  "[FIXES]\n"
+                  "SkipMenu=1\n");
+        auto loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.options.skipIntro, false);
+        CHECK_EQ(loaded.options.skipMenu, true);
+
+        // A per-key value in the legacy file fills only what the own file lacks.
+        WriteFile(directory / "XLivelessAddon.ini", "[Options]\nSkipIntro=0\n");
+        WriteFile(directory / "ZolikaPatch.ini",
+                  "[Options]\nSkipWebConnect=0\n"
+                  "[MAIN]\n"
+                  "SkipWebConnect=1\n"
+                  "SkipMenu=1\n"
+                  "SkipLauncher=0\n");
+        loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.legacyPresent, true);
+        CHECK_EQ(loaded.options.skipIntro, false);     // own INI wins
+        CHECK_EQ(loaded.options.skipWebConnect, true); // legacy MAIN beats legacy Options
+        CHECK_EQ(loaded.options.skipMenu, true);       // legacy fills the gap
+        CHECK_EQ(loaded.options.skipLauncher, false);  // legacy value, not the default
+
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+    }
+
+    void TestConfigWhitespaceCommentsQuotes()
+    {
+        const auto directory = MakeTempDirectory("ini-lexical");
+        WriteFile(directory / "XLivelessAddon.ini",
+                  "[Options]\n"
+                  "   SkipIntro   =   1    // trailing comment\n"
+                  "CustomSavePath = C:\\Saves\n"
+                  "CustomSettingsPath=C:\\Semi;colon\n");
+        const auto loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.options.skipIntro, true);
+        CHECK_EQ(loaded.options.customSavePath, std::string{"C:\\Saves"});
+        // ';' without a preceding space is not a comment marker.
+        CHECK_EQ(loaded.options.customSettingsPath, std::string{"C:\\Semi;colon"});
+
+        WriteFile(directory / "XLivelessAddon.ini",
+                  "[Options]\n"
+                  "CustomSavePath=\"C:\\Quoted\"\n");
+        const auto quoted = xla::config::Load(directory);
+        CHECK_EQ(quoted.options.customSavePath, std::string{"C:\\Quoted"});
+
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+    }
+
+    void TestConfigLineEndings()
+    {
+        const auto directory = MakeTempDirectory("line-endings");
+        const auto ini = directory / "XLivelessAddon.ini";
+        // WriteFile uses binary mode, so this file really has bare LF line endings.
+        WriteFile(ini, "[Options]\nSkipIntro=1\nSkipMenu=1\n");
+        const auto loaded = xla::config::Load(directory);
+        CHECK_EQ(loaded.options.skipIntro, true);
+        CHECK_EQ(loaded.options.skipMenu, true);
+        // The loader normalises the file once (mINI splits on CRLF on Windows).
+        CHECK(ReadFile(ini).find("\r\n") != std::string::npos);
+
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+    }
+
     void TestBuildDetection()
     {
         for (const auto& entry : xla::build::kSignatures)
@@ -569,6 +750,11 @@ int main(int argc, char** argv)
     }
     run("config precedence and FusionFix gates", TestConfigPrecedenceAndGates);
     run("config defaults and EnsureIni", TestConfigDefaultsAndEnsureIni);
+    run("config flag grammar", TestConfigFlagGrammar);
+    run("config option table", TestConfigOptionTable);
+    run("config section order and duplicates", TestConfigSectionOrderAndDuplicates);
+    run("config whitespace, comments and quotes", TestConfigWhitespaceCommentsQuotes);
+    run("config line endings", TestConfigLineEndings);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);
     run("savegame paths", TestSavegamePaths);

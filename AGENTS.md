@@ -29,12 +29,41 @@ its sources.
   up" the tables**: signature strings, offsets, stored bytes and stage order are recovered data.
   The main table is a typed patch DSL (`WriteBytes`/`NopFill`/`Jump`); the rows are in-place
   instruction-window patches, not callable bodies.
+- `source/windowed.ixx` — the borderless window is **FusionFix's implementation** (`windowed.ixx`
+  in GTAIV.EFLC.FusionFix): the User32 import hook chain, style-0 creation, `SwitchWindowStyle`
+  (strip style, AdjustWindowRect, SetWindowLong, MoveWindow, ShowWindow) and the MoveWindow
+  centring, plus the focus-loss input body (`sub_69F0C0`) and the original add-on's DefWindowProc
+  A/W shims. Keep it in step with FusionFix rather than "improving" the sequence.
 - `external/` — pinned submodules (injector + its nested safetyhook/bddisasm/kananlib/minhook,
   Hooking.Patterns, IniReader). Init recursively.
 - `tests/test_main.cpp` — native tests; no game files needed. `tests/signature_golden.tsv` is the
   recovered scan list (CTest `xla_signature_parity`), and `tools/module_layout.py` checks the
   `.ixx` layout (CTest `xla_module_layout`).
 - `README.md` — install, features, supported builds and the build commands.
+
+### FusionFix overlap (what is mirrored, what stays recovered)
+
+`GTAIV.EFLC.FusionFix/source/` implements some of the same features. Mirror its implementation
+only where it can be the same one; every overlapping option is already switched off when a
+FusionFix ASI is present (`ApplyFusionFixGates`), so the two never hook the same subsystem
+together.
+
+- **Mirrored:** the borderless window and centring (`windowed.ixx`, FusionFix's
+  `windowed.ixx`), the focus-loss input body (`FocusLossInput` = `sub_69F0C0`) and
+  `LocalSettingsPath` (the `SHGetFolderPathA/W` redirect = FusionFix's `userdata.ixx`, with a
+  fixed `<game>\saves` folder behind the boolean key).
+- **Stays the original add-on's recovered behaviour** (FusionFix's version is a different
+  mechanism or hook site, so replacing it would replace a recovered row): `SkipIntro` (300 ms at
+  the recovered inline-hook site; FusionFix zeroes the load-screen time at another site and stops
+  after the first menu), `SkipMenu` (same `a1 == 0` / SHIFT / `a1 = 6` algorithm; the recovered
+  install sites are pinned by `tests/signature_golden.tsv`), `DoNotPauseOnMinimize` (the
+  recovered pause-branch NOP plus the mirrored input skip; FusionFix's `ms_bNoBlockOnLostFocus`
+  write needs a scan outside the golden), `VRAMFix` (recovered call-site clamp vs FusionFix's
+  `grcDevice::GetAvailableVideoMemory` return rewrite, which needs a new scan and D3D/DXGI) and
+  `CustomSavePath`/`CustomSettingsPath` (the add-on's path-builder hooks; FusionFix redirects the
+  whole user profile instead).
+- **No FusionFix counterpart:** `SkipLauncher` (the recovered DFA/ROM tables), `SkipWebConnect`
+  and `RemoveRegistryPathDependency`.
 
 ## Build and test
 

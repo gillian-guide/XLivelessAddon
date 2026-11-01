@@ -112,23 +112,30 @@ export namespace xla::build
         return std::nullopt;
     }
 
-    // Reads the classification dword out of an image. A view that does not even
-    // cover the offset is simply an unknown build.
-    [[nodiscard]] inline std::optional<Id> Detect(const Image& image) noexcept
+    // Reads the classification dword out of an image, or nullopt when the view
+    // does not even cover the offset. Exposed so an unknown build can log the value
+    // it actually read instead of only "unsupported".
+    [[nodiscard]] inline std::optional<std::uint32_t> ReadSignature(
+        const Image& image) noexcept
     {
-        if (!image.contains(reinterpret_cast<const void*>(
-                                reinterpret_cast<std::uintptr_t>(image.base) + kSignatureOffset),
-                            sizeof(std::uint32_t)))
+        const auto* site = reinterpret_cast<const void*>(
+            reinterpret_cast<std::uintptr_t>(image.base) + kSignatureOffset);
+        if (!image.contains(site, sizeof(std::uint32_t)))
         {
             return std::nullopt;
         }
 
         std::uint32_t signature = 0;
-        std::memcpy(&signature,
-                    reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(image.base) +
-                                                  kSignatureOffset),
-                    sizeof(signature));
-        return FromSignature(signature);
+        std::memcpy(&signature, site, sizeof(signature));
+        return signature;
+    }
+
+    // Reads the classification dword out of an image. A view that does not even
+    // cover the offset is simply an unknown build.
+    [[nodiscard]] inline std::optional<Id> Detect(const Image& image) noexcept
+    {
+        const std::optional<std::uint32_t> signature = ReadSignature(image);
+        return signature ? FromSignature(*signature) : std::nullopt;
     }
 
     [[nodiscard]] inline std::string Label(Id id) noexcept
@@ -149,6 +156,8 @@ export namespace xla::build
         return false;
     }
 
+    // Test hook: no installer branches on it today (the EFLC DFA gate in addon.ixx
+    // names its two builds explicitly).
     [[nodiscard]] inline constexpr bool IsEflc(Id id) noexcept
     {
         return Is(id, {Id::v1100, Id::v1110, Id::v1120, Id::v1130});

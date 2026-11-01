@@ -536,6 +536,16 @@ namespace
         // A view that does not cover the signature offset is an unknown build.
         CHECK(!xla::build::Detect(xla::Image{image.data(), 16}).has_value());
         CHECK(!xla::build::Detect(xla::Image{}).has_value());
+
+        // The raw dword is what the unsupported-build log prints.
+        const auto raw = xla::build::ReadSignature(xla::Image{image.data(), image.size()});
+        CHECK(raw.has_value());
+        if (raw)
+        {
+            CHECK_EQ(*raw, signature);
+        }
+        CHECK(!xla::build::ReadSignature(xla::Image{image.data(), 16}).has_value());
+        CHECK(!xla::build::ReadSignature(xla::Image{}).has_value());
         CHECK_EQ(xla::build::IsEflc(xla::build::Id::v1120), true);
         CHECK_EQ(xla::build::IsEflc(xla::build::Id::v1080), false);
     }

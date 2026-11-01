@@ -234,7 +234,20 @@ namespace xla
             const std::optional<build::Id> detected = build::Detect(state.image);
             if (!detected)
             {
-                log::Write("init: unsupported build; no patches applied");
+                // Say what was read: "unsupported" alone cannot distinguish a new
+                // build from an image that is not the game at all.
+                const std::optional<std::uint32_t> signature = build::ReadSignature(state.image);
+                if (signature)
+                {
+                    log::Info("init: unsupported build; classification dword {:#x} at RVA "
+                              "{:#x}; no patches applied",
+                              *signature, build::kSignatureOffset);
+                }
+                else
+                {
+                    log::Write("init: image is too small for the classification dword; no "
+                               "patches applied");
+                }
                 state.exitCode = 0;
                 return Outcome::stop;
             }
@@ -517,6 +530,8 @@ namespace xla
 
     int Run(HMODULE module)
     {
+        // The pipeline resolves the executable itself (GetModuleHandleW(nullptr) in
+        // CurrentImage); DllMain's handle is kept as the entry-point contract.
         (void)module;
 
         RunState state;

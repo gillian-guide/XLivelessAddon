@@ -47,11 +47,12 @@ The nested injector submodules are initialised recursively (`git submodule updat
 header-only patching helpers, Hooking.Patterns and IniReader are compiled; the rest are carried
 by the pinned injector revision.
 
-The pinned `external/injector` revision carries one local fix: upstream `MakeRET` stored the
-opcode through a deduced `int` and therefore wrote four bytes for both `ret` and `ret imm16`;
-revision `fcc0c83` stores the opcode as one byte and the immediate as two (three bytes total for
-`ret imm16`). The gitlink records the patched revision; the zlib licence is unchanged. Any
-further local submodule fix is committed in that submodule and recorded here with its revision.
+The pinned `external/injector` revision is `eb42c6d` from the maintained fork at
+https://github.com/SandeMC/injector. Upstream `MakeRET` stored the opcode through a deduced `int`
+and therefore wrote four bytes for both `ret` and `ret imm16`; the fork stores the opcode as one
+byte and the immediate as two (three bytes total for `ret imm16`). The fork is based on upstream
+`1f7c3f9`, the change is a single two-line commit prepared for upstream, and the zlib licence is
+unchanged.
 
 The pinned `external/IniReader` revision (`206c4b3`) is upstream and unmodified. Upstream's
 header is all-inline, and mINI crashed when it was instantiated from a C++23 module interface

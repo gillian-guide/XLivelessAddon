@@ -1,6 +1,6 @@
 [submodule "external/injector"]
 	path = external/injector
-	url = https://github.com/ThirteenAG/injector
+	url = https://github.com/SandeMC/injector
 [submodule "external/hooking"]
 	path = external/hooking
 	url = https://github.com/ThirteenAG/Hooking.Patterns

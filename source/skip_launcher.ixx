@@ -249,6 +249,11 @@ export namespace xla
     inline constexpr SkipLauncherStage kShippedStages =
         SkipLauncherStage::dfa | SkipLauncherStage::rom;
 
+    // The selected stages as their names, "main|dfa|rom" (an empty mask is
+    // "none"). The shipping log uses this so it cannot disagree with the argument
+    // the pass was called with.
+    [[nodiscard]] std::string DescribeStages(SkipLauncherStage stages);
+
     // Table accessors; the spans cover the recovered rows in the golden's order.
     std::span<const EntryPatch> SkipLauncherEntries() noexcept;
     std::span<const SkipLauncherCollector> SkipLauncherCollectors() noexcept;
@@ -1153,6 +1158,26 @@ namespace xla
         }
 
         return report;
+    }
+
+    std::string DescribeStages(SkipLauncherStage stages)
+    {
+        std::string text;
+        const auto append = [&](SkipLauncherStage stage, std::string_view name) {
+            if (!HasStage(stages, stage))
+            {
+                return;
+            }
+            if (!text.empty())
+            {
+                text += '|';
+            }
+            text += name;
+        };
+        append(SkipLauncherStage::main, "main");
+        append(SkipLauncherStage::dfa, "dfa");
+        append(SkipLauncherStage::rom, "rom");
+        return text.empty() ? std::string{"none"} : text;
     }
 } // namespace xla
 

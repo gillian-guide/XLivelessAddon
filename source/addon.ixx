@@ -277,22 +277,32 @@ namespace xla
         {
             if (state.loaded.options.skipLauncher)
             {
-                const auto applied =
-                    ApplySkipLauncher(state.image.bytes(), &ResolveSkipHook, nullptr,
-                                      kShippedStages);
+                constexpr SkipLauncherStage kStages = kShippedStages;
+                const auto applied = ApplySkipLauncher(state.image.bytes(), &ResolveSkipHook,
+                                                       nullptr, kStages);
                 if (applied)
                 {
                     const SkipLauncherReport& report = *applied;
-                    // entries/missing/writes/jump are main-table counters; the
-                    // shipping path never runs that stage, so label it rather than
-                    // letting a healthy log read as "nothing found".
-                    log::Info("skipLauncher: stages=dfa|rom main=not-applied entries={} "
-                              "missing={} writes={} jump={} dfa={}/{} "
-                              "rom={}/{} collected={} createFileSlot={:08X}",
-                              report.entriesFound, report.entriesMissing, report.writes,
-                              report.jumpInstalled, report.dfaInstalls, report.dfaMissing,
+                    log::Info("skipLauncher: stages={} dfa={}/{} rom={}/{} collected={} "
+                              "createFileSlot={:08X}",
+                              DescribeStages(kStages), report.dfaInstalls, report.dfaMissing,
                               report.romInstalls, report.romMissing, report.collectedInstalls,
                               report.createFileSlot);
+                    // The main-table counters only mean something when `main` ran;
+                    // print them then, and say "not applied" otherwise so a healthy
+                    // log cannot be read as "nothing found".
+                    if (HasStage(kStages, SkipLauncherStage::main))
+                    {
+                        log::Info("skipLauncher: main entries={}/{} writes={} jump={}",
+                                  report.entriesFound,
+                                  report.entriesFound + report.entriesMissing, report.writes,
+                                  report.jumpInstalled);
+                    }
+                    else
+                    {
+                        log::Write("skipLauncher: main=not-applied (the recovered main table is "
+                                   "not in the shipping stage set)");
+                    }
                 }
                 else
                 {

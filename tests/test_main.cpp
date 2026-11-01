@@ -469,6 +469,13 @@ namespace
         CHECK(xla::HasStage(xla::kShippedStages, xla::SkipLauncherStage::dfa));
         CHECK(xla::HasStage(xla::kShippedStages, xla::SkipLauncherStage::rom));
         CHECK_EQ(static_cast<int>(xla::kShippedStages), 6);
+
+        // The log prints this name, so it has to follow the mask, not a literal.
+        CHECK_EQ(xla::DescribeStages(xla::kShippedStages), std::string{"dfa|rom"});
+        CHECK_EQ(xla::DescribeStages(xla::SkipLauncherStage::all),
+                 std::string{"main|dfa|rom"});
+        CHECK_EQ(xla::DescribeStages(static_cast<xla::SkipLauncherStage>(0)),
+                 std::string{"none"});
     }
 
     // The exact effective init order, frozen. This list is the behavioural

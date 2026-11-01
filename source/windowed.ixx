@@ -56,13 +56,15 @@ namespace xla::windowed
         SetRectFn g_setRect = nullptr;
 
         HWND g_window = nullptr;
-        RECT g_clientRect{};
-        bool g_clientValid = false;
+        // FusionFix's windowed.ixx keeps the last SetRect rectangle here and
+        // centres the window through MoveWindow (not SetWindowPos with
+        // SWP_FRAMECHANGED|SWP_SHOWWINDOW), which is the part this companion
+        // previously did differently.
+        RECT g_rect{};
 
         // The bordered-window style bits the borderless mode removes. Keeping
-        // the mask in one place lets SwitchWindowStyle detect that the window is
-        // already borderless and return instead of re-setting the style and
-        // re-centring on every SetWindowPos (which flickers the frame).
+        // the mask in one place lets SwitchWindowStyle and AdjustWindowRectHook
+        // agree on the borderless style.
         constexpr LONG kBorderlessMask =
             static_cast<LONG>(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
                               WS_SYSMENU);
@@ -180,32 +182,11 @@ namespace xla::windowed
             }
         }
 
-        // Centres on the nearest monitor. MoveWindowHook below has its own inline
-        // copy of the same arithmetic (it also handles the oversized-client case);
-        // keep the two in sync. Not merged because the hook has that extra branch.
-        void CentreWindow(HWND window, int width, int height) noexcept
-        {
-            const HMONITOR monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO info{};
-            info.cbSize = sizeof(info);
-            if (!::GetMonitorInfoA(monitor, &info))
-            {
-                return;
-            }
-
-            const int desktopWidth = info.rcMonitor.right - info.rcMonitor.left;
-            const int desktopHeight = info.rcMonitor.bottom - info.rcMonitor.top;
-            const int x = info.rcMonitor.left + (desktopWidth - width) / 2;
-            const int y = info.rcMonitor.top + (desktopHeight - height) / 2;
-
-            if (g_setPos != nullptr)
-            {
-                const HWND after =
-                    (g_onTop != nullptr && *g_onTop) ? HWND_TOPMOST : HWND_NOTOPMOST;
-                g_setPos(window, after, x, y, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            }
-        }
-
+        // Port of FusionFix's SwitchWindowStyle: strip the bordered style,
+        // AdjustWindowRect the captured rect, SetWindowLong, MoveWindow and
+        // ShowWindow. No SWP_FRAMECHANGED/SWP_SHOWWINDOW re-centre loop.
+        BOOL WINAPI MoveWindowHook(HWND window, int x, int y, int width, int height,
+                                   BOOL repaint) noexcept;
         void SwitchWindowStyle() noexcept
         {
             if (g_window == nullptr || g_setLong == nullptr)
@@ -213,43 +194,21 @@ namespace xla::windowed
                 return;
             }
 
-            const LONG style = ::GetWindowLongA(g_window, GWL_STYLE);
-            // Already borderless: do not re-set the style, re-centre and issue
-            // another SWP_FRAMECHANGED/SWP_SHOWWINDOW on every SetWindowPos.
-            // The game calls SetWindowPos periodically while windowed, so the
-            // unconditional path flickered and stalled the frame loop.
-            if ((style & kBorderlessMask) == 0)
+            RECT rect = g_rect;
+            const LONG style = ::GetWindowLongA(g_window, GWL_STYLE) & ~kBorderlessMask;
+            if (g_adjust != nullptr)
             {
-                return;
+                g_adjust(&rect, style, FALSE);
             }
-            const LONG borderless = style & ~kBorderlessMask;
-            g_setLong(g_window, GWL_STYLE, borderless);
-
-            RECT client = g_clientRect;
-            if (!g_clientValid)
-            {
-                // No SetRect captured a client size: centre the window rect.
-                client = RECT{0, 0, 0, 0};
-                RECT current{};
-                if (g_setPos != nullptr && ::GetWindowRect(g_window, &current))
-                {
-                    client = current;
-                }
-            }
-
-            if (g_adjust != nullptr && g_clientValid)
-            {
-                g_adjust(&client, borderless, FALSE);
-            }
-
-            const int width = client.right - client.left;
-            const int height = client.bottom - client.top;
-            if (width > 0 && height > 0)
-            {
-                CentreWindow(g_window, width, height);
-            }
+            g_setLong(g_window, GWL_STYLE, style);
+            MoveWindowHook(g_window, 0, 0, rect.right - rect.left, rect.bottom - rect.top, TRUE);
+            ::ShowWindow(g_window, SW_SHOW);
         }
 
+        // Port of FusionFix's MoveWindow_Hook: centre on the nearest monitor and
+        // use the captured SetRect rectangle when the requested size is larger
+        // than the desktop. The float halves are FusionFix's own arithmetic (it
+        // truncates the sum), so the one-pixel rounding matches upstream.
         BOOL WINAPI MoveWindowHook(HWND window, int x, int y, int width, int height,
                                    BOOL repaint) noexcept
         {
@@ -261,24 +220,21 @@ namespace xla::windowed
             {
                 const int desktopWidth = info.rcMonitor.right - info.rcMonitor.left;
                 const int desktopHeight = info.rcMonitor.bottom - info.rcMonitor.top;
-                if (g_clientValid && ((rect.right - rect.left) >= desktopWidth ||
-                                      (rect.bottom - rect.top) >= desktopHeight))
+                if ((rect.right - rect.left) >= desktopWidth ||
+                    (rect.bottom - rect.top) >= desktopHeight)
                 {
-                    RECT client = g_clientRect;
-                    if (g_adjust != nullptr)
-                    {
-                        g_adjust(&client, ::GetWindowLongA(window, GWL_STYLE), FALSE);
-                    }
-                    rect = client;
+                    rect = g_rect;
                 }
-
-                const int w = rect.right - rect.left;
-                const int h = rect.bottom - rect.top;
-                const int cx = info.rcMonitor.left + (desktopWidth - w) / 2;
-                const int cy = info.rcMonitor.top + (desktopHeight - h) / 2;
-                return g_move != nullptr ? g_move(window, cx, cy, w, h, repaint) : FALSE;
+                rect.left = info.rcMonitor.left +
+                            static_cast<LONG>(static_cast<float>(desktopWidth) / 2.0f -
+                                              static_cast<float>(rect.right) / 2.0f);
+                rect.top = info.rcMonitor.top +
+                           static_cast<LONG>(static_cast<float>(desktopHeight) / 2.0f -
+                                             static_cast<float>(rect.bottom) / 2.0f);
+                return g_move != nullptr
+                           ? g_move(window, rect.left, rect.top, rect.right, rect.bottom, repaint)
+                           : FALSE;
             }
-
             return g_move != nullptr ? g_move(window, x, y, width, height, repaint) : FALSE;
         }
 
@@ -316,24 +272,24 @@ namespace xla::windowed
 
         BOOL WINAPI SetRectHook(LPRECT rect, int left, int top, int right, int bottom) noexcept
         {
-            g_clientRect = RECT{0, 0, right - left, bottom - top};
-            g_clientValid = g_clientRect.right > 0 && g_clientRect.bottom > 0;
+            g_rect = RECT{left, top, right, bottom};
             return g_setRect != nullptr ? g_setRect(rect, left, top, right, bottom) : FALSE;
         }
 
         // The A and W CreateWindowEx hooks differ only in the captured import they
         // forward to, so one body serves both; the wrappers below keep the exact
-        // Win32 signatures the import table expects.
+        // Win32 signatures the import table expects. The requested style is ignored
+        // on purpose: FusionFix creates the game window with style 0 and lets
+        // SwitchWindowStyle apply the borderless style, so it never flashes a
+        // bordered window first.
         template <typename CharT, typename CreateFn>
         HWND CreateWindowExHook(DWORD exStyle, const CharT* className, const CharT* windowName,
-                                DWORD style, int x, int y, int width, int height, HWND parent,
+                                DWORD /*style*/, int x, int y, int width, int height, HWND parent,
                                 HMENU menu, HINSTANCE instance, LPVOID param,
                                 CreateFn& create) noexcept
         {
-            g_clientRect = RECT{0, 0, width, height};
-            g_clientValid = width > 0 && height > 0;
             HWND window = create != nullptr
-                              ? create(exStyle, className, windowName, style, x, y, width, height,
+                              ? create(exStyle, className, windowName, 0, x, y, width, height,
                                        parent, menu, instance, param)
                               : nullptr;
             if (window != nullptr)
@@ -547,7 +503,7 @@ namespace xla::windowed
             return false;
         }
         // Optional: without it the topmost style is simply not kept in sync
-        // (CentreWindow and SetWindowPosHook check g_onTop for null).
+        // (SetWindowPosHook and SetWindowLongAHook check g_onTop for null).
         g_onTop = ResolveGlobalBool(image, "80 3D ? ? ? ? ? 74 07 BF");
 
         hook::pattern pattern{"E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04"};

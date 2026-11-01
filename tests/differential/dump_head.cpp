@@ -1,6 +1,9 @@
-﻿// Temporary differential dumper: replaces tests/test_main.cpp while comparing
-// two builds of the module. Prints table contents and the exact effect of
-// ApplySkipLauncher on synthetic images, with every address normalised away.
+// Differential evidence harness (not compiled by the normal build): built in
+// place of tests/test_main.cpp, on the current typed EntryPatch/PatchOp API.
+// Prints table contents and the exact effect of ApplySkipLauncher on synthetic
+// images, with every address normalised away. Its output must stay identical to
+// tests/differential/dump_650df11.txt (the pre-refactor tree's dump); hook-branch
+// rel32 bytes are canonicalised by hook name because they name our own bodies.
 
 #include "common.hxx"
 

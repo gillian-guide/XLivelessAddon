@@ -1,6 +1,9 @@
-﻿// Temporary differential dumper: replaces tests/test_main.cpp while comparing
-// two builds of the module. Prints table contents and the exact effect of
-// ApplySkipLauncher on synthetic images, with every address normalised away.
+// Differential evidence harness (not compiled by the normal build): built in
+// place of tests/test_main.cpp against 650df11, whose launcher API is the old
+// SkipLauncherEntry/SkipLauncherWrite pair. Prints table contents and the exact
+// effect of ApplySkipLauncher on synthetic images, with every address normalised
+// away. tests/differential/dump_head.cpp is the same harness on the current
+// typed API; its output must stay identical to this tree's (see README.md).
 
 #include "common.hxx"
 

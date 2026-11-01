@@ -64,6 +64,7 @@ namespace xla::userdata
                 {
                     return E_INVALIDARG;
                 }
+                // SHGetFolderPath's caller buffer is MAX_PATH by contract.
                 return ::wcsncpy_s(path, MAX_PATH, g_profilePathW.c_str(), _TRUNCATE) == 0
                            ? S_OK
                            : E_FAIL;

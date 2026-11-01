@@ -468,8 +468,9 @@ namespace xla
             {Phase::install, "borderless-hooks", StepBorderless},
             {Phase::install, "focus-loss", StepFocusLoss},
             {Phase::install, "core-patches", StepCorePatches},
-            // SkipLauncher=0 only: the legacy DFA/ROM installers (a no-op on the
-            // builds where the launcher bypass already ran).
+            // SkipLauncher=0 only: xla.dfa + xla.rom_window, the XLivelessAddon
+            // copies. skip_launcher.ixx's header lists how its own (ZolikaPatch)
+            // copies differ and why they are not merged.
             {Phase::install, "launcher-stage", StepLauncherStage},
             {Phase::install, "web-connect", StepWebConnect},
             // InstallIntro publishes g_skipIntroResume before its MakeJMP; publish

@@ -51,6 +51,38 @@ namespace xla
 
         std::atomic<bool> g_delayed{false};
 
+        // What an optional install step did, in the original's three states (its log
+        // legend was -1/0/1; the names are used here).
+        enum class InstallState : std::int8_t
+        {
+            off,       // the INI option is off
+            missing,   // the option is on but the pattern/import was not found
+            installed, // the hooks are in place
+        };
+
+        [[nodiscard]] constexpr std::string_view InstallStateName(InstallState state) noexcept
+        {
+            switch (state)
+            {
+            case InstallState::off:
+                return "off";
+            case InstallState::missing:
+                return "missing";
+            case InstallState::installed:
+                return "installed";
+            }
+            return "?";
+        }
+
+        // The process exit code the original init used: 0 = installed or waiting,
+        // 1 = gave up (the probe never appeared). DllMain ignores it; the retry
+        // worker returns it.
+        enum class ExitCode : int
+        {
+            ok = 0,
+            gaveUp = 1,
+        };
+
         // Everything a step reads or publishes. Steps are plain functions; the
         // registration table is the only thing that decides the sequence.
         struct RunState
@@ -60,11 +92,9 @@ namespace xla
             bool fusionFix{};
             Image image;
             build::Id build{build::Id::unknown};
-            // Tri-state install results: -1 = option off, 0 = pattern missing, 1 =
-            // installed (the original's log legend).
-            int borderless{-1};
-            int focusLoss{-1};
-            int exitCode{0};
+            InstallState borderless{InstallState::off};
+            InstallState focusLoss{InstallState::off};
+            ExitCode exitCode{ExitCode::ok};
         };
 
         enum class Outcome : std::uint8_t
@@ -151,7 +181,7 @@ namespace xla
                     {
                         ::CloseHandle(thread);
                     }
-                    state.exitCode = 0;
+                    state.exitCode = ExitCode::ok;
                     return Outcome::stop;
                 }
 
@@ -164,7 +194,7 @@ namespace xla
                     if (++spins > kProbeSpinLimit)
                     {
                         log::Write("init: probe never appeared; aborting");
-                        state.exitCode = 1;
+                        state.exitCode = ExitCode::gaveUp;
                         return Outcome::stop;
                     }
                     ::Sleep(kProbeSleepMs);
@@ -212,7 +242,7 @@ namespace xla
             if (state.image.empty())
             {
                 log::Write("init: game image unavailable; no patches applied");
-                state.exitCode = 0;
+                state.exitCode = ExitCode::ok;
                 return Outcome::stop;
             }
             return Outcome::next;
@@ -223,7 +253,7 @@ namespace xla
             if (!MakeImageWritable(state.image))
             {
                 log::Write("init: image is not writable; no patches applied");
-                state.exitCode = 0;
+                state.exitCode = ExitCode::ok;
                 return Outcome::stop;
             }
             return Outcome::next;
@@ -248,7 +278,7 @@ namespace xla
                     log::Write("init: image is too small for the classification dword; no "
                                "patches applied");
                 }
-                state.exitCode = 0;
+                state.exitCode = ExitCode::ok;
                 return Outcome::stop;
             }
             state.build = *detected;
@@ -317,7 +347,9 @@ namespace xla
         {
             if (state.loaded.options.borderlessWindowed)
             {
-                state.borderless = windowed::InstallBorderlessHooks(state.image) ? 1 : 0;
+                state.borderless = windowed::InstallBorderlessHooks(state.image)
+                                       ? InstallState::installed
+                                       : InstallState::missing;
             }
             return Outcome::next;
         }
@@ -326,9 +358,12 @@ namespace xla
         {
             if (state.loaded.options.doNotPauseOnMinimize)
             {
-                state.focusLoss = windowed::InstallFocusLossInput(state.image) ? 1 : 0;
+                state.focusLoss = windowed::InstallFocusLossInput(state.image)
+                                      ? InstallState::installed
+                                      : InstallState::missing;
             }
-            log::Info("window: borderless={} focusLoss={}", state.borderless, state.focusLoss);
+            log::Info("window: borderless={} focusLoss={}", InstallStateName(state.borderless),
+                      InstallStateName(state.focusLoss));
             return Outcome::next;
         }
 
@@ -556,10 +591,10 @@ namespace xla
                 }
                 if (step.run(state) == Outcome::stop)
                 {
-                    return state.exitCode;
+                    return static_cast<int>(state.exitCode);
                 }
             }
         }
-        return state.exitCode;
+        return static_cast<int>(state.exitCode);
     }
 } // namespace xla

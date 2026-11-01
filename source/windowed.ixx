@@ -515,9 +515,9 @@ namespace xla::windowed
             log::Write("windowed: focus-loss global not found");
             return false;
         }
+        // Optional: without it the topmost style is simply not kept in sync
+        // (CentreWindow and SetWindowPosHook check g_onTop for null).
         ResolveBool(image, "80 3D ? ? ? ? ? 74 07 BF", nullptr, &g_onTop);
-        // g_onTop is optional: without it the topmost style is simply not kept in
-        // sync (CentreWindow/SetWindowPosHook check it for null).
 
         hook::pattern pattern{"E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04"};
         if (pattern.empty())

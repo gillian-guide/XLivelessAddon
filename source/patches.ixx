@@ -238,13 +238,14 @@ namespace xla::patches
 
             // RETN - skip files.txt hash check [v1002 - v1005]
             patch::RetFirst(
-                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? ? ? "
-                "83 3D",
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? "
+                "? ? 83 3D",
                 0, 0, "core: files.txt hash [1002-1005]");
 
             // RETN - skip files.txt hash check [v1000 - v1001]
             patch::RetFirst(
-                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? 83 3D",
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? "
+                "83 3D",
                 0, 0, "core: files.txt hash [1000-1001]");
 
             // RETN - skip files.txt hash check [v1000 - v1001]
@@ -260,8 +261,8 @@ namespace xla::patches
                     auto* site = pattern.get(0).get<std::uint8_t>();
                     // The JZ rel8 at +3 (`74 19`) continues at +0x1E. An E9 keeps the same
                     // destination, so the literal +0x16 the original stored is derived here.
-                    injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + kJzTarget),
-                                      true);
+                    injector::MakeJMP(injector::raw_ptr(site + 3),
+                                      injector::raw_ptr(site + kJzTarget), true);
                     log::Write("core: branch rewrite [1002-1004] applied");
                 }
                 else
@@ -279,13 +280,14 @@ namespace xla::patches
         {
             // RETN - remove connect to the RGSC [v1000 - v1001]
             patch::RetFirst(
-                "83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C 24 "
-                "3C 68",
+                "83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C "
+                "24 3C 68",
                 0, 0, "core: RGSC connect [1000-1001]");
 
             // RETN 4 - remove connect to the RGSC [v1002 - v1005]
             patch::RetFirst(
-                "83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 0F 85",
+                "83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 "
+                "0F 85",
                 0, 4, "core: RGSC connect [1002-1005]");
 
             // data integrity checks VDS102 [v1002 - v1004]
@@ -357,8 +359,8 @@ namespace xla::patches
         void PatchRecoveredFunctionBodies()
         {
             // EFC20 [v1003 - v1004]
-            patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1, kEfc20NopBytes,
-                            "core: EFC20 [1003-1004]");
+            patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1,
+                            kEfc20NopBytes, "core: EFC20 [1003-1004]");
 
             // fix messed sequences (the original patches the first two matches)
             // 0xBAC160 / 0xBAC190: `mov al,1; retn` (dcc4f31 dllmain.cpp).
@@ -366,10 +368,10 @@ namespace xla::patches
                 hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
                 if (pattern.size() >= 2)
                 {
-                    injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(0).get<void>()),
-                                                         kMovAl1RetNop, true);
-                    injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(1).get<void>()),
-                                                         kMovAl1RetNop, true);
+                    injector::WriteMemory<std::uint32_t>(
+                        injector::raw_ptr(pattern.get(0).get<void>()), kMovAl1RetNop, true);
+                    injector::WriteMemory<std::uint32_t>(
+                        injector::raw_ptr(pattern.get(1).get<void>()), kMovAl1RetNop, true);
                     log::Write("core: fixed sequences patched (two matches)");
                 }
                 else
@@ -385,11 +387,11 @@ namespace xla::patches
                 if (pattern.size() >= 2)
                 {
                     injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()), kMovAl1RetNop,
-                        true);
+                        injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()),
+                        kMovAl1RetNop, true);
                     injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()), kMovAl1RetNop,
-                        true);
+                        injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()),
+                        kMovAl1RetNop, true);
                     log::Write("core: fixed sequences patched (last two matches)");
                 }
                 else
@@ -429,8 +431,8 @@ namespace xla::patches
                     auto* site = pattern.get(0).get<std::uint8_t>();
                     if (!build::Is(build, {build::Id::v1000, build::Id::v1010}))
                     {
-                        injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kNopMovMoffsEax,
-                                                             true);
+                        injector::WriteMemory<std::uint16_t>(
+                            injector::raw_ptr(site), kNopMovMoffsEax, true);
                     }
                     else
                     {
@@ -492,15 +494,16 @@ namespace xla::patches
                             "core: missing-test [1003-1005] ret");
 
             // skip missing tests [v1005 - v1008]
-            patch::NopFirst("3B C7 0F 85 ? ? ? ? 85 C0", 0, 16, "core: missing-test [1005-1008] (1/2)");
+            patch::NopFirst("3B C7 0F 85 ? ? ? ? 85 C0", 0, 16,
+                            "core: missing-test [1005-1008] (1/2)");
             patch::NopFirst("0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2", 0, 14,
                             "core: missing-test [1005-1008] (2/2)");
 
             // skip missing tests [v1006 - v1007]
             patch::WriteDword("83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57", 0, kXorEaxRetNop,
                               "core: missing-test [1006-1007] (1/2)");
-            patch::WriteDword("83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52", 0, kXorEaxRetNop,
-                              "core: missing-test [1006-1007] (2/2)");
+            patch::WriteDword("83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52", 0,
+                              kXorEaxRetNop, "core: missing-test [1006-1007] (2/2)");
         }
 
         // DLC token activation and the first-time-play ask [v1006 - v1008].

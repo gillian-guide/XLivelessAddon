@@ -2,34 +2,38 @@
 
 [![Build](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml/badge.svg)](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml)
 
-XLivelessAddon is an open-source successor to [XLivelessAddon](https://github.com/GTAmodding/XLivelessAddon),
-the GTA IV / Episodes from Liberty City loader add-on. It keeps the original's launcher bypass,
-save/settings handling and windowing fixes, rewrites them as readable, maintainable C++23, and
-modernises the loader, hooking and configuration layers around the same recovered signature data.
+XLivelessAddon is an open-source successor to the community XLivelessAddon, the GTA IV / Episodes
+from Liberty City loader add-on. It keeps the original's launcher bypass, save/settings redirection
+and windowing fixes, rewrites them as readable, maintainable C++23, and modernises the loader,
+hooking and configuration layers around the same recovered signature data.
 
 It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV.EFLC.OpenPreCEPatch)
-as a companion, as some features belong there; it also works on its own.
+as a companion, because some features belong there; it also works on its own. Every entry below is
+an option in `XLivelessAddon.ini`, which records the default and whether FusionFix owns the
+subsystem.
 
 ## Features
 
-- Launcher/SecuROM bypass (`SkipLauncher`), including the recovered DFA and ROM stages.
-- Save and settings redirection (`CustomSavePath`, `LocalSettingsPath`) and the save-file CRC32 bypass.
-- Rockstar Games registry path dependency removal and GFWL web-connect/health-check skips.
-- Intro shortening (`SkipIntro`) and main-menu skip (`SkipMenu`, hold SHIFT to keep it).
-- Borderless window, focus-loss handling and the VRAM detection fix.
-- Every option is INI-gated and logged, and is gated off when FusionFix owns the same subsystem.
+- Skip the launcher and its recovered DFA and ROM checks.
+- Redirect savegames and settings, and bypass the savegame CRC32 check.
+- Remove the Rockstar Games registry path dependency.
+- Skip the GFWL web-connect and health checks.
+- Shorten the intro screens to 300 ms and skip the main menu (hold SHIFT on startup to keep it).
+- Add borderless windowed mode and keep rendering while the window is unfocused.
+- Fix the VRAM detection so the settings are not locked out.
+- Gate every optional install on its INI key, log it, and disable options that FusionFix owns.
 
 `CustomSettingsPath` is implemented with a reconstructed 5-byte call body: the pinned injector's
 `MakeInline` is SafetyHook-based and this build compiles no SafetyHook. The recovered path logic is
-unit-tested, but the hook has not been validated in-game; an absolute path (one with a drive letter)
-uses the documented intent rather than the original's undefined empty-string check. Prefer
+unit-tested, but the hook has not been validated in-game; an absolute path (one with a drive
+letter) uses the documented intent rather than the original's undefined empty-string check. Prefer
 `LocalSettingsPath` or FusionFix's `userdata.ixx` if the hook does not fit.
 
 ## Installation
 
 1. Install [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest).
 2. Extract the archive next to `GTAIV.exe` and `EFLC.exe`.
-3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what applied.
+3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what was applied.
 
 The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
 
@@ -70,8 +74,8 @@ ctest --preset release
 ```
 
 The output is `build/win-x86/bin/XLivelessAddon.asi` and its INI. CI publishes a single
-`XLivelessAddon.zip` containing just those two files; `--build --preset package` produces the CPack
-zip, which also carries `README.md`, `LICENSE`, `NOTICE` and `CREDITS.md`.
+`XLivelessAddon.zip` containing just those two files; `--build --preset package` produces the
+CPack zip, which also carries `README.md`, `LICENSE`, `NOTICE` and `CREDITS.md`.
 
 `win-x86` names the **Visual Studio 18 2026** generator. On VS 2022 use
 `cmake --preset win-x86-vs2022` with `cmake --build --preset release-vs2022` and
@@ -79,11 +83,17 @@ zip, which also carries `README.md`, `LICENSE`, `NOTICE` and `CREDITS.md`.
 
 ## Credits
 
-- Original add-on by the **GTAmodding / XLivelessAddon** contributors.
-- Original mod behaviour recovered from **ZolikaPatch** by Zolika1351.
-- **GTAIV.EFLC.FusionFix** by ThirteenAG and contributors.
-- `injector` by LINK/2012 and ThirteenAG
-- `Hooking.Patterns` by CitizenFX and ThirteenAG
-- `IniReader` by ThirteenAG.
+- **GTAmodding / XLivelessAddon contributors** — the original add-on: the launcher bypass, the
+  save-file path redirect, the WM_ROM message window and the borderless window patches.
+- **Zolika1351** — ZolikaPatch, whose recovered SkipLauncher tables, GFWL bypasses and intro/menu
+  behaviour this module reimplements.
+- **ThirteenAG and the FusionFix contributors** — GTAIV.EFLC.FusionFix (GPL-3.0), which supplied
+  the windowed/focus-loss implementation, the 300 ms intro-skip variant, the per-feature FusionFix
+  compatibility gates and the overall module layout conventions.
+- **LINK/2012 and ThirteenAG** — the `injector` memory-patching library.
+- **cursey** — `safetyhook`, `kananlib`; **Bitdefender** — `bddisasm`; **Tsuda Kageyu** —
+  `minhook` (nested `injector` submodules).
+- **CitizenFX / NTAuthority** — `Hooking.Patterns`.
+- **ThirteenAG** — `IniReader`.
 
 Licensed under the GNU General Public License, version 3 or later; see `LICENSE` and `NOTICE`.

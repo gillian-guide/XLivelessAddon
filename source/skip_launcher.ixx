@@ -75,24 +75,28 @@ export namespace xla
         };
 
         Kind kind{};
-        std::int32_t offset{};
-        std::span<const std::uint8_t> bytes{}; // write: the exact bytes
+        std::int32_t offset{};                 // match-relative, in bytes
+        std::span<const std::uint8_t> bytes{}; // write: the exact bytes (the length)
         std::uint16_t count{};                 // fill: the byte count
-        std::uint8_t fill{};                   // fill: the repeated byte
+        std::uint8_t fill{};                   // fill: the repeated byte (NOP in the data)
         std::uint32_t target{};                // jump: the target entry index
     };
 
     // The patch builders. A row says what it does, and a byte row's length is the
-    // size of its own data: there is no second number to keep in sync.
+    // size of its own data: there is no second number to keep in sync. Only the
+    // members the kind uses are named; the rest are value-initialised.
     [[nodiscard]] constexpr PatchOp WriteBytes(std::int32_t offset,
                                                std::span<const std::uint8_t> bytes) noexcept
     {
-        return {PatchOp::Kind::write, offset, bytes, 0, 0, 0};
+        return {.kind = PatchOp::Kind::write, .offset = offset, .bytes = bytes};
     }
 
     [[nodiscard]] constexpr PatchOp NopFill(std::int32_t offset, std::uint16_t count) noexcept
     {
-        return {PatchOp::Kind::fill, offset, {}, count, Byte(Opcode::kNop), 0};
+        return {.kind = PatchOp::Kind::fill,
+                .offset = offset,
+                .count = count,
+                .fill = Byte(Opcode::kNop)};
     }
 
     // The rel32 of an E9 whose opcode a preceding row wrote. The installer
@@ -100,7 +104,7 @@ export namespace xla
     // target entry's match supplies the destination.
     [[nodiscard]] constexpr PatchOp Jump(std::int32_t offset, std::uint32_t target) noexcept
     {
-        return {PatchOp::Kind::jump, offset, {}, 0, 0, target};
+        return {.kind = PatchOp::Kind::jump, .offset = offset, .target = target};
     }
 
     // The byte rows that are one instruction: the name is the effect, not the op.
@@ -303,6 +307,10 @@ namespace xla
         // The collectors write the shared "mov al,1; ret; nop" window.
         constexpr std::uint16_t kCollectorStubLength =
             static_cast<std::uint16_t>(std::size(ops::kMovAl1RetNop));
+
+        // Each collector rule covers two sites: the first two matches, or the last
+        // two. (A pattern with a single match is one site for either rule.)
+        constexpr std::size_t kCollectorWidth = 2;
 
         // ---- named site offsets -------------------------------------------
 
@@ -538,7 +546,7 @@ namespace xla
             case PatchOp::Kind::fill:
                 return static_cast<std::int32_t>(op.count);
             case PatchOp::Kind::jump:
-                return 4; // the rel32 the branch builder overwrites
+                return 4; // the row starts at its rel32; the branch ends at offset + 4
             }
             return 0;
         }
@@ -764,7 +772,9 @@ namespace xla
         [[nodiscard]] bool CollectorTakes(SkipLauncherCollector::Target target,
                                           std::size_t hit, std::size_t hits) noexcept
         {
-            return target == SkipLauncherCollector::Target::first_two ? hit < 2 : hit + 2 >= hits;
+            return target == SkipLauncherCollector::Target::first_two
+                       ? hit < kCollectorWidth
+                       : hit + kCollectorWidth >= hits;
         }
 
         // Applies one patch op:
@@ -1404,7 +1414,9 @@ namespace xla
                     return existing;
                 }
 
-                constexpr std::size_t kStubAllocationBytes = 64; // one page, eleven used
+                // VirtualAlloc rounds the request up to a page; the body below uses
+                // eleven bytes of it.
+                constexpr std::size_t kStubAllocationBytes = 64;
                 void* memory = ::VirtualAlloc(nullptr, kStubAllocationBytes,
                                               MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
                 if (memory == nullptr)

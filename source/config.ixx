@@ -3,13 +3,13 @@
 // xla.config — the add-on's INI: defaults, loading, the legacy ZolikaPatch.ini
 // fallback and the FusionFix compatibility gates.
 //
-// Precedence is unchanged from the original add-on: `XLivelessAddon.ini` wins,
-// then a flat/legacy `ZolikaPatch.ini`. The FusionFix gates disable any option
-// whose subsystem FusionFix owns, so two modules never write the same code.
+// Precedence is the original's: `XLivelessAddon.ini` wins, then a flat/legacy
+// `ZolikaPatch.ini`. The FusionFix gates disable any option whose subsystem FusionFix
+// owns, so two modules never write the same code.
 //
 // The parser is the vendored IniReader, compiled in its own translation unit
-// (external/IniReader/IniReaderImpl.cpp). This module includes only its pimpl
-// header: mINI's inline code crashed when it was instantiated in module purview.
+// (IniReaderImpl.cpp); this module includes only its pimpl header, because mINI's inline
+// code crashed when instantiated in module purview.
 
 module;
 

@@ -6,46 +6,33 @@
 // Recovered from the original's handlers, in their order:
 //   0x10045CE0  the 25-signature main table and the two multi-hit collectors
 //   0x10004850  the DFA file-API hooks (6 installs) and the 2 collected jumps
-//   0x10004620  the ROM message-window hooks (2 installs; bodies at 0x10004570
-//               and 0x10004610, service at 0x100041A0..0x10004570)
+//   0x10004620  the ROM message-window hooks (2 installs; bodies 0x10004570/0x10004610,
+//               service 0x100041A0..0x10004570)
 //
-// What lives where
-//   1. public surface — types, report, stage mask, pass entry point
-//   2. recovered data — named site offsets, typed patch rows, entries, collectors,
-//                       the IAT capture pattern and the install rows
-//   3. the pass       — ApplySkipLauncher: main table -> collectors -> DFA
-//                       capture/publish -> DFA hooks -> collected jumps -> ROM
-//                       hooks, one named helper per step
-//   4. hook bodies    — skip_hooks::dfa (six file-API bodies) and
-//                       skip_hooks::rom (WM_ROM service + RomReset/RomSet)
+// Layout: public surface (types, report, stage mask, pass entry), recovered data (site
+// offsets, typed rows, entries, collectors, the IAT capture pattern, install rows), the
+// pass (ApplySkipLauncher: main -> collectors -> DFA capture/publish -> DFA hooks ->
+// collected jumps -> ROM hooks, one named helper per step), then the hook bodies
+// (skip_hooks::dfa and skip_hooks::rom).
 //
-// The data is 1:1 and must stay that way. Row order, bytes, offsets, lengths and
-// fill values are pinned by tests/skip_launcher_tables.tsv (CTest
-// xla_table_parity); the scan order is pinned by tests/signature_golden.tsv
-// (CTest xla_signature_parity). Renaming a C++ identifier is free; changing a
-// recovered number, a scan, or the order of either is a behaviour change.
+// The data is 1:1: row order, bytes, offsets, lengths and fill values are pinned by
+// tests/skip_launcher_tables.tsv (xla_table_parity), the scan order by
+// tests/signature_golden.tsv (xla_signature_parity). Renaming an identifier is free;
+// changing a recovered number, a scan, or the order of either is a behaviour change.
+// Writes target a caller-owned image: a missing signature is a logged skip, a store
+// outside the image an error.
 //
-// Writes target a caller-owned image. The installers never guess: a missing
-// signature is a logged skip, and a store outside the image is an error.
-//
-// Two live DFA/ROM copies — deliberately not merged
-//   SkipLauncher=1 (this file, step `skip-launcher`) is the ZolikaPatch path
-//   (upstream dcc4f31:source/skip_launcher.cpp):
-//     CreateFile   forwards through the captured IAT slot
-//     CloseHandle  a fault returns -1 (EXCEPTION_EXECUTE_HANDLER)
-//     ReadFile     hooks the enclosing prologue, 165 bytes before the match
-//     DfaInit      0 arguments (the call site pops its own 0xC bytes)
-//   SkipLauncher=0 (xla.dfa + xla.rom_window, step `launcher-stage`) is the
-//   XLivelessAddon path (upstream dcc4f31:source/dllmain.cpp):
-//     CreateFile   calls CreateFileA directly
-//     CloseHandle  a fault continues with TRUE
-//     ReadFile     hooks at +0
-//     DfaInit      3 arguments, the original call shape
-//   addon.ixx skips xla.dfa on EFLC 1100/1110 (DFA faulted at 0x00426440).
-//   The two WM_ROM services are independent copies of one protocol: the message
-//   id (43858) and the 16-entry action table agree, the window recipes and the
-//   non-WM_ROM fallback do not. Nothing cross-checks them, so a protocol change
-//   must be made in both files.
+// Two live DFA/ROM copies, deliberately not merged. SkipLauncher=1 (this file, step
+// `skip-launcher`, upstream dcc4f31 skip_launcher.cpp): CreateFile forwards through the
+// captured IAT slot; CloseHandle returns -1 on a fault; ReadFile hooks the enclosing
+// prologue, 165 bytes before the match; DfaInit takes 0 arguments (the call site pops its
+// own 0xC bytes). SkipLauncher=0 (xla.dfa + xla.rom_window, step `launcher-stage`,
+// upstream dcc4f31 dllmain.cpp): CreateFile calls CreateFileA directly; CloseHandle
+// continues with TRUE; ReadFile hooks at +0; DfaInit takes 3 arguments. addon.ixx skips
+// xla.dfa on EFLC 1100/1110 (DFA faulted at 0x00426440). The two WM_ROM services are
+// independent copies of one protocol — id 43858 and the 16-entry action table agree,
+// the window recipes and the non-WM_ROM fallback do not — so a protocol change must
+// be made in both files.
 
 module;
 
@@ -212,20 +199,15 @@ export namespace xla
         std::uint32_t createFileSlot{};  // captured IAT slot VA (0 when absent)
     };
 
-    // The original's three passes, as a bitmask. `HasStage` is the only place a
-    // caller's selection is interpreted; `ApplySkipLauncher` runs the blocks in
-    // the recovered order whatever order the bits were named in.
+    // The original's three passes as a bitmask. `HasStage` is the only place a caller's
+    // selection is interpreted; `ApplySkipLauncher` runs the blocks in the recovered order.
+    // main writes, then DFA (0x10004850) under its XLivelessAddon/GTAC.dll/EFLC/one-shot
+    // guards, then ROM (0x10004620) always; MiscFixes calls DFA again (0x10024018).
     //
-    // The original's stages: main writes, then DFA (0x10004850) under its
-    // XLivelessAddon/GTAC.dll/EFLC/one-shot guards, then ROM (0x10004620) always;
-    // MiscFixes calls DFA again (0x10024018).
-    //
-    // The shipping path applies only `kShippedStages` (DFA + ROM). The recovered
-    // main table is ZolikaPatch's extra pass: XLivelessAddon only ever ran the
-    // DFA and ROM stages, and applying `main` after the add-on had hooked the
-    // launcher is what broke the GFWL session (dcc4f31 source/dllmain.cpp:770-773;
-    // the call itself passes `dfa | rom` at :774-776). It stays available to
-    // callers that pass it explicitly (tests, the parent handler's own pass).
+    // The shipping path applies only `kShippedStages` (DFA + ROM): XLivelessAddon only ever
+    // ran those two, and applying `main` after the add-on had hooked the launcher is what
+    // broke the GFWL session (dcc4f31 dllmain.cpp:770-776). It stays available to callers
+    // that pass it explicitly (tests, the parent handler's own pass).
     enum class SkipLauncherStage : std::uint8_t
     {
         main = 1,

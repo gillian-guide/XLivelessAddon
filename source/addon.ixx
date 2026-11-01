@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // xla.addon — the init pipeline. The first pass runs synchronously at
-// DLL_PROCESS_ATTACH; when the probe is absent it retries the whole pipeline once
-// on a worker thread (StepProbe -> DelayedInit). The steps register themselves in
-// one constexpr table with a phase (probe, config, install, post); the runner
-// executes the phases in order and, inside a phase, the rows in table order. That
-// filtered sequence is the original add-on's order, pinned by the 25-name test;
-// there is no dependency graph. Every optional installer is INI-gated; the core
-// patch list and the savegame CRC32 bypass are unconditional, as in the original.
-// An unsupported or non-writable image installs nothing and says why.
+// DLL_PROCESS_ATTACH; when the probe is absent it retries once on a worker thread
+// (StepProbe -> DelayedInit). Steps register in one constexpr table with a phase (probe,
+// config, install, post); the runner executes the phases in order and, inside a phase,
+// the rows in table order. That sequence is the original add-on's order, pinned by the
+// 25-name test; there is no dependency graph. Every optional installer is INI-gated while
+// the core patch list and the savegame CRC32 bypass stay unconditional; an unsupported or
+// non-writable image installs nothing and says why.
 
 module;
 

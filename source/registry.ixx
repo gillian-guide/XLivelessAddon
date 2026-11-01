@@ -60,13 +60,26 @@ namespace xla::registry
             return text;
         }
 
+        // The fake open shared by both open hooks: remember the real key/sub-key and
+        // answer success with a null handle (the query hook then forwards to the
+        // remembered key). Returns false when the call is not the Rockstar Games one,
+        // so the caller forwards to the real API.
+        bool AnswerRockstarKey(HKEY key, LPCSTR subKey, PHKEY result) noexcept
+        {
+            if (subKey == nullptr || result == nullptr || !ContainsRockstarGames(subKey))
+            {
+                return false;
+            }
+            g_key = key;
+            g_subKey = subKey;
+            *result = nullptr;
+            return true;
+        }
+
         LSTATUS WINAPI RegOpenKeyAHook(HKEY key, LPCSTR subKey, PHKEY result)
         {
-            if (subKey != nullptr && ContainsRockstarGames(subKey) && result != nullptr)
+            if (AnswerRockstarKey(key, subKey, result))
             {
-                g_key = key;
-                g_subKey = subKey;
-                *result = nullptr;
                 return ERROR_SUCCESS;
             }
             return ::RegOpenKeyA(key, subKey, result);
@@ -75,11 +88,8 @@ namespace xla::registry
         LSTATUS WINAPI RegOpenKeyExAHook(HKEY key, LPCSTR subKey, DWORD options, REGSAM access,
                                          PHKEY result)
         {
-            if (subKey != nullptr && ContainsRockstarGames(subKey) && result != nullptr)
+            if (AnswerRockstarKey(key, subKey, result))
             {
-                g_key = key;
-                g_subKey = subKey;
-                *result = nullptr;
                 return ERROR_SUCCESS;
             }
             return ::RegOpenKeyExA(key, subKey, options, access, result);

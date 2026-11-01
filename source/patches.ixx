@@ -597,40 +597,44 @@ namespace xla::patches
     {
         (void)image;
 
-        hook::pattern pattern{
-            "83 F8 03 75 ? A1 ? ? ? ? 80 88 ? ? ? ? ? 84 DB 74 0A 6A 00 E8 ? ? ? ? 83 C4 04 5F 5E"};
-        if (!pattern.empty())
-        {
+        // The three recovered call sites, newest build first. Each one replaces the
+        // `E8` that enters the menu state with a call into SkipMenuBody; MakeCALL
+        // returns the original destination, which the body tail-calls as its resume.
+        const auto installAt = [](hook::pattern& pattern, std::ptrdiff_t callOffset,
+                                  std::string_view label) {
             g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetV1002)),
+                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(callOffset)),
                                    injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
                     .get<void*>());
-            log::Write("menu: skip installed [1002-1008]");
+            log::Write(label);
+        };
+
+        constexpr std::string_view kMenuPatternV1002 =
+            "83 F8 03 75 ? A1 ? ? ? ? 80 88 ? ? ? ? ? 84 DB 74 0A 6A 00 E8 ? ? ? ? 83 C4 04 5F 5E";
+        hook::pattern pattern{kMenuPatternV1002};
+        if (!pattern.empty())
+        {
+            installAt(pattern, kMenuCallOffsetV1002, "menu: skip installed [1002-1008]");
             return;
         }
 
-        pattern = hook::pattern{
+        // The [1000] and [1001] variants differ only in their tail.
+        constexpr std::string_view kMenuPatternV1000 =
             "6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5D 5B 33 CC E8 ? ? ? ? 81 C4 ? ? ? "
-            "? C3"};
+            "? C3";
+        pattern = hook::pattern{kMenuPatternV1000};
         if (!pattern.empty())
         {
-            g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetEarly)),
-                                   injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
-                    .get<void*>());
-            log::Write("menu: skip installed [1000]");
+            installAt(pattern, kMenuCallOffsetEarly, "menu: skip installed [1000]");
             return;
         }
 
-        pattern = hook::pattern{
-            "6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC E8 ? ? ? ? 8B E5 5D C3"};
+        constexpr std::string_view kMenuPatternV1001 =
+            "6A 00 E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC E8 ? ? ? ? 8B E5 5D C3";
+        pattern = hook::pattern{kMenuPatternV1001};
         if (!pattern.empty())
         {
-            g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(
-                injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>(kMenuCallOffsetEarly)),
-                                   injector::raw_ptr(reinterpret_cast<void*>(&SkipMenuBody)), true)
-                    .get<void*>());
-            log::Write("menu: skip installed [1001]");
+            installAt(pattern, kMenuCallOffsetEarly, "menu: skip installed [1001]");
             return;
         }
 
@@ -650,18 +654,28 @@ namespace xla::patches
     {
         (void)image;
 
-        // Each site is a call to the game's VRAM query; the body clamps non-positive
-        // answers to INT_MAX. The original stored the last resolved original in one
-        // variable and every site forwards through it; that behaviour is kept.
-        g_vidMemOriginal = reinterpret_cast<std::int32_t(__cdecl*)()>(
-            patch::CallFirst("E8 ? ? ? ? D9 E8 85 C0", 0,
-                             reinterpret_cast<void*>(&GetVidMemBody), "vram: call (1/3)"));
-        g_vidMemOriginal = reinterpret_cast<std::int32_t(__cdecl*)()>(
-            patch::CallFirst("E8 ? ? ? ? F3 0F 10 0D ? ? ? ? F3 0F 5C 0D", 0,
-                             reinterpret_cast<void*>(&GetVidMemBody), "vram: call (2/3)"));
-        g_vidMemOriginal = reinterpret_cast<std::int32_t(__cdecl*)()>(
-            patch::CallFirst("E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24", 0,
-                             reinterpret_cast<void*>(&GetVidMemBody), "vram: call (3/3)"));
+        // Each row replaces a call to the game's VRAM query with GetVidMemBody,
+        // which clamps a non-positive answer to INT_MAX. The original kept ONE
+        // "original destination" variable and every row overwrote it, so all three
+        // bodies forward through the last original that resolved (and a miss
+        // stores nullptr). The unconditional overwrite is the recovered behaviour,
+        // not an oversight; order and effect are unchanged.
+        struct VramSite
+        {
+            std::string_view signature;
+            std::string_view label;
+        };
+        constexpr std::array<VramSite, 3> kSites{{
+            {"E8 ? ? ? ? D9 E8 85 C0", "vram: call (1/3)"},
+            {"E8 ? ? ? ? F3 0F 10 0D ? ? ? ? F3 0F 5C 0D", "vram: call (2/3)"},
+            {"E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24", "vram: call (3/3)"},
+        }};
+        for (const VramSite& site : kSites)
+        {
+            g_vidMemOriginal = reinterpret_cast<std::int32_t(__cdecl*)()>(
+                patch::CallFirst(site.signature, 0, reinterpret_cast<void*>(&GetVidMemBody),
+                                 site.label));
+        }
     }
 } // namespace xla::patches
 
@@ -704,7 +718,8 @@ namespace xla::patches
             "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
         constexpr std::size_t kSettingsPathSites = 4;
         constexpr std::size_t kSettingsPatchCount = 2;
-        constexpr std::size_t kSettingsPatchOffset = 5;
+        constexpr std::size_t kSettingsPatchOffset = 5;   // the `mov ecx, imm32` opcode
+        constexpr std::size_t kSettingsCallLength = 5;    // E8 + rel32 replaces it
         constexpr std::uint16_t kSettingsCopyLimit = 256;
 
         std::string g_customSettingsPath;
@@ -752,18 +767,28 @@ namespace xla::patches
         // is at [esp+0x10] and saved ECX at [esp+0x18]; the recovered thunk's
         // helper reads frame+16 and writes frame+24, matching those offsets.
         inline constexpr std::size_t kStubBytes = 30;
+        // Offsets into that body where MakeSettingsStub patches the two immediates
+        // and the call displacement.
+        inline constexpr std::size_t kStubBufferOperand = 7;  // imm32 of `push buffer`
+        inline constexpr std::size_t kStubCallRel32 = 12;     // rel32 of `call helper`
+        inline constexpr std::size_t kStubGlobalOperand = 23; // imm32 of `mov [esp+..], global`
+        // The address the relative call is measured from: the instruction after the
+        // `E8` (opcode at 11 + 5).
+        inline constexpr std::size_t kStubCallEnd = 16;
+        // VirtualAlloc rounds to the page; one small request is enough for the body.
+        inline constexpr std::size_t kStubAllocationBytes = 64;
     } // namespace
 
     void* MakeSettingsStub(std::uint32_t buffer, std::uint32_t global, std::uint32_t helper)
     {
-        void* memory = ::VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE,
+        void* memory = ::VirtualAlloc(nullptr, kStubAllocationBytes, MEM_COMMIT | MEM_RESERVE,
                                       PAGE_EXECUTE_READWRITE);
         if (memory == nullptr)
         {
             log::Write("settings: cannot allocate the CustomSettingsPath stub");
             return nullptr;
         }
-        std::uint8_t code[kStubBytes] = {
+        std::array<std::uint8_t, kStubBytes> code{
             0x9C,                                           // pushfd
             0x60,                                           // pushad
             0xFF, 0x74, 0x24, 0x10,                         // push [esp+0x10]
@@ -775,15 +800,15 @@ namespace xla::patches
             0x9D,                                           // popfd
             0xC3,                                           // ret
         };
-        static_assert(sizeof(code) == kStubBytes);
-        std::memcpy(code + 7, &buffer, sizeof(buffer));
-        const auto callSite = reinterpret_cast<std::uintptr_t>(memory) + 16;
-        const auto displacement = static_cast<std::int32_t>(
-            static_cast<std::uintptr_t>(helper) - callSite);
-        std::memcpy(code + 12, &displacement, sizeof(displacement));
-        std::memcpy(code + 23, &global, sizeof(global));
-        std::memcpy(memory, code, sizeof(code));
-        ::FlushInstructionCache(::GetCurrentProcess(), memory, sizeof(code));
+        static_assert(code.size() == kStubBytes);
+        std::memcpy(code.data() + kStubBufferOperand, &buffer, sizeof(buffer));
+        const auto callEnd = reinterpret_cast<std::uintptr_t>(memory) + kStubCallEnd;
+        const auto displacement =
+            static_cast<std::int32_t>(static_cast<std::uintptr_t>(helper) - callEnd);
+        std::memcpy(code.data() + kStubCallRel32, &displacement, sizeof(displacement));
+        std::memcpy(code.data() + kStubGlobalOperand, &global, sizeof(global));
+        std::memcpy(memory, code.data(), code.size());
+        ::FlushInstructionCache(::GetCurrentProcess(), memory, code.size());
         return memory;
     }
 
@@ -810,7 +835,7 @@ namespace xla::patches
         const auto install = [&](std::size_t index) {
             const auto match = pattern.get(index);
             auto* site = match.get<std::uint8_t>() + kSettingsPatchOffset;
-            if (!image.contains(site, 5))
+            if (!image.contains(site, kSettingsCallLength))
             {
                 log::Write("settings: CustomSettingsPath site outside the image; skipped");
                 return;

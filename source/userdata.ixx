@@ -78,29 +78,32 @@ namespace xla::userdata
                                              : E_FAIL;
         }
 
-        // Replaces one shell32 IAT slot in the game module and hands back the
-        // original. Near-copy of windowed::ReplaceImport (HMODULE vs Image) and
-        // registry's walker; this one trusts the PE, registry's is bounds-checked.
-        bool ReplaceShellImport(const Image& image, const char* function, void* replacement,
-                                void** original) noexcept
+        // Replaces one shell32 IAT slot and returns the value it held (the function
+        // the game keeps calling), or nullopt when there is no such slot. The value
+        // can be null, so the optional says whether the slot was replaced.
+        // Near-copy of windowed::ReplaceImport (HMODULE vs Image) and registry's
+        // walker; this one trusts the PE, registry's is bounds-checked.
+        [[nodiscard]] std::optional<void*> ReplaceShellImport(const Image& image,
+                                                              const char* function,
+                                                              void* replacement) noexcept
         {
             if (image.empty() || function == nullptr || replacement == nullptr)
             {
-                return false;
+                return std::nullopt;
             }
 
             auto* base = reinterpret_cast<std::uint8_t*>(image.base);
             const IMAGE_NT_HEADERS* nt = NtHeaders(base);
             if (nt == nullptr)
             {
-                return false;
+                return std::nullopt;
             }
 
             const auto& directory =
                 nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
             if (directory.VirtualAddress == 0)
             {
-                return false;
+                return std::nullopt;
             }
 
             auto* descriptor =
@@ -135,15 +138,15 @@ namespace xla::userdata
                     if (!::VirtualProtect(&slot->u1.Function, sizeof(void*), PAGE_READWRITE,
                                           &previous))
                     {
-                        return false;
+                        return std::nullopt;
                     }
-                    *original = reinterpret_cast<void*>(slot->u1.Function);
+                    const auto original = reinterpret_cast<void*>(slot->u1.Function);
                     slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
                     ::VirtualProtect(&slot->u1.Function, sizeof(void*), previous, &previous);
-                    return true;
+                    return original;
                 }
             }
-            return false;
+            return std::nullopt;
         }
     } // namespace
 
@@ -191,15 +194,21 @@ namespace xla::userdata
         g_profilePath = directory.string();
         g_profilePathW = directory.wstring();
 
-        const bool ansi = ReplaceShellImport(
-            image, "SHGetFolderPathA", reinterpret_cast<void*>(&ShellFolderPathA),
-            reinterpret_cast<void**>(&g_shellFolderA));
-        const bool wide = ReplaceShellImport(
-            image, "SHGetFolderPathW", reinterpret_cast<void*>(&ShellFolderPathW),
-            reinterpret_cast<void**>(&g_shellFolderW));
+        const auto ansi = ReplaceShellImport(image, "SHGetFolderPathA",
+                                             reinterpret_cast<void*>(&ShellFolderPathA));
+        if (ansi)
+        {
+            g_shellFolderA = reinterpret_cast<ShGetFolderPathAFn>(*ansi);
+        }
+        const auto wide = ReplaceShellImport(image, "SHGetFolderPathW",
+                                             reinterpret_cast<void*>(&ShellFolderPathW));
+        if (wide)
+        {
+            g_shellFolderW = reinterpret_cast<ShGetFolderPathWFn>(*wide);
+        }
 
         log::Info("userdata: profile={} (A={} W={})", g_profilePath, ansi ? 1 : 0,
                   wide ? 1 : 0);
-        return ansi || wide;
+        return ansi.has_value() || wide.has_value();
     }
 } // namespace xla::userdata

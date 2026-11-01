@@ -72,32 +72,34 @@ namespace xla::windowed
             return left != nullptr && right != nullptr && _stricmp(left, right) == 0;
         }
 
-        // Replaces the first matching USER32 import slot. The imported function
-        // stays callable through `original`.
+        // Replaces the first matching USER32 import slot and returns the value it
+        // held (the function the game keeps calling), or nullopt when there is no
+        // such slot. The value can itself be null, so the optional, not the pointer,
+        // says whether the slot was replaced.
         // Deliberate near-copy of userdata::ReplaceShellImport and registry's inline
         // walker (the header validation is shared through xla::NtHeaders): this one
         // trusts the descriptor/thunk chain (the other two bounds-check more), and
         // the OriginalFirstThunk == 0 fallback must be kept in sync by hand.
-        bool ReplaceImport(HMODULE module, const char* function, void* replacement,
-                           void** original) noexcept
+        [[nodiscard]] std::optional<void*> ReplaceImport(HMODULE module, const char* function,
+                                                         void* replacement) noexcept
         {
             if (module == nullptr || function == nullptr || replacement == nullptr)
             {
-                return false;
+                return std::nullopt;
             }
 
             const auto* base = reinterpret_cast<const std::uint8_t*>(module);
             const IMAGE_NT_HEADERS* nt = NtHeaders(module);
             if (nt == nullptr)
             {
-                return false;
+                return std::nullopt;
             }
 
             const auto& directory =
                 nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
             if (directory.VirtualAddress == 0)
             {
-                return false;
+                return std::nullopt;
             }
 
             auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(
@@ -140,18 +142,15 @@ namespace xla::windowed
                     if (!::VirtualProtect(&slot->u1.Function, sizeof(void*), PAGE_READWRITE,
                                           &previous))
                     {
-                        return false;
+                        return std::nullopt;
                     }
-                    if (original != nullptr)
-                    {
-                        *original = reinterpret_cast<void*>(slot->u1.Function);
-                    }
+                    const auto original = reinterpret_cast<void*>(slot->u1.Function);
                     slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
                     ::VirtualProtect(&slot->u1.Function, sizeof(void*), previous, &previous);
-                    return true;
+                    return original;
                 }
             }
-            return false;
+            return std::nullopt;
         }
 
         void* User32Proc(const char* name) noexcept
@@ -454,41 +453,53 @@ namespace xla::windowed
         g_setLong = reinterpret_cast<SetWindowLongAFn>(User32Proc("SetWindowLongA"));
         g_setRect = reinterpret_cast<SetRectFn>(User32Proc("SetRect"));
 
-        void* oldCreateA = nullptr;
-        void* oldCreateW = nullptr;
-        void* oldMove = nullptr;
-        void* oldAdjust = nullptr;
-        void* oldSetPos = nullptr;
-        void* oldSetLong = nullptr;
-        void* oldSetRect = nullptr;
+        // Every import is attempted; a missing one must not stop the rest, so the
+        // seven calls are named before they are combined.
+        const auto createA = ReplaceImport(module, "CreateWindowExA",
+                                           reinterpret_cast<void*>(&CreateWindowExAHook));
+        const auto createW = ReplaceImport(module, "CreateWindowExW",
+                                           reinterpret_cast<void*>(&CreateWindowExWHook));
+        const auto move = ReplaceImport(module, "MoveWindow",
+                                        reinterpret_cast<void*>(&MoveWindowHook));
+        const auto adjust = ReplaceImport(module, "AdjustWindowRect",
+                                          reinterpret_cast<void*>(&AdjustWindowRectHook));
+        const auto setPos = ReplaceImport(module, "SetWindowPos",
+                                          reinterpret_cast<void*>(&SetWindowPosHook));
+        const auto setLong = ReplaceImport(module, "SetWindowLongA",
+                                           reinterpret_cast<void*>(&SetWindowLongAHook));
+        const auto setRect = ReplaceImport(module, "SetRect",
+                                           reinterpret_cast<void*>(&SetRectHook));
 
-        // Every ReplaceImport call has to run, so the results are combined with
-        // `|`, not `||`: a missing import must not short-circuit the rest.
-        const bool hookedCreate =
-            ReplaceImport(module, "CreateWindowExA",
-                          reinterpret_cast<void*>(&CreateWindowExAHook), &oldCreateA) |
-            ReplaceImport(module, "CreateWindowExW",
-                          reinterpret_cast<void*>(&CreateWindowExWHook), &oldCreateW);
-        const bool hookedOthers =
-            ReplaceImport(module, "MoveWindow", reinterpret_cast<void*>(&MoveWindowHook),
-                          &oldMove) |
-            ReplaceImport(module, "AdjustWindowRect",
-                          reinterpret_cast<void*>(&AdjustWindowRectHook), &oldAdjust) |
-            ReplaceImport(module, "SetWindowPos", reinterpret_cast<void*>(&SetWindowPosHook),
-                          &oldSetPos) |
-            ReplaceImport(module, "SetWindowLongA",
-                          reinterpret_cast<void*>(&SetWindowLongAHook), &oldSetLong) |
-            ReplaceImport(module, "SetRect", reinterpret_cast<void*>(&SetRectHook), &oldSetRect);
+        if (createA)
+        {
+            UseCaptured(*createA, g_createA);
+        }
+        if (createW)
+        {
+            UseCaptured(*createW, g_createW);
+        }
+        if (move)
+        {
+            UseCaptured(*move, g_move);
+        }
+        if (adjust)
+        {
+            UseCaptured(*adjust, g_adjust);
+        }
+        if (setPos)
+        {
+            UseCaptured(*setPos, g_setPos);
+        }
+        if (setLong)
+        {
+            UseCaptured(*setLong, g_setLong);
+        }
+        if (setRect)
+        {
+            UseCaptured(*setRect, g_setRect);
+        }
 
-        UseCaptured(oldCreateA, g_createA);
-        UseCaptured(oldCreateW, g_createW);
-        UseCaptured(oldMove, g_move);
-        UseCaptured(oldAdjust, g_adjust);
-        UseCaptured(oldSetPos, g_setPos);
-        UseCaptured(oldSetLong, g_setLong);
-        UseCaptured(oldSetRect, g_setRect);
-
-        if (!hookedCreate && !hookedOthers)
+        if (!createA && !createW && !move && !adjust && !setPos && !setLong && !setRect)
         {
             return false;
         }

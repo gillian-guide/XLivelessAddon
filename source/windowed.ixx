@@ -315,16 +315,20 @@ namespace xla::windowed
             return g_setRect != nullptr ? g_setRect(rect, left, top, right, bottom) : FALSE;
         }
 
-        HWND WINAPI CreateWindowExAHook(DWORD exStyle, LPCSTR className, LPCSTR windowName,
-                                        DWORD style, int x, int y, int width, int height,
-                                        HWND parent, HMENU menu, HINSTANCE instance,
-                                        LPVOID param) noexcept
+        // The A and W CreateWindowEx hooks differ only in the captured import they
+        // forward to, so one body serves both; the wrappers below keep the exact
+        // Win32 signatures the import table expects.
+        template <typename CharT, typename CreateFn>
+        HWND CreateWindowExHook(DWORD exStyle, const CharT* className, const CharT* windowName,
+                                DWORD style, int x, int y, int width, int height, HWND parent,
+                                HMENU menu, HINSTANCE instance, LPVOID param,
+                                CreateFn& create) noexcept
         {
             g_clientRect = RECT{0, 0, width, height};
             g_clientValid = width > 0 && height > 0;
-            HWND window = g_createA != nullptr
-                              ? g_createA(exStyle, className, windowName, style, x, y, width,
-                                          height, parent, menu, instance, param)
+            HWND window = create != nullptr
+                              ? create(exStyle, className, windowName, style, x, y, width, height,
+                                       parent, menu, instance, param)
                               : nullptr;
             if (window != nullptr)
             {
@@ -332,6 +336,15 @@ namespace xla::windowed
                 SwitchWindowStyle();
             }
             return window;
+        }
+
+        HWND WINAPI CreateWindowExAHook(DWORD exStyle, LPCSTR className, LPCSTR windowName,
+                                        DWORD style, int x, int y, int width, int height,
+                                        HWND parent, HMENU menu, HINSTANCE instance,
+                                        LPVOID param) noexcept
+        {
+            return CreateWindowExHook(exStyle, className, windowName, style, x, y, width, height,
+                                      parent, menu, instance, param, g_createA);
         }
 
         HWND WINAPI CreateWindowExWHook(DWORD exStyle, LPCWSTR className, LPCWSTR windowName,
@@ -339,44 +352,43 @@ namespace xla::windowed
                                         HWND parent, HMENU menu, HINSTANCE instance,
                                         LPVOID param) noexcept
         {
-            g_clientRect = RECT{0, 0, width, height};
-            g_clientValid = width > 0 && height > 0;
-            HWND window = g_createW != nullptr
-                              ? g_createW(exStyle, className, windowName, style, x, y, width,
-                                          height, parent, menu, instance, param)
-                              : nullptr;
-            if (window != nullptr)
-            {
-                g_window = window;
-                SwitchWindowStyle();
-            }
-            return window;
+            return CreateWindowExHook(exStyle, className, windowName, style, x, y, width, height,
+                                      parent, menu, instance, param, g_createW);
         }
 
-        bool ResolveBool(const Image& image, const char* primary, const char* fallback,
-                         bool** out) noexcept
+        // The operand of `cmp byte [imm32], imm8` / `mov byte [imm32], imm8` is the
+        // 4-byte global the row refers to.
+        constexpr std::ptrdiff_t kGlobalOperandOffset = 2;
+
+        // Resolves the bool global one of those windows refers to. `fallback` is the
+        // older variant of the signature (empty = none). Returns nullptr when neither
+        // matches or the operand points outside the image.
+        [[nodiscard]] bool* ResolveGlobalBool(const Image& image, std::string_view primary,
+                                              std::string_view fallback = {}) noexcept
         {
             hook::pattern pattern{primary};
-            if (pattern.empty() && fallback != nullptr)
+            if (pattern.empty() && !fallback.empty())
             {
                 pattern = hook::pattern{fallback};
             }
             if (pattern.empty())
             {
-                return false;
+                return nullptr;
             }
 
-            auto* slot = pattern.get(0).get<std::uint32_t>(2);
-            if (!image.contains(slot, sizeof(void*)))
+            auto* slot = pattern.get(0).get<std::uint32_t>(kGlobalOperandOffset);
+            if (!image.contains(slot, sizeof(std::uint32_t)))
             {
-                return false;
+                return nullptr;
             }
-            *out = reinterpret_cast<bool*>(static_cast<std::uintptr_t>(*slot));
-            return *out != nullptr;
+            return reinterpret_cast<bool*>(static_cast<std::uintptr_t>(*slot));
         }
 
-        // The legacy DefWindowProc shims: strip the window styles once, then call
-        // the real procedure.
+        // The legacy DefWindowProc shims: strip the window styles once per proxy,
+        // then call the real procedure. They are the A/W pair of one recovered
+        // body: each keeps its own one-shot flag (the original had one per site, so
+        // the first window each shim sees is the one that gets stripped) and its own
+        // API family - that difference is the contract, not duplication.
         LRESULT WINAPI DefWindowProcAProxy(HWND window, UINT message, WPARAM wparam,
                                            LPARAM lparam)
         {
@@ -503,21 +515,22 @@ namespace xla::windowed
             return true;
         }
 
-        if (!ResolveBool(image, "80 3D ? ? ? ? ? 74 0E 68 ? ? ? ? 53",
-                         "80 3D ? ? ? ? ? 74 13 68", &g_windowed))
+        g_windowed = ResolveGlobalBool(image, "80 3D ? ? ? ? ? 74 0E 68 ? ? ? ? 53",
+                                       "80 3D ? ? ? ? ? 74 13 68");
+        if (g_windowed == nullptr)
         {
             log::Write("windowed: windowed global not found");
             return false;
         }
-        if (!ResolveBool(image, "C6 05 ? ? ? ? ? 85 C0 74 02 FF D0 E8", nullptr,
-                         &g_focusLost))
+        g_focusLost = ResolveGlobalBool(image, "C6 05 ? ? ? ? ? 85 C0 74 02 FF D0 E8");
+        if (g_focusLost == nullptr)
         {
             log::Write("windowed: focus-loss global not found");
             return false;
         }
         // Optional: without it the topmost style is simply not kept in sync
         // (CentreWindow and SetWindowPosHook check g_onTop for null).
-        ResolveBool(image, "80 3D ? ? ? ? ? 74 07 BF", nullptr, &g_onTop);
+        g_onTop = ResolveGlobalBool(image, "80 3D ? ? ? ? ? 74 07 BF");
 
         hook::pattern pattern{"E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04"};
         if (pattern.empty())

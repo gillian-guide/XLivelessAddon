@@ -46,6 +46,7 @@ namespace xla::userdata
                 {
                     return E_INVALIDARG;
                 }
+                // SHGetFolderPath's caller buffer is MAX_PATH by contract.
                 return ::strncpy_s(path, MAX_PATH, g_profilePath.c_str(), _TRUNCATE) == 0
                            ? S_OK
                            : E_FAIL;
@@ -163,6 +164,8 @@ namespace xla::userdata
 
     bool InstallLocalSettingsPath(const Image& image) noexcept
     {
+        // Only ever inside the real game module: a parity dump that maps a private
+        // copy must not hook its own process.
         if (::GetModuleHandleW(nullptr) != reinterpret_cast<HMODULE>(image.base))
         {
             return false;

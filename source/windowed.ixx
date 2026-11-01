@@ -168,6 +168,17 @@ namespace xla::windowed
                        : nullptr;
         }
 
+        // The captured IAT value is the function the loader (or another ASI) put
+        // there; that is the one to forward to, not a second GetProcAddress.
+        template <typename Function>
+        void UseCaptured(void* captured, Function& target) noexcept
+        {
+            if (captured != nullptr)
+            {
+                target = reinterpret_cast<Function>(captured);
+            }
+        }
+
         // Centres on the nearest monitor. MoveWindowHook below has its own inline
         // copy of the same arithmetic (it also handles the oversized-client case);
         // keep the two in sync. Not merged because the hook has that extra branch.
@@ -207,9 +218,11 @@ namespace xla::windowed
                                                                WS_SYSMENU);
             g_setLong(g_window, GWL_STYLE, borderless);
 
-            RECT client = g_clientValid ? g_clientRect : RECT{0, 0, 0, 0};
+            RECT client = g_clientRect;
             if (!g_clientValid)
             {
+                // No SetRect captured a client size: centre the window rect.
+                client = RECT{0, 0, 0, 0};
                 RECT current{};
                 if (g_setPos != nullptr && ::GetWindowRect(g_window, &current))
                 {
@@ -443,6 +456,8 @@ namespace xla::windowed
         void* oldSetLong = nullptr;
         void* oldSetRect = nullptr;
 
+        // Every ReplaceImport call has to run, so the results are combined with
+        // `|`, not `||`: a missing import must not short-circuit the rest.
         const bool hookedCreate =
             ReplaceImport(module, "CreateWindowExA",
                           reinterpret_cast<void*>(&CreateWindowExAHook), &oldCreateA) |
@@ -459,34 +474,13 @@ namespace xla::windowed
                           reinterpret_cast<void*>(&SetWindowLongAHook), &oldSetLong) |
             ReplaceImport(module, "SetRect", reinterpret_cast<void*>(&SetRectHook), &oldSetRect);
 
-        if (oldCreateA != nullptr)
-        {
-            g_createA = reinterpret_cast<CreateWindowExAFn>(oldCreateA);
-        }
-        if (oldCreateW != nullptr)
-        {
-            g_createW = reinterpret_cast<CreateWindowExWFn>(oldCreateW);
-        }
-        if (oldMove != nullptr)
-        {
-            g_move = reinterpret_cast<MoveWindowFn>(oldMove);
-        }
-        if (oldAdjust != nullptr)
-        {
-            g_adjust = reinterpret_cast<AdjustWindowRectFn>(oldAdjust);
-        }
-        if (oldSetPos != nullptr)
-        {
-            g_setPos = reinterpret_cast<SetWindowPosFn>(oldSetPos);
-        }
-        if (oldSetLong != nullptr)
-        {
-            g_setLong = reinterpret_cast<SetWindowLongAFn>(oldSetLong);
-        }
-        if (oldSetRect != nullptr)
-        {
-            g_setRect = reinterpret_cast<SetRectFn>(oldSetRect);
-        }
+        UseCaptured(oldCreateA, g_createA);
+        UseCaptured(oldCreateW, g_createW);
+        UseCaptured(oldMove, g_move);
+        UseCaptured(oldAdjust, g_adjust);
+        UseCaptured(oldSetPos, g_setPos);
+        UseCaptured(oldSetLong, g_setLong);
+        UseCaptured(oldSetRect, g_setRect);
 
         if (!hookedCreate && !hookedOthers)
         {
@@ -522,6 +516,8 @@ namespace xla::windowed
             return false;
         }
         ResolveBool(image, "80 3D ? ? ? ? ? 74 07 BF", nullptr, &g_onTop);
+        // g_onTop is optional: without it the topmost style is simply not kept in
+        // sync (CentreWindow/SetWindowPosHook check it for null).
 
         hook::pattern pattern{"E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04"};
         if (pattern.empty())
@@ -552,17 +548,22 @@ namespace xla::windowed
     {
         (void)image;
 
+        // `FF 15 <rel32>` is a 6-byte import call; the original patches the first
+        // two matches, the W shim then the A shim.
+        constexpr std::size_t kImportCallLength = 6;
+        constexpr std::size_t kShimCount = 2;
+
         hook::pattern pattern{"FF 15 ? ? ? ? 5F 5E 5D 5B 83 C4 10 C2 10 00"};
-        if (pattern.size() < 2)
+        if (pattern.size() < kShimCount)
         {
             log::Info("windowed: DefWindowProc patterns missing ({})", pattern.size());
             return;
         }
 
-        injector::MakeNOP(injector::raw_ptr(pattern.get(0).get<void>()), 6, true);
+        injector::MakeNOP(injector::raw_ptr(pattern.get(0).get<void>()), kImportCallLength, true);
         injector::MakeCALL(injector::raw_ptr(pattern.get(0).get<void>()),
                            injector::raw_ptr(reinterpret_cast<void*>(&DefWindowProcWProxy)), true);
-        injector::MakeNOP(injector::raw_ptr(pattern.get(1).get<void>()), 6, true);
+        injector::MakeNOP(injector::raw_ptr(pattern.get(1).get<void>()), kImportCallLength, true);
         injector::MakeCALL(injector::raw_ptr(pattern.get(1).get<void>()),
                            injector::raw_ptr(reinterpret_cast<void*>(&DefWindowProcAProxy)), true);
         log::Write("windowed: DefWindowProc shims installed");

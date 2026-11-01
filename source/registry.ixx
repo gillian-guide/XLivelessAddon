@@ -18,6 +18,7 @@ import xla.common;
 export namespace xla::registry
 {
     // True when the sub-key is the Rockstar Games one the game expects to find.
+    // Test hook: the hooks call the internal ContainsRockstarGames directly.
     bool IsRockstarSubKey(std::string_view subKey) noexcept;
 
     // True when the value the game asks for is the install folder.
@@ -170,6 +171,9 @@ namespace xla::registry
             return 0;
         }
 
+        // Match a slot by the loader's own answer for the export, not by name: the
+        // slot value is what the game calls, and a name would need a second parse
+        // of the import table for no extra safety.
         const auto openKey =
             reinterpret_cast<std::uintptr_t>(::GetProcAddress(advapi, "RegOpenKeyA"));
         const auto openKeyEx =

@@ -14,14 +14,13 @@ subsystem.
 
 ## Features
 
-- Skip the launcher and its recovered DFA and ROM checks.
-- Redirect savegames and settings, and bypass the savegame CRC32 check.
+- Skip the launcher/DRM checks (recovered DFA and ROM stages).
+- Set custom savegame and settings folders, or move both into a saves folder inside the game folder.
 - Remove the Rockstar Games registry path dependency.
 - Skip the GFWL web-connect and health checks.
-- Shorten the intro screens to 300 ms and skip the main menu (hold SHIFT on startup to keep it).
-- Add borderless windowed mode and keep rendering while the window is unfocused.
+- Shorten the intro screens to 300 ms and skip the main menu (hold SHIFT on startup to reach it).
+- Add borderless windowed mode and keep rendering while the borderless window is unfocused.
 - Fix the VRAM detection so the settings are not locked out.
-- Gate every optional install on its INI key, log it, and disable options that FusionFix owns.
 
 `CustomSettingsPath` is implemented with a reconstructed 5-byte call body: the pinned injector's
 `MakeInline` is SafetyHook-based and this build compiles no SafetyHook. The recovered path logic is

@@ -83,6 +83,10 @@ namespace xla::patches
         constexpr std::ptrdiff_t kRgscInitSecondNopOffset = 5; // the `74 E7` after `74 EC 38 5E 06`
         constexpr std::ptrdiff_t kRgscResultJccOffset = 3;   // `75 BD` at +3 -> 33 C0
         constexpr std::ptrdiff_t kRgscResultStoreOffset = 10; // 5 bytes past the 5-byte sig
+        // The `0F 85` (6-byte jcc) of the two `cmp [reg+18]` rows, 3 bytes into
+        // the 5-byte signature.
+        constexpr std::ptrdiff_t kLastRgscJccOffset = 3;
+        constexpr std::size_t kLastRgscJccLength = 6;
         constexpr std::ptrdiff_t kRgscEfcJumpOffset = 2;     // E9 over `8B 56 1C`
         constexpr std::ptrdiff_t kWebConnectBranchOffset = 8; // `75 ??` after `FF 15; 85 C0`
         constexpr std::ptrdiff_t kIntroHookBackBytes = 6;    // 6 bytes before the resume match
@@ -191,306 +195,359 @@ namespace xla::patches
         }
     } // namespace
 
-    // Section index for the 290-line body (all one recovered sequence; do not
-    // reorder): files.txt/integrity checks -> RGSC gating -> EFC20 -> fixed
-    // sequences -> missing-test rows (v1005 and neighbours) -> DLC token/first-play
-    // -> intro/menu/do-not-pause/VRAM (separate functions below). The signature
-    // golden pins the scan order; the write plan is reviewed section by section.
-    void InstallCore(const Image& image, build::Id build)
+    namespace
     {
-        (void)image;
+        // ---- InstallCore: the recovered sections ---------------------------
+        // One helper per contiguous run of the original handler, in the order
+        // 0x10045CE0 applies them. InstallCore calls them in that same order, so
+        // the split changes neither the scan sequence the golden pins
+        // (xla_signature_parity) nor the write order; it makes each run
+        // reviewable on its own (xla_table_parity pins the [v1005] plan).
 
-        // The one pointer several later rows jump through (the EFC skip).
-        hook::pattern efcPattern{"68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84"};
-        void* efc = efcPattern.empty() ? nullptr : efcPattern.get(0).get<void>();
-        if (efc == nullptr)
+        // The handler's first scan, and the only pointer a later row jumps
+        // through (the RGSC/EFC skip in PatchEfcRows). Kept a separate step so
+        // moving the sections into functions leaves the scan in its place.
+        void* FindEfcAnchor()
         {
-            log::Write("core: EFC anchor pattern missing");
+            hook::pattern pattern{"68 ? ? ? ? 89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0 0F 84"};
+            if (pattern.empty())
+            {
+                log::Write("core: EFC anchor pattern missing");
+                return nullptr;
+            }
+            return pattern.get(0).get<void>();
         }
 
-        // disable sleep [v1002 - v1008]
-        patch::WriteDword("68 88 13 00 00 FF 15", 1, 1, "core: disable sleep");
-
-        // RETN - enable debugger in error menu (don't load WER.dll) [v1000 - v1008]
-        patch::WriteByte(
-            "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? 00 00 53 56 8B 35 ? ? ? ? 68", 0,
-            Byte(Opcode::kRet), "core: debugger in error menu");
-
-        // RETN 8 - certificates check [v1002 - v1008]
-        patch::RetFirst(
-            "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 8B 9C 24 ? ? ? ? 55 8B AC ? ? ? "
-            "? ? 8B 45 00",
-            0, 8, "core: certificates check");
-
-        // RETN - skip files.txt hash check [v1002 - v1005]
-        patch::RetFirst(
-            "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? ? ? "
-            "83 3D",
-            0, 0, "core: files.txt hash [1002-1005]");
-
-        // RETN - skip files.txt hash check [v1000 - v1001]
-        patch::RetFirst(
-            "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? 83 3D",
-            0, 0, "core: files.txt hash [1000-1001]");
-
-        // RETN - skip files.txt hash check [v1000 - v1001]
-        patch::RetFirst(
-            "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 56 68 ? ? ? ? 68 ? ? ? ? 68", 0, 0,
-            "core: files.txt hash (third variant)");
-
-        // JMP [v1002 - v1004]
+        // files.txt/certificate/debugger RETN rows, the [1002 - 1004] branch
+        // rewrite and the files.txt NOP.
+        void PatchIntegrityChecks()
         {
-            hook::pattern pattern{"3B 56 20 74 19"};
-            if (!pattern.empty())
+            // disable sleep [v1002 - v1008]
+            patch::WriteDword("68 88 13 00 00 FF 15", 1, 1, "core: disable sleep");
+
+            // RETN - enable debugger in error menu (don't load WER.dll) [v1000 - v1008]
+            patch::WriteByte(
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? 00 00 53 56 8B 35 ? ? ? ? 68", 0,
+                Byte(Opcode::kRet), "core: debugger in error menu");
+
+            // RETN 8 - certificates check [v1002 - v1008]
+            patch::RetFirst(
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 8B 9C 24 ? ? ? ? 55 8B AC ? ? ? "
+                "? ? 8B 45 00",
+                0, 8, "core: certificates check");
+
+            // RETN - skip files.txt hash check [v1002 - v1005]
+            patch::RetFirst(
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 56 57 0F 85 ? ? ? ? "
+                "83 3D",
+                0, 0, "core: files.txt hash [1002-1005]");
+
+            // RETN - skip files.txt hash check [v1000 - v1001]
+            patch::RetFirst(
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 83 3D ? ? ? ? ? 0F 85 ? ? ? ? 83 3D",
+                0, 0, "core: files.txt hash [1000-1001]");
+
+            // RETN - skip files.txt hash check [v1000 - v1001]
+            patch::RetFirst(
+                "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 56 68 ? ? ? ? 68 ? ? ? ? 68", 0, 0,
+                "core: files.txt hash (third variant)");
+
+            // JMP [v1002 - v1004]
             {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                // The JZ rel8 at +3 (`74 19`) continues at +0x1E. An E9 keeps the same
-                // destination, so the literal +0x16 the original stored is derived here.
-                injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + kJzTarget),
-                                  true);
-                log::Write("core: branch rewrite [1002-1004] applied");
-            }
-            else
-            {
-                log::Write("core: branch rewrite [1002-1004] missing");
-            }
-        }
-
-        // NOP - another files.txt hash check [v1000 - v1001]
-        patch::NopFirst("74 F7 8B CE", 0, 2, "core: files.txt hash nop");
-
-        // RETN - remove connect to the RGSC [v1000 - v1001]
-        patch::RetFirst(
-            "83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C 24 "
-            "3C 68",
-            0, 0, "core: RGSC connect [1000-1001]");
-
-        // RETN 4 - remove connect to the RGSC [v1002 - v1005]
-        patch::RetFirst(
-            "83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 0F 85",
-            0, 4, "core: RGSC connect [1002-1005]");
-
-        // data integrity checks VDS102 [v1002 - v1004]
-        patch::WriteByte("C7 06 ? ? ? ? 74 19", kVds102JccOffset, Byte(Opcode::kJmpRel8),
-                         "core: VDS102 [1002-1004]");
-
-        // data integrity checks VDS102 [v1005 - v1008]
-        patch::WriteByte("83 C4 ? 3B 46 20", kVds102LateJccOffset, Byte(Opcode::kJmpRel8),
-                         "core: VDS102 [1005-1008]");
-
-        // data integrity checks VDS100 [v1006 - v1008]
-        patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", kVds100JccOffset,
-                         Byte(Opcode::kJmpRel8), "core: VDS100 [1006-1008]");
-
-        // NOP - RGSC initialization check [v1000 - v1001]
-        {
-            hook::pattern pattern{"74 EC 38 5E 06 74 E7 68"};
-            if (!pattern.empty())
-            {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::MakeNOP(injector::raw_ptr(site), 2, true);
-                injector::MakeNOP(injector::raw_ptr(site + kRgscInitSecondNopOffset), 2, true);
-                log::Write("core: RGSC init [1000-1001] nops applied");
-            }
-            else
-            {
-                log::Write("core: RGSC init [1000-1001] missing");
-            }
-        }
-
-        // NOP - RGSC initialization check [v1002 - v1004]
-        patch::NopFirst("74 C4 8B 07 3B 46 18 75 BD 68", 0, 2, "core: RGSC init [1002-1004]");
-
-        // NOP - last RGSC init check [v1002 - v1004]
-        patch::NopFirst("3B 56 18 0F 85", 3, 6, "core: last RGSC init [1002-1004]");
-
-        // NOP - last RGSC init check [v1005]
-        patch::NopFirst("3B 4E 18 0F 85", 3, 6, "core: last RGSC init [1005]");
-
-        // NOP - last RGSC init check [v1006 - v1008]
-        patch::NopFirst("0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6", 0, 6,
-                        "core: last RGSC init [1006-1008]");
-
-        // RGSC initialization check [v1002 - v1004]
-        {
-            hook::pattern pattern{"3B 46 18 75 BD"};
-            if (!pattern.empty())
-            {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(
-                    injector::raw_ptr(site + kRgscResultJccOffset), kXorEaxEax,
-                    true); // xor eax,eax
-                injector::WriteMemory<std::uint16_t>(
-                    injector::raw_ptr(site + kRgscResultStoreOffset), kNopMovMoffsEax,
-                    true); // nop; mov [],eax
-                log::Write("core: RGSC result reset [1002-1004] applied");
-            }
-            else
-            {
-                log::Write("core: RGSC result reset [1002-1004] missing");
-            }
-        }
-
-        // EFC20 [v1003 - v1004]
-        patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1, kEfc20NopBytes,
-                        "core: EFC20 [1003-1004]");
-
-        // fix messed sequences (the original patches the first two matches)
-        // 0xBAC160 / 0xBAC190: `mov al,1; retn` (dcc4f31 dllmain.cpp).
-        {
-            hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
-            if (pattern.size() >= 2)
-            {
-                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(0).get<void>()),
-                                                     kMovAl1RetNop, true);
-                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(1).get<void>()),
-                                                     kMovAl1RetNop, true);
-                log::Write("core: fixed sequences patched (two matches)");
-            }
-            else
-            {
-                log::Write("core: fixed sequences missing");
-            }
-        }
-
-        // fix messed sequences (the original patches the last two matches)
-        // 0xBAC180 / 0xBAC1C0: `mov al,1; retn` (dcc4f31 dllmain.cpp).
-        {
-            hook::pattern pattern{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
-            if (pattern.size() >= 2)
-            {
-                injector::WriteMemory<std::uint32_t>(
-                    injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()), kMovAl1RetNop,
-                    true);
-                injector::WriteMemory<std::uint32_t>(
-                    injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()), kMovAl1RetNop,
-                    true);
-                log::Write("core: fixed sequences patched (last two matches)");
-            }
-            else
-            {
-                log::Write("core: fixed sequences (second table) missing");
-            }
-        }
-
-        // skip RGSC connect and EFC checks [v1005 - v1008]
-        {
-            hook::pattern pattern{"8B 56 1C 3B 56 20 ? ? 6A 00 6A 00"};
-            if (!pattern.empty() && efc != nullptr)
-            {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax,
-                                                     true); // xor eax,eax
-                injector::MakeJMP(injector::raw_ptr(site + kRgscEfcJumpOffset),
-                                  injector::raw_ptr(efc), true);
-                log::Write("core: RGSC/EFC skip [1005-1008] applied");
-            }
-            else
-            {
-                log::Write("core: RGSC/EFC skip [1005-1008] missing");
-            }
-        }
-
-        // NOP; MOV [g_rgsc], eax [v1000 - v1008]
-        {
-            hook::pattern pattern{"89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0"};
-            if (!pattern.empty())
-            {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                if (!build::Is(build, {build::Id::v1000, build::Id::v1010}))
+                hook::pattern pattern{"3B 56 20 74 19"};
+                if (!pattern.empty())
                 {
-                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kNopMovMoffsEax,
-                                                         true);
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    // The JZ rel8 at +3 (`74 19`) continues at +0x1E. An E9 keeps the same
+                    // destination, so the literal +0x16 the original stored is derived here.
+                    injector::MakeJMP(injector::raw_ptr(site + 3), injector::raw_ptr(site + kJzTarget),
+                                      true);
+                    log::Write("core: branch rewrite [1002-1004] applied");
                 }
                 else
                 {
-                    injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1),
-                                                        kStoreEbXModRm, true);
+                    log::Write("core: branch rewrite [1002-1004] missing");
                 }
-                log::Write("core: RGSC store neutralised");
             }
-            else
-            {
-                log::Write("core: RGSC store pattern missing");
-            }
+
+            // NOP - another files.txt hash check [v1000 - v1001]
+            patch::NopFirst("74 F7 8B CE", 0, 2, "core: files.txt hash nop");
         }
 
-        // skip missing tests [v1005]
+        // RGSC connect/init gating and the VDS branch rows.
+        void PatchRgscGating()
         {
-            hook::pattern pattern{"8B 50 2C 3B 50 30"};
-            if (!pattern.empty())
+            // RETN - remove connect to the RGSC [v1000 - v1001]
+            patch::RetFirst(
+                "83 EC 68 A1 ? ? ? ? 33 C4 89 44 24 60 53 56 57 8B F1 68 ? ? ? ? 8D 44 24 2C 8D 4C 24 "
+                "3C 68",
+                0, 0, "core: RGSC connect [1000-1001]");
+
+            // RETN 4 - remove connect to the RGSC [v1002 - v1005]
+            patch::RetFirst(
+                "83 EC 64 A1 ? ? ? ? 33 C4 89 44 24 60 8B 44 24 68 53 56 8B F1 8B 08 3B 4E 0C 57 0F 85",
+                0, 4, "core: RGSC connect [1002-1005]");
+
+            // data integrity checks VDS102 [v1002 - v1004]
+            patch::WriteByte("C7 06 ? ? ? ? 74 19", kVds102JccOffset, Byte(Opcode::kJmpRel8),
+                             "core: VDS102 [1002-1004]");
+
+            // data integrity checks VDS102 [v1005 - v1008]
+            patch::WriteByte("83 C4 ? 3B 46 20", kVds102LateJccOffset, Byte(Opcode::kJmpRel8),
+                             "core: VDS102 [1005-1008]");
+
+            // data integrity checks VDS100 [v1006 - v1008]
+            patch::WriteByte("75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", kVds100JccOffset,
+                             Byte(Opcode::kJmpRel8), "core: VDS100 [1006-1008]");
+
+            // NOP - RGSC initialization check [v1000 - v1001]
             {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax, true);
-                injector::MakeNOP(injector::raw_ptr(site + 2), 4, true);
-                log::Write("core: missing-test skip [v1005] (1/9) applied");
+                hook::pattern pattern{"74 EC 38 5E 06 74 E7 68"};
+                if (!pattern.empty())
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    injector::MakeNOP(injector::raw_ptr(site), 2, true);
+                    injector::MakeNOP(injector::raw_ptr(site + kRgscInitSecondNopOffset), 2, true);
+                    log::Write("core: RGSC init [1000-1001] nops applied");
+                }
+                else
+                {
+                    log::Write("core: RGSC init [1000-1001] missing");
+                }
             }
-            else
+
+            // NOP - RGSC initialization check [v1002 - v1004]
+            patch::NopFirst("74 C4 8B 07 3B 46 18 75 BD 68", 0, 2, "core: RGSC init [1002-1004]");
+
+            // NOP - last RGSC init check [v1002 - v1004]
+            patch::NopFirst("3B 56 18 0F 85", kLastRgscJccOffset, kLastRgscJccLength,
+                            "core: last RGSC init [1002-1004]");
+
+            // NOP - last RGSC init check [v1005]
+            patch::NopFirst("3B 4E 18 0F 85", kLastRgscJccOffset, kLastRgscJccLength,
+                            "core: last RGSC init [1005]");
+
+            // NOP - last RGSC init check [v1006 - v1008]
+            patch::NopFirst("0F 85 ? ? ? ? 8B 8C 24 ? ? ? ? 5F 5E 5B 33 CC C6", 0, 6,
+                            "core: last RGSC init [1006-1008]");
+
+            // RGSC initialization check [v1002 - v1004]
             {
-                log::Write("core: missing-test skip [v1005] (1/9) missing");
+                hook::pattern pattern{"3B 46 18 75 BD"};
+                if (!pattern.empty())
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    injector::WriteMemory<std::uint16_t>(
+                        injector::raw_ptr(site + kRgscResultJccOffset), kXorEaxEax,
+                        true); // xor eax,eax
+                    injector::WriteMemory<std::uint16_t>(
+                        injector::raw_ptr(site + kRgscResultStoreOffset), kNopMovMoffsEax,
+                        true); // nop; mov [],eax
+                    log::Write("core: RGSC result reset [1002-1004] applied");
+                }
+                else
+                {
+                    log::Write("core: RGSC result reset [1002-1004] missing");
+                }
             }
         }
-        // (2/9) and (3/9) each need two NOPs from ONE scan: the 3-byte head NOP
-        // overwrites the start of the signature, so a second scan of the same
-        // string would miss and silently drop the 11-byte tail NOP.
-        constexpr std::array<std::pair<std::string_view, std::string_view>, 2>
-            kMissingTestSites{{
-                {"8B 48 2C 83 EC 78", "core: missing-test [v1005] (2/9)"},
-                {"8B 48 2C 83 EC 74", "core: missing-test [v1005] (3/9)"},
-            }};
-        for (const auto& [signature, label] : kMissingTestSites)
+
+        // Whole-function rewrites: the EFC20 wipe and the two 0xBACxxx
+        // fixed-sequence tables (the original patches two matches of each).
+        void PatchRecoveredFunctionBodies()
         {
-            const patch::Site site = patch::Find(signature, label);
-            patch::Nop(site, 0, 3, label);
-            patch::Nop(site, 6, 11, label);
+            // EFC20 [v1003 - v1004]
+            patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1, kEfc20NopBytes,
+                            "core: EFC20 [1003-1004]");
+
+            // fix messed sequences (the original patches the first two matches)
+            // 0xBAC160 / 0xBAC190: `mov al,1; retn` (dcc4f31 dllmain.cpp).
+            {
+                hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
+                if (pattern.size() >= 2)
+                {
+                    injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(0).get<void>()),
+                                                         kMovAl1RetNop, true);
+                    injector::WriteMemory<std::uint32_t>(injector::raw_ptr(pattern.get(1).get<void>()),
+                                                         kMovAl1RetNop, true);
+                    log::Write("core: fixed sequences patched (two matches)");
+                }
+                else
+                {
+                    log::Write("core: fixed sequences missing");
+                }
+            }
+
+            // fix messed sequences (the original patches the last two matches)
+            // 0xBAC180 / 0xBAC1C0: `mov al,1; retn` (dcc4f31 dllmain.cpp).
+            {
+                hook::pattern pattern{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
+                if (pattern.size() >= 2)
+                {
+                    injector::WriteMemory<std::uint32_t>(
+                        injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()), kMovAl1RetNop,
+                        true);
+                    injector::WriteMemory<std::uint32_t>(
+                        injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()), kMovAl1RetNop,
+                        true);
+                    log::Write("core: fixed sequences patched (last two matches)");
+                }
+                else
+                {
+                    log::Write("core: fixed sequences (second table) missing");
+                }
+            }
         }
-        patch::NopFirst("8B 48 2C 3B 48 30 74 03", 0, 11, "core: missing-test [v1005] (4/9)");
-        patch::NopFirst("8B 48 2C 3B 48 30 53", 0, 32, "core: missing-test [v1005] (5/9)");
-        patch::NopFirst("8B 48 2C 3B 48 30 74 11", 0, 25, "core: missing-test [v1005] (6/9)");
-        patch::NopFirst("8B 48 2C 3B 48 30 75 DC 8D 54 24 18", 0, 8,
-                        "core: missing-test [v1005] (7/9)");
-        patch::NopFirst("8B 48 2C 3B 48 30 75 DC 8D 54 24 1C", 0, 8,
-                        "core: missing-test [v1005] (8/9)");
-        patch::NopFirst("8B 0D ? ? ? ? 8B 51 2C", 0, 14, "core: missing-test [v1005] (9/9)");
 
-        // skip missing tests [v1003 - v1005]
-        patch::RetFirst("51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C", 0, 0,
-                        "core: missing-test [1003-1005] ret");
-
-        // skip missing tests [v1005 - v1008]
-        patch::NopFirst("3B C7 0F 85 ? ? ? ? 85 C0", 0, 16, "core: missing-test [1005-1008] (1/2)");
-        patch::NopFirst("0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2", 0, 14,
-                        "core: missing-test [1005-1008] (2/2)");
-
-        // skip missing tests [v1006 - v1007]
-        patch::WriteDword("83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57", 0, kXorEaxRetNop,
-                          "core: missing-test [1006-1007] (1/2)");
-        patch::WriteDword("83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52", 0, kXorEaxRetNop,
-                          "core: missing-test [1006-1007] (2/2)");
-
-        // DLC token activation [v1006 - v1007]
-        patch::WriteWord("8B 54 24 04 52 A3", 0, JmpShort(kDlcTokenJump),
-                         "core: DLC token activation (1/2)");
+        // The rows that reuse the EFC anchor: the RGSC/EFC jump and the
+        // build-gated RGSC store neutralisation.
+        void PatchEfcRows(void* efc, build::Id build)
         {
-            hook::pattern pattern{"83 F8 01 75 30 A3"};
-            if (!pattern.empty())
+            // skip RGSC connect and EFC checks [v1005 - v1008]
             {
-                auto* site = pattern.get(0).get<std::uint8_t>();
-                injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site),
-                                                    Byte(Opcode::kMovEaxImm32),
-                                                    true); // mov eax, ...
-                injector::WriteMemory<std::uint32_t>(injector::raw_ptr(site + 1), 1, true);
-                log::Write("core: DLC token activation (2/2) applied");
+                hook::pattern pattern{"8B 56 1C 3B 56 20 ? ? 6A 00 6A 00"};
+                if (!pattern.empty() && efc != nullptr)
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax,
+                                                         true); // xor eax,eax
+                    injector::MakeJMP(injector::raw_ptr(site + kRgscEfcJumpOffset),
+                                      injector::raw_ptr(efc), true);
+                    log::Write("core: RGSC/EFC skip [1005-1008] applied");
+                }
+                else
+                {
+                    log::Write("core: RGSC/EFC skip [1005-1008] missing");
+                }
             }
-            else
+
+            // NOP; MOV [g_rgsc], eax [v1000 - v1008]
             {
-                log::Write("core: DLC token activation (2/2) missing");
+                hook::pattern pattern{"89 35 ? ? ? ? E8 ? ? ? ? 83 C4 04 84 C0"};
+                if (!pattern.empty())
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    if (!build::Is(build, {build::Id::v1000, build::Id::v1010}))
+                    {
+                        injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kNopMovMoffsEax,
+                                                             true);
+                    }
+                    else
+                    {
+                        injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site + 1),
+                                                            kStoreEbXModRm, true);
+                    }
+                    log::Write("core: RGSC store neutralised");
+                }
+                else
+                {
+                    log::Write("core: RGSC store pattern missing");
+                }
             }
         }
 
-        // skip first-time play ask [v1006 - v1008]
-        patch::WriteWord("C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", 0,
-                         JmpShort(kFirstPlayJump), "core: first-time play ask");
+        // The [v1005] missing-test rows and their neighbours.
+        void PatchMissingTests()
+        {
+            // skip missing tests [v1005]
+            {
+                hook::pattern pattern{"8B 50 2C 3B 50 30"};
+                if (!pattern.empty())
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    injector::WriteMemory<std::uint16_t>(injector::raw_ptr(site), kXorEaxEax, true);
+                    injector::MakeNOP(injector::raw_ptr(site + 2), 4, true);
+                    log::Write("core: missing-test skip [v1005] (1/9) applied");
+                }
+                else
+                {
+                    log::Write("core: missing-test skip [v1005] (1/9) missing");
+                }
+            }
+            // (2/9) and (3/9) each need two NOPs from ONE scan: the 3-byte head NOP
+            // overwrites the start of the signature, so a second scan of the same
+            // string would miss and silently drop the 11-byte tail NOP.
+            constexpr std::array<std::pair<std::string_view, std::string_view>, 2>
+                kMissingTestSites{{
+                    {"8B 48 2C 83 EC 78", "core: missing-test [v1005] (2/9)"},
+                    {"8B 48 2C 83 EC 74", "core: missing-test [v1005] (3/9)"},
+                }};
+            for (const auto& [signature, label] : kMissingTestSites)
+            {
+                const patch::Site site = patch::Find(signature, label);
+                patch::Nop(site, 0, 3, label);
+                patch::Nop(site, 6, 11, label);
+            }
+            patch::NopFirst("8B 48 2C 3B 48 30 74 03", 0, 11, "core: missing-test [v1005] (4/9)");
+            patch::NopFirst("8B 48 2C 3B 48 30 53", 0, 32, "core: missing-test [v1005] (5/9)");
+            patch::NopFirst("8B 48 2C 3B 48 30 74 11", 0, 25, "core: missing-test [v1005] (6/9)");
+            patch::NopFirst("8B 48 2C 3B 48 30 75 DC 8D 54 24 18", 0, 8,
+                            "core: missing-test [v1005] (7/9)");
+            patch::NopFirst("8B 48 2C 3B 48 30 75 DC 8D 54 24 1C", 0, 8,
+                            "core: missing-test [v1005] (8/9)");
+            patch::NopFirst("8B 0D ? ? ? ? 8B 51 2C", 0, 14, "core: missing-test [v1005] (9/9)");
+
+            // skip missing tests [v1003 - v1005]
+            patch::RetFirst("51 53 55 56 57 8B 3D ? ? ? ? 8B 47 2C", 0, 0,
+                            "core: missing-test [1003-1005] ret");
+
+            // skip missing tests [v1005 - v1008]
+            patch::NopFirst("3B C7 0F 85 ? ? ? ? 85 C0", 0, 16, "core: missing-test [1005-1008] (1/2)");
+            patch::NopFirst("0F 85 ? ? ? ? 85 C0 0F 84 ? ? ? ? E8 ? ? ? ? 85 D2", 0, 14,
+                            "core: missing-test [1005-1008] (2/2)");
+
+            // skip missing tests [v1006 - v1007]
+            patch::WriteDword("83 EC 24 A1 ? ? ? ? 8B 48 14 53 55 56 57", 0, kXorEaxRetNop,
+                              "core: missing-test [1006-1007] (1/2)");
+            patch::WriteDword("83 EC 08 8B 0D ? ? ? ? 8B 51 14 8D 04 24 50 6A 00 52", 0, kXorEaxRetNop,
+                              "core: missing-test [1006-1007] (2/2)");
+        }
+
+        // DLC token activation and the first-time-play ask [v1006 - v1008].
+        void PatchDlcTokenAndFirstPlay()
+        {
+            // DLC token activation [v1006 - v1007]
+            patch::WriteWord("8B 54 24 04 52 A3", 0, JmpShort(kDlcTokenJump),
+                             "core: DLC token activation (1/2)");
+            {
+                hook::pattern pattern{"83 F8 01 75 30 A3"};
+                if (!pattern.empty())
+                {
+                    auto* site = pattern.get(0).get<std::uint8_t>();
+                    injector::WriteMemory<std::uint8_t>(injector::raw_ptr(site),
+                                                        Byte(Opcode::kMovEaxImm32),
+                                                        true); // mov eax, ...
+                    injector::WriteMemory<std::uint32_t>(injector::raw_ptr(site + 1), 1, true);
+                    log::Write("core: DLC token activation (2/2) applied");
+                }
+                else
+                {
+                    log::Write("core: DLC token activation (2/2) missing");
+                }
+            }
+
+            // skip first-time play ask [v1006 - v1008]
+            patch::WriteWord("C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", 0,
+                             JmpShort(kFirstPlayJump), "core: first-time play ask");
+        }
+    } // namespace
+
+    // The unconditional patch list, in the original handler's order: one call
+    // per recovered section. The scan literals live in the helpers in this same
+    // order, so xla_signature_parity still sees the original sequence.
+    void InstallCore(const Image& image, build::Id build)
+    {
+        // The rows scan the live game module through patch::; the image handle
+        // is the install-time contract, not a gate (see patch.ixx).
+        (void)image;
+
+        void* efc = FindEfcAnchor();
+        PatchIntegrityChecks();
+        PatchRgscGating();
+        PatchRecoveredFunctionBodies();
+        PatchEfcRows(efc, build);
+        PatchMissingTests();
+        PatchDlcTokenAndFirstPlay();
     }
 
     void InstallWebConnectChecks(const Image& image)

@@ -1328,12 +1328,22 @@ namespace xla
             inline constexpr std::uint32_t kActionAdd = 51;
             inline constexpr std::uint32_t kActionSet = 100;
 
-            // RomReset's object layout: [1] is the window handle, [4] the WM_ROM
-            // id; [0], [2], [3] and [5..18] are cleared first.
-            inline constexpr std::size_t kObjectWindow = 1;
-            inline constexpr std::size_t kObjectMessage = 4;
-            inline constexpr std::size_t kObjectClearFirst = 5;
-            inline constexpr std::size_t kObjectClearLast = 18;
+            // RomReset's object (0x10004570): 19 32-bit slots. The window handle
+            // sits in slot 1 and the WM_ROM id in slot 4; the original zeroes slot
+            // 0, 2, 3 and 5..18 first, so a whole-object zero followed by the two
+            // publishes ends in the same state.
+            struct RomObject
+            {
+                std::uint32_t slot0{};
+                std::uint32_t window{};                                      // slot 1
+                std::uint32_t slot2{};
+                std::uint32_t slot3{};
+                std::uint32_t message{};                                     // slot 4
+                std::array<std::uint32_t, 14> tail{};                        // slots 5..18
+            };
+            static_assert(offsetof(RomObject, window) == sizeof(std::uint32_t));
+            static_assert(offsetof(RomObject, message) == 4 * sizeof(std::uint32_t));
+            static_assert(sizeof(RomObject) == 19 * sizeof(std::uint32_t));
 
             // The service readiness wait: 200 attempts, 1 ms apart (the original
             // polls once per millisecond for a short while instead of blocking).
@@ -1489,7 +1499,7 @@ namespace xla
             // 0x10004570: start the ROM service, reset the object and publish the
             // window handle plus the WM_ROM id. ABI: __cdecl with one stack
             // argument, returning the window handle in eax (plain ret).
-            inline int __cdecl RomResetBody(std::uint32_t* object)
+            inline int __cdecl RomResetBody(RomObject* object)
             {
                 StartRomService();
                 if (object == nullptr)
@@ -1497,18 +1507,11 @@ namespace xla
                     return 0;
                 }
 
-                object[0] = 0;
-                object[2] = 0;
-                object[3] = 0;
-                for (std::size_t index = kObjectClearFirst; index <= kObjectClearLast; ++index)
-                {
-                    object[index] = 0;
-                }
-
-                object[kObjectWindow] =
+                *object = RomObject{};
+                object->window =
                     static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gWindow.load()));
-                object[kObjectMessage] = kRomMessage;
-                return static_cast<int>(object[kObjectWindow]);
+                object->message = kRomMessage;
+                return static_cast<int>(object->window);
             }
         } // namespace rom
     } // namespace skip_hooks

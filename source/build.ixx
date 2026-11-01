@@ -44,7 +44,9 @@ export namespace xla::build
     };
 
     // opaque: the first four code bytes at kSignatureOffset; a fingerprint of
-    // machine code, compared and never decoded.
+    // machine code, compared and never decoded. These are instruction bytes, not
+    // float bit patterns, even where one starts like a float (0x404B100Fu for
+    // 1.0.8.0): nothing here is ever reinterpreted as a number.
     // provenance: the original add-on's classification switch (its `gv()` lambda),
     // reproduced byte-for-byte from dcc4f31 source/dllmain.cpp:677-708.
     // why: the bytes are another module's code and change per build, so no

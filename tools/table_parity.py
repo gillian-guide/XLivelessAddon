@@ -406,13 +406,9 @@ def parse_installs(text: str, opcodes: dict[str, int],
             signature = fields[0].strip().strip('"')
             offset = parse_integer(fields[1], constants, f"{table} site offset")
             opcode_expr = fields[2].strip()
-            if opcode_expr.startswith("Opcode::"):
-                opcode = opcodes[opcode_expr.split("::", 1)[1]]
-            elif opcode_expr in ("kCallOpcode", "kJumpOpcode"):
-                # Pre-modular spelling; only the one-off golden derivation sees it.
-                opcode = 0xE8 if opcode_expr == "kCallOpcode" else 0xE9
-            else:
+            if not opcode_expr.startswith("Opcode::"):
                 raise SystemExit(f"table_parity: unknown opcode {opcode_expr!r}")
+            opcode = opcodes[opcode_expr.split("::", 1)[1]]
             hook = fields[3].strip().split("::", 1)[-1]
             rows.append({"signature": signature, "offset": offset,
                          "opcode": opcode, "hook": hook})
@@ -441,10 +437,10 @@ def parse_collected(text: str) -> tuple[list[dict], list[dict]]:
         collector = fields[0].strip().strip('"')
         target_table = fields[1].strip()
         count_expr = fields[2].strip()
-        count_match = re.fullmatch(r"(?:std::size|CountOf)\((\w+)\)", count_expr)
+        count_match = re.fullmatch(r"std::size\((\w+)\)", count_expr)
         if not count_match:
             raise SystemExit(f"table_parity: collected install count is {count_expr!r}, "
-                             "expected std::size(...)/CountOf(...)")
+                             "expected std::size(...)")
         installs.append({"collector": collector, "targets": target_table,
                          "count_expr": count_expr, "count_table": count_match.group(1)})
     table_counts: dict[str, int] = {}
@@ -681,7 +677,9 @@ def main(argv: list[str]) -> int:
         (args.source / "skip_launcher.ixx").read_text(encoding="utf-8", errors="replace")))
     common = (args.source / "common.ixx").read_text(encoding="utf-8", errors="replace")
     jump_target_match = re.search(r"kSkipLauncherJumpTargetEntry\s*=\s*(\d+)", text)
-    jump_target = int(jump_target_match.group(1)) if jump_target_match else 1
+    if not jump_target_match:
+        raise SystemExit("table_parity: kSkipLauncherJumpTargetEntry not found")
+    jump_target = int(jump_target_match.group(1))
 
     try:
         tables = parse_tables(text, common, jump_target)

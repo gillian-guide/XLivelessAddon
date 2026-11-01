@@ -29,15 +29,19 @@ export namespace xla::rom_window
         8, 11, 241, 1, 240, 2, 7, 12, 3, 243, 9, 6, 10, 5, 4, 242,
     };
 
-    // Message payload, indexed as the original's 32-bit slots: slot 4 (offset 16)
-    // is the action, slots 5 and 6 (offsets 20/24) are its operands.
+    // Message payload, indexed as the original's 32-bit slots: slots 0..3 are
+    // unused, slot 4 (offset 16) is the action, slots 5 and 6 (offsets 20/24) are
+    // its operands. The layout is the protocol, so the offsets are compile-checked.
     struct Payload
     {
-        char reserved[16];
+        std::array<char, 4 * sizeof(int)> reserved{};
         int action;
         char* setAddress;
         char* copyAddress;
     };
+    static_assert(offsetof(Payload, action) == 16);       // slot 4
+    static_assert(offsetof(Payload, setAddress) == 20);   // slot 5
+    static_assert(offsetof(Payload, copyAddress) == 24);  // slot 6
 
     inline constexpr int kActionCopyTable = 18;
     inline constexpr int kActionAdd = 51;

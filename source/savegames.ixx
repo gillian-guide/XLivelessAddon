@@ -45,9 +45,23 @@ namespace xla::savegames
         std::string g_gameDefaultSavePath;
         std::string g_customSavePath;
 
+        // Copies into the game's fixed-size buffer: truncated and always terminated,
+        // like the original's memmove+terminator but without its overrun. Logs when
+        // the value did not fit (the one thing the caller cannot see).
+        void CopyToGameBuffer(std::string_view text, char* buffer, std::string_view what)
+        {
+            const std::size_t length = (std::min)(text.size(), kGamePathCapacity - 1);
+            std::copy_n(text.data(), length, buffer);
+            buffer[length] = '\0';
+            if (length < text.size())
+            {
+                log::Info("savegames: {} truncated to {} characters", what, length);
+            }
+        }
+
         // ABI: __cdecl, (unused int, char* buffer, char* saveName), plain ret. The
         // game's path builder is tail-jumped here with its 256-byte caller buffer;
-        // the copy below is bounded but keeps that buffer contract.
+        // the copies below are bounded but keep that buffer contract.
         void __cdecl GetSavefilePath(int /*unused*/, char* buffer, char* saveName)
         {
             if (buffer == nullptr)
@@ -71,16 +85,13 @@ namespace xla::savegames
                 // A file sits where the folder belongs: keep the game's own name.
                 if (!name.empty())
                 {
-                    ::strncpy_s(buffer, kGamePathCapacity, std::string{name}.c_str(), _TRUNCATE);
+                    CopyToGameBuffer(name, buffer, "save name");
                 }
                 return;
             }
 
             const std::string path = JoinSaveName(base, name);
-            if (::strncpy_s(buffer, kGamePathCapacity, path.c_str(), _TRUNCATE) != 0)
-            {
-                log::Info("savegames: path truncated to {} characters", kGamePathCapacity - 1);
-            }
+            CopyToGameBuffer(path, buffer, "custom save path");
         }
     } // namespace
 

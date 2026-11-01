@@ -110,24 +110,12 @@ namespace xla
 
         Image CurrentImage()
         {
-            auto* base = reinterpret_cast<std::uint8_t*>(::GetModuleHandleW(nullptr));
-            if (base == nullptr)
+            auto* base = ::GetModuleHandleW(nullptr);
+            const IMAGE_NT_HEADERS* nt = NtHeaders(base);
+            if (nt == nullptr)
             {
                 return {};
             }
-
-            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            {
-                return {};
-            }
-
-            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-            if (nt->Signature != IMAGE_NT_SIGNATURE)
-            {
-                return {};
-            }
-
             return {reinterpret_cast<std::byte*>(base), nt->OptionalHeader.SizeOfImage};
         }
 

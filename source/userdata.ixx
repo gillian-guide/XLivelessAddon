@@ -90,14 +90,8 @@ namespace xla::userdata
             }
 
             auto* base = reinterpret_cast<std::uint8_t*>(image.base);
-            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            {
-                return false;
-            }
-
-            const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-            if (nt->Signature != IMAGE_NT_SIGNATURE)
+            const IMAGE_NT_HEADERS* nt = NtHeaders(base);
+            if (nt == nullptr)
             {
                 return false;
             }

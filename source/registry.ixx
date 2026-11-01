@@ -174,12 +174,12 @@ namespace xla::registry
         // Match a slot by the loader's own answer for the export, not by name: the
         // slot value is what the game calls, and a name would need a second parse
         // of the import table for no extra safety.
-        const auto openKey =
-            reinterpret_cast<std::uintptr_t>(::GetProcAddress(advapi, "RegOpenKeyA"));
-        const auto openKeyEx =
-            reinterpret_cast<std::uintptr_t>(::GetProcAddress(advapi, "RegOpenKeyExA"));
-        const auto queryValueEx =
-            reinterpret_cast<std::uintptr_t>(::GetProcAddress(advapi, "RegQueryValueExA"));
+        const auto exportAddress = [advapi](const char* name) {
+            return reinterpret_cast<std::uintptr_t>(::GetProcAddress(advapi, name));
+        };
+        const auto openKey = exportAddress("RegOpenKeyA");
+        const auto openKeyEx = exportAddress("RegOpenKeyExA");
+        const auto queryValueEx = exportAddress("RegQueryValueExA");
         if (openKey == 0 || openKeyEx == 0 || queryValueEx == 0)
         {
             log::Write("registry: advapi32 exports not found; nothing replaced");
@@ -187,12 +187,11 @@ namespace xla::registry
         }
 
         auto* base = reinterpret_cast<std::uint8_t*>(image.base);
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        const IMAGE_NT_HEADERS* nt = NtHeaders(base);
+        if (nt == nullptr)
         {
             return 0;
         }
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
         const auto& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
         if (directory.VirtualAddress == 0)
         {

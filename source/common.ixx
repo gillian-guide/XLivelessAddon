@@ -51,6 +51,29 @@ export namespace xla
         }
     };
 
+    // The PE headers of a mapped module. Every installer walks the import table of
+    // the same image, so the two signature checks live here once; a caller that
+    // wants to say which one failed uses the two pieces directly. No bounds check:
+    // the load address is either the module the loader mapped or a caller's copy of
+    // the same file, exactly as the original's helpers assumed.
+    [[nodiscard]] inline const IMAGE_DOS_HEADER* DosHeader(const void* module) noexcept
+    {
+        const auto* dos = static_cast<const IMAGE_DOS_HEADER*>(module);
+        return dos != nullptr && dos->e_magic == IMAGE_DOS_SIGNATURE ? dos : nullptr;
+    }
+
+    [[nodiscard]] inline const IMAGE_NT_HEADERS* NtHeaders(const void* module) noexcept
+    {
+        const IMAGE_DOS_HEADER* dos = DosHeader(module);
+        if (dos == nullptr)
+        {
+            return nullptr;
+        }
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+            static_cast<const std::uint8_t*>(module) + dos->e_lfanew);
+        return nt->Signature == IMAGE_NT_SIGNATURE ? nt : nullptr;
+    }
+
     enum class PatchErrorCode : std::uint8_t
     {
         invalid_input,
@@ -286,16 +309,14 @@ export namespace xla
             return false;
         }
 
-        auto* base = reinterpret_cast<std::uint8_t*>(image.base);
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        if (DosHeader(image.base) == nullptr)
         {
             log::Write("image: bad DOS signature; no patches applied");
             return false;
         }
 
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE)
+        const auto* nt = NtHeaders(image.base);
+        if (nt == nullptr)
         {
             log::Write("image: bad NT signature; no patches applied");
             return false;

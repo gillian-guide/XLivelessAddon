@@ -75,8 +75,9 @@ namespace xla::windowed
         // Replaces the first matching USER32 import slot. The imported function
         // stays callable through `original`.
         // Deliberate near-copy of userdata::ReplaceShellImport and registry's inline
-        // walker: this one trusts the PE headers (the other two bounds-check more),
-        // and the OriginalFirstThunk == 0 fallback must be kept in sync by hand.
+        // walker (the header validation is shared through xla::NtHeaders): this one
+        // trusts the descriptor/thunk chain (the other two bounds-check more), and
+        // the OriginalFirstThunk == 0 fallback must be kept in sync by hand.
         bool ReplaceImport(HMODULE module, const char* function, void* replacement,
                            void** original) noexcept
         {
@@ -86,15 +87,8 @@ namespace xla::windowed
             }
 
             const auto* base = reinterpret_cast<const std::uint8_t*>(module);
-            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-            {
-                return false;
-            }
-
-            const auto* nt =
-                reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
-            if (nt->Signature != IMAGE_NT_SIGNATURE)
+            const IMAGE_NT_HEADERS* nt = NtHeaders(module);
+            if (nt == nullptr)
             {
                 return false;
             }

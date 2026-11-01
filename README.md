@@ -14,7 +14,7 @@ subsystem.
 
 ## Features
 
-- Skip the launcher/DRM checks (recovered DFA and ROM stages).
+- Skip the launcher/DRM checks.
 - Set custom savegame and settings folders, or move both into a saves folder inside the game folder.
 - Remove the Rockstar Games registry path dependency.
 - Skip the GFWL web-connect and health checks.
@@ -35,29 +35,6 @@ letter) uses the documented intent rather than the original's undefined empty-st
 3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what was applied.
 
 The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
-
-## Supported game versions
-
-The ids are the original add-on's classification ids (the values in `build.ixx`), not the game's
-patch numbers; `1.0.0.4` is classified as `1050`, for example. 1.0.5.0 is not in the table, so no
-patch applies there. The version names for `1020` and `1030` (and EFLC `1100`) follow the original
-table's order; those three executables were not available to test against.
-
-| id | version | status |
-| ---: | --- | --- |
-| 1000 | 1.0.0.0 | supported |
-| 1010 | 1.0.1.0 | supported |
-| 1020 | 1.0.2.0 | supported |
-| 1030 | 1.0.3.0 | supported |
-| 1040 | 1.0.4.0 | supported |
-| 1050 | 1.0.0.4 | supported |
-| 1060 | 1.0.6.0 | supported |
-| 1070 | 1.0.7.0 | supported |
-| 1080 | 1.0.8.0 | supported |
-| 1100 | 1.1.0.0 (EFLC) | supported |
-| 1110 | 1.1.1.0 (TLAD) | supported |
-| 1120 | 1.1.2.0 (TBoGT) | supported |
-| 1130 | 1.1.3.0 (EFLC) | supported |
 
 ## Building
 

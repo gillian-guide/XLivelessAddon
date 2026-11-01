@@ -7,10 +7,11 @@
 // a user's log say exactly which patches applied on their build.
 //
 // These helpers deliberately take no `Image`: they scan the live game module and
-// trust the match. Bounds-checked passes (skip_launcher, savegames, rom_window)
-// take an Image and use `Image::contains` themselves. Installers that take a
-// `const Image&` but discard it keep the parameter for that install-time contract;
-// it is not a gate.
+// trust the match. Bounds-checked passes do their own check: `savegames` and
+// `rom_window` use `Image::contains`; `skip_launcher` wraps a caller-owned span
+// and keeps a private `InBounds` with the same arithmetic. Installers that take a
+// `const Image&` but discard it keep the parameter for that install-time
+// contract; it is not a gate.
 
 module;
 

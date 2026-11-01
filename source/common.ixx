@@ -18,9 +18,11 @@ export module xla.common;
 export namespace xla
 {
     // A writable view of the game module: `base` is the load address and `size`
-    // is OptionalHeader.SizeOfImage. `contains()` is the bounds check used by the
-    // image-aware installers (skip_launcher, savegames, rom_window, ...); the
-    // generic `patch::` helpers do not take an Image and trust the signature match.
+    // is OptionalHeader.SizeOfImage. `contains()` is the bounds check for the
+    // installers that take an `Image` (savegames, rom_window, the IAT walkers).
+    // `xla.patch`'s helpers take no image and trust the signature match, and
+    // `xla.skip_launcher` wraps a caller-owned span with a private `InBounds`
+    // (the same arithmetic, for passes that do not own an Image).
     struct Image
     {
         std::byte* base{};
@@ -161,7 +163,7 @@ export namespace xla
 
     namespace paths
     {
-        // Same, but reports why it failed instead of returning an empty path.
+        // The module's directory, reporting why it failed through `error`.
         inline std::filesystem::path ModuleDirectory(std::error_code& error) noexcept
         {
             // Windows' documented maximum path length (including the terminator).
@@ -179,7 +181,7 @@ export namespace xla
             return std::filesystem::path(std::wstring_view(buffer.data(), length)).parent_path();
         }
 
-        // The directory of the process executable (the game folder).
+        // The same path, ignoring the failure reason; empty when it fails.
         inline std::filesystem::path ModuleDirectory() noexcept
         {
             std::error_code error;
@@ -213,13 +215,6 @@ export namespace xla
         {
             std::scoped_lock lock{detail::g_mutex};
             detail::g_path = std::move(path);
-        }
-
-        // The destination in use; the default is resolved on first use.
-        inline const std::filesystem::path& Path()
-        {
-            std::scoped_lock lock{detail::g_mutex};
-            return detail::ResolvePath();
         }
 
         // Appends one line; the trailing newline is added. Never throws.

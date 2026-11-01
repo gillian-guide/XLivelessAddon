@@ -217,21 +217,22 @@ export namespace xla
             detail::g_path = std::move(path);
         }
 
-        // Appends one line; the trailing newline is added. Never throws.
+        // Appends one line; the trailing newline is added. Binary append keeps the
+        // LF endings the log has always had (text mode would double them on
+        // Windows), and the stream's destructor flushes inside the try. Never
+        // throws: a log failure must never take the game down.
         inline void Write(std::string_view line) noexcept
         {
             std::scoped_lock lock{detail::g_mutex};
             try
             {
-                std::FILE* file = nullptr;
-                if (::_wfopen_s(&file, detail::ResolvePath().c_str(), L"ab") != 0 ||
-                    file == nullptr)
+                std::ofstream file{detail::ResolvePath(), std::ios::binary | std::ios::app};
+                if (!file)
                 {
                     return;
                 }
-                std::fwrite(line.data(), 1, line.size(), file);
-                std::fputc('\n', file);
-                std::fclose(file);
+                file.write(line.data(), static_cast<std::streamsize>(line.size()));
+                file.put('\n');
             }
             catch (...)
             {

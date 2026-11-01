@@ -183,27 +183,27 @@ export namespace xla::config
 
         // The reader splits on '\n' already, so the CRLF rewrite is inherited
         // editor/round-trip compatibility (it rewrites the user's file once), not
-        // a parse requirement. The C runtime is used because this runs in module
-        // purview.
+        // a parse requirement. The file is read and written as bytes over
+        // std::filesystem::path, so a BOM and every other byte survive unchanged;
+        // only a bare LF becomes CRLF.
         inline void NormalizeLineEndings(const std::filesystem::path& path)
         {
-            std::FILE* in = ::_wfopen(path.c_str(), L"rb");
-            if (in == nullptr)
+            std::ifstream in{path, std::ios::binary};
+            if (!in)
             {
                 return;
             }
-            std::fseek(in, 0, SEEK_END);
-            const long size = std::ftell(in);
-            std::rewind(in);
+            in.seekg(0, std::ios::end);
+            const std::streampos size = in.tellg();
             if (size <= 0)
             {
-                std::fclose(in);
                 return;
             }
+            in.seekg(0, std::ios::beg);
+
             std::string text(static_cast<std::size_t>(size), '\0');
-            const std::size_t read = std::fread(text.data(), 1, text.size(), in);
-            std::fclose(in);
-            text.resize(read);
+            in.read(text.data(), static_cast<std::streamsize>(text.size()));
+            text.resize(static_cast<std::size_t>(in.gcount()));
 
             bool hasBareLf = false;
             std::string normalized;
@@ -225,13 +225,12 @@ export namespace xla::config
                 return;
             }
 
-            std::FILE* out = ::_wfopen(path.c_str(), L"wb");
-            if (out == nullptr)
+            std::ofstream out{path, std::ios::binary | std::ios::trunc};
+            if (!out)
             {
                 return;
             }
-            std::fwrite(normalized.data(), 1, normalized.size(), out);
-            std::fclose(out);
+            out.write(normalized.data(), static_cast<std::streamsize>(normalized.size()));
             log::Info("config: normalized {} to CRLF (inherited editor/round-trip norm; "
                       "mINI already splits on LF)",
                       path.string());

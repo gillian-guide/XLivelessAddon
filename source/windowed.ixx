@@ -59,6 +59,14 @@ namespace xla::windowed
         RECT g_clientRect{};
         bool g_clientValid = false;
 
+        // The bordered-window style bits the borderless mode removes. Keeping
+        // the mask in one place lets SwitchWindowStyle detect that the window is
+        // already borderless and return instead of re-setting the style and
+        // re-centring on every SetWindowPos (which flickers the frame).
+        constexpr LONG kBorderlessMask =
+            static_cast<LONG>(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
+                              WS_SYSMENU);
+
         bool* g_windowed = nullptr;
         bool* g_focusLost = nullptr;
         bool* g_onTop = nullptr;
@@ -206,9 +214,15 @@ namespace xla::windowed
             }
 
             const LONG style = ::GetWindowLongA(g_window, GWL_STYLE);
-            const LONG borderless = style & ~static_cast<LONG>(WS_CAPTION | WS_THICKFRAME |
-                                                               WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
-                                                               WS_SYSMENU);
+            // Already borderless: do not re-set the style, re-centre and issue
+            // another SWP_FRAMECHANGED/SWP_SHOWWINDOW on every SetWindowPos.
+            // The game calls SetWindowPos periodically while windowed, so the
+            // unconditional path flickered and stalled the frame loop.
+            if ((style & kBorderlessMask) == 0)
+            {
+                return;
+            }
+            const LONG borderless = style & ~kBorderlessMask;
             g_setLong(g_window, GWL_STYLE, borderless);
 
             RECT client = g_clientRect;
@@ -270,8 +284,7 @@ namespace xla::windowed
 
         BOOL WINAPI AdjustWindowRectHook(LPRECT rect, DWORD style, BOOL menu) noexcept
         {
-            style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX |
-                       WS_SYSMENU);
+            style &= ~static_cast<DWORD>(kBorderlessMask);
             return g_adjust != nullptr ? g_adjust(rect, style, menu) : FALSE;
         }
 

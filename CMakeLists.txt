@@ -94,6 +94,7 @@ set(XLA_MODULES
     source/dfa.ixx
     source/rom_window.ixx
     source/skip_launcher.ixx
+    source/warnings.ixx
     source/windowed.ixx
     source/patches.ixx
     source/addon.ixx)
@@ -119,7 +120,11 @@ target_include_directories(xla_core SYSTEM PUBLIC
 target_compile_definitions(xla_core PUBLIC _CRT_SECURE_NO_WARNINGS)
 target_compile_options(xla_core PUBLIC
     /W4 /permissive- /Zc:__cplusplus /utf-8 /EHsc $<$<CONFIG:Release>:/O2>)
-target_link_libraries(xla_core PUBLIC user32)
+target_link_libraries(xla_core PUBLIC
+    user32
+    # The loader probe enumerates the process's modules; the warning dialogs
+    # open links (download page, notice file) and read the loader's version.
+    psapi shell32 version)
 
 set(XLA_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin")
 set(XLA_INI "${CMAKE_CURRENT_SOURCE_DIR}/data/XLivelessAddon.ini")
@@ -129,6 +134,7 @@ set(XLA_INI "${CMAKE_CURRENT_SOURCE_DIR}/data/XLivelessAddon.ini")
 # ---------------------------------------------------------------------------
 add_library(XLivelessAddon SHARED
     source/dllmain.cpp
+    res/warnings.rc
     "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc")
 set_target_properties(XLivelessAddon PROPERTIES
     CXX_SCAN_FOR_MODULES ON

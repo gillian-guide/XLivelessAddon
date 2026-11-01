@@ -23,8 +23,15 @@ its sources.
   sequence is pinned by `tests/signature_golden.tsv` (CTest `xla_signature_parity`).
 - `source/addon.ixx` — the entry pipeline: one `constexpr` registration table of
   `{phase, name, callback}` rows (probe, config, install, post). The runner executes the phases
-  in order and the rows in table order; the 25-name golden test pins the effective sequence.
+  in order and the rows in table order; the 27-name golden test pins the effective sequence.
   There is no dependency graph — the publish-before-install contracts are commented at their rows.
+- `source/warnings.ixx` — the startup warnings: the ASI loader probe (Ultimate ASI Loader
+  >= 6.9.0, identified by its `IsUltimateASILoader` export), the process-wide single-instance
+  marker, the FusionFix notice file and the task-dialog renderer. Details that must not drift:
+  the dialogs are `TaskDialogIndirect` with comctl32 6.0 activated from `res/warnings.rc`'s
+  `RT_MANIFEST` (the game executable has no common-controls dependency), they are always posted
+  to a worker thread because `DllMain` holds the loader lock, and they fall back to a message box
+  when the activation context or comctl32 v6 is unavailable.
 - `source/skip_launcher.ixx` — the recovered launcher tables and hook bodies. **Do not "clean
   up" the tables**: signature strings, offsets, stored bytes and stage order are recovered data.
   The main table is a typed patch DSL (`WriteBytes`/`NopFill`/`Jump`); the rows are in-place

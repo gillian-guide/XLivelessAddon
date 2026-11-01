@@ -18,6 +18,9 @@
 #endif
 
 #include <windows.h>
+#include <Commctrl.h>
+#include <psapi.h>
+#include <shellapi.h>
 #include <ShlObj.h>
 
 #include <algorithm>
@@ -41,6 +44,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>

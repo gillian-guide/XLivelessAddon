@@ -1,0 +1,6 @@
+// The add-on's activation context: comctl32 6.0 so the startup warnings can be
+// shown as a modern task dialog (the game executable carries no
+// common-controls dependency, so TaskDialogIndirect does not exist without it).
+//
+// Type 24 is RT_MANIFEST; the numeric id keeps rc.exe from needing windows.h.
+1 24 "warnings.manifest"

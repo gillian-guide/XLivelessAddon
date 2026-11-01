@@ -18,6 +18,7 @@ import xla.rom_window;
 import xla.savegames;
 import xla.skip_launcher;
 import xla.userdata;
+import xla.warnings;
 import xla.windowed;
 
 namespace
@@ -482,14 +483,14 @@ namespace
     // contract of the pipeline: any insertion, removal or reordering has to be a
     // reviewed change to the registration table (and this array), not a silent
     // one.
-    constexpr std::array<std::string_view, 25> kPipelineGolden{{
-        "banner",           "console",        "probe",           "paths",
-        "config",           "fusionfix",      "report-config",   "image",
-        "writable",         "build",          "local-settings",  "savegames",
-        "skip-launcher",    "borderless-hooks", "focus-loss",    "core-patches",
-        "launcher-stage",   "web-connect",    "intro",           "menu",
-        "do-not-pause",     "defwindow-shims", "registry",       "vram",
-        "complete",
+    constexpr std::array<std::string_view, 27> kPipelineGolden{{
+        "banner",           "console",        "single-instance", "loader",
+        "probe",            "paths",          "config",          "fusionfix",
+        "report-config",    "image",          "writable",        "build",
+        "local-settings",   "savegames",      "skip-launcher",   "borderless-hooks",
+        "focus-loss",       "core-patches",   "launcher-stage",  "web-connect",
+        "intro",            "menu",           "do-not-pause",    "defwindow-shims",
+        "registry",         "vram",           "complete",
     }};
 
     void TestPipelineOrder()
@@ -510,6 +511,47 @@ namespace
                              std::string{order[index]}.c_str());
                 ++g_failures;
             }
+        }
+    }
+
+    void TestWarnings()
+    {
+        // Ultimate ASI Loader 6.9.0 is the first release exporting the
+        // IsUltimateASILoader marker; the loader warning enforces that minimum.
+        CHECK(xla::warnings::LoaderVersionAccepted(0x00060009, 0));
+        CHECK(xla::warnings::LoaderVersionAccepted(0x000A0002, 0));
+        CHECK(!xla::warnings::LoaderVersionAccepted(0x00060008, 0x0000FFFF));
+        CHECK(!xla::warnings::LoaderVersionAccepted(0x00050000, 0));
+
+        // The single-instance marker answers once per process.
+        CHECK(xla::warnings::ClaimSingleInstance());
+        CHECK(!xla::warnings::ClaimSingleInstance());
+
+        // The FusionFix notice is rewritten on every launch: the current list
+        // replaces the previous one, and nothing is appended.
+        const std::vector<xla::config::FusionFixGate> gated{
+            {"SkipIntro", "skipintro.ixx"}};
+        const std::filesystem::path notice =
+            xla::warnings::WriteFusionFixNotice(g_workDirectory, gated);
+        CHECK(!notice.empty());
+        if (!notice.empty())
+        {
+            const auto read = [&] {
+                std::ifstream file(notice, std::ios::binary);
+                return std::string(std::istreambuf_iterator<char>(file),
+                                   std::istreambuf_iterator<char>());
+            };
+            std::string text = read();
+            CHECK(text.find("SkipIntro - FusionFix skipintro.ixx") != std::string::npos);
+            CHECK(text.find("XLivelessAddon.ini") != std::string::npos);
+
+            const std::vector<xla::config::FusionFixGate> replaced{
+                {"VRAMFix", "memory.ixx"}};
+            CHECK(!xla::warnings::WriteFusionFixNotice(g_workDirectory, replaced).empty());
+            text = read();
+            CHECK(text.find("VRAMFix - FusionFix memory.ixx") != std::string::npos);
+            CHECK(text.find("SkipIntro") == std::string::npos);
+            std::filesystem::remove(notice);
         }
     }
 
@@ -1188,6 +1230,7 @@ int main(int argc, char** argv)
     run("missing-test tail NOPs", TestMissingTestTailNops);
     run("shipped launcher stages", TestShippedLauncherStages);
     run("pipeline order", TestPipelineOrder);
+    run("warnings", TestWarnings);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);
     run("custom settings path composition", TestCustomSettingsPathComposition);

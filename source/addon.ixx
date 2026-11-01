@@ -25,6 +25,7 @@ import xla.rom_window;
 import xla.savegames;
 import xla.skip_launcher;
 import xla.userdata;
+import xla.warnings;
 import xla.windowed;
 
 export namespace xla
@@ -154,6 +155,52 @@ namespace xla
             return Outcome::next;
         }
 
+        Outcome StepSingleInstance(RunState& state)
+        {
+            // DllMain and the probe retry can each run the pipeline; the marker is
+            // per process, so it is claimed once and the answer remembered.
+            static const bool claimed = warnings::ClaimSingleInstance();
+            if (claimed)
+            {
+                return Outcome::next;
+            }
+
+            log::Write("init: another copy of XLivelessAddon already initialized in this "
+                       "process");
+            warnings::ShowAsync(warnings::LoadedTwiceDialog(), std::optional<UINT>{1u});
+            state.exitCode = ExitCode::gaveUp;
+            return Outcome::stop;
+        }
+
+        Outcome StepLoader(RunState&)
+        {
+            // Runs once even when the probe retry starts the pipeline again.
+            static const bool reported = [] {
+                const warnings::LoaderInfo loader = warnings::QueryLoader();
+                if (loader.detected)
+                {
+                    log::Info("loader: {} {}", loader.name,
+                              loader.version.empty() ? "(version unknown)" : loader.version);
+                }
+                else
+                {
+                    log::Write("loader: no Ultimate ASI Loader found in this process");
+                }
+
+                const bool modern =
+                    loader.detected &&
+                    (!loader.versionKnown ||
+                     warnings::LoaderVersionAccepted(loader.versionMs, loader.versionLs));
+                if (!modern)
+                {
+                    warnings::ShowAsync(warnings::OldLoaderDialog(loader), std::nullopt);
+                }
+                return true;
+            }();
+            (void)reported;
+            return Outcome::next;
+        }
+
         Outcome StepProbe(RunState& state)
         {
             // The game executable is checked for the probe before anything is trusted.
@@ -205,15 +252,19 @@ namespace xla
         Outcome StepFusionFix(RunState& state)
         {
             state.fusionFix = config::FusionFixPresent(state.directory);
-            if (state.fusionFix)
+            if (!state.fusionFix)
             {
-                for (const config::FusionFixGate& gate :
-                     config::ApplyFusionFixGates(state.loaded.options))
-                {
-                    log::Info("fusionfix: gating {} (FusionFix {})", gate.option,
-                              gate.fusionFixModule);
-                }
+                return Outcome::next;
             }
+
+            const std::vector<config::FusionFixGate> gated =
+                config::ApplyFusionFixGates(state.loaded.options);
+            for (const config::FusionFixGate& gate : gated)
+            {
+                log::Info("fusionfix: gating {} (FusionFix {})", gate.option,
+                          gate.fusionFixModule);
+            }
+            warnings::PublishFusionFixNotice(state.directory, gated);
             return Outcome::next;
         }
 
@@ -259,13 +310,17 @@ namespace xla
                     log::Info("init: unsupported build; classification dword {:#x} at RVA "
                               "{:#x}; no patches applied",
                               *signature, build::kSignatureOffset);
+                    // The add-on has no patch rows for this build: tell the user and
+                    // exit rather than leaving a silently unpatched game behind.
+                    warnings::ShowAsync(warnings::UnsupportedGameVersionDialog(),
+                                        std::optional<UINT>{1u});
+                    state.exitCode = ExitCode::gaveUp;
                 }
                 else
                 {
                     log::Write("init: image is too small for the classification dword; no "
                                "patches applied");
                 }
-                state.exitCode = ExitCode::ok;
                 return Outcome::stop;
             }
             state.build = *detected;
@@ -479,6 +534,8 @@ namespace xla
             // probe: nothing reads the image before the probe has seen it.
             {Phase::probe, "banner", StepBanner},
             {Phase::probe, "console", StepConsole},
+            {Phase::probe, "single-instance", StepSingleInstance},
+            {Phase::probe, "loader", StepLoader},
             {Phase::probe, "probe", StepProbe},
 
             // config: everything the installers need to decide what to do.

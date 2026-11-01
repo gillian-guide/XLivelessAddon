@@ -39,16 +39,18 @@ namespace xla::dfa
 {
     namespace
     {
-        HANDLE CreateFileHook(LPCSTR fileName, DWORD desiredAccess, DWORD shareMode,
-                              LPSECURITY_ATTRIBUTES security, DWORD creationDisposition,
-                              DWORD flags, HANDLE templateFile)
+        // Hook bodies: the site's caller pops the arguments, so the ABI is __cdecl
+        // with a plain `ret` (stated here, not left to the compiler default).
+        HANDLE __cdecl CreateFileHook(LPCSTR fileName, DWORD desiredAccess, DWORD shareMode,
+                                      LPSECURITY_ATTRIBUTES security, DWORD creationDisposition,
+                                      DWORD flags, HANDLE templateFile)
         {
             return ::CreateFileA(fileName, desiredAccess, shareMode, security,
                                  creationDisposition, flags, templateFile);
         }
 
         // The original wraps CloseHandle in SEH and keeps going on a fault.
-        BOOL CloseHandleHook(HANDLE handle)
+        BOOL __cdecl CloseHandleHook(HANDLE handle)
         {
             __try
             {
@@ -60,19 +62,19 @@ namespace xla::dfa
             return TRUE;
         }
 
-        BOOL GetFileSizeExHook(HANDLE handle, PLARGE_INTEGER size)
+        BOOL __cdecl GetFileSizeExHook(HANDLE handle, PLARGE_INTEGER size)
         {
             return ::GetFileSizeEx(handle, size);
         }
 
-        BOOL ReadFileHook(HANDLE handle, LPVOID buffer, DWORD toRead, LPDWORD read,
-                          LPOVERLAPPED overlapped)
+        BOOL __cdecl ReadFileHook(HANDLE handle, LPVOID buffer, DWORD toRead, LPDWORD read,
+                                  LPOVERLAPPED overlapped)
         {
             return ::ReadFile(handle, buffer, toRead, read, overlapped);
         }
 
-        DWORD SetFilePointerHook(HANDLE handle, LONG distance, PLONG distanceHigh,
-                                 DWORD moveMethod)
+        DWORD __cdecl SetFilePointerHook(HANDLE handle, LONG distance, PLONG distanceHigh,
+                                         DWORD moveMethod)
         {
             return ::SetFilePointer(handle, distance, distanceHigh, moveMethod);
         }

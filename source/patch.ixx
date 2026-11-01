@@ -32,6 +32,13 @@ export namespace xla::patch
         {
             return address != nullptr;
         }
+
+        // The address a row writes: the match advanced by the row's named offset.
+        // A negative offset reaches back into the enclosing function.
+        [[nodiscard]] std::uint8_t* At(std::ptrdiff_t offset) const noexcept
+        {
+            return static_cast<std::uint8_t*>(address) + offset;
+        }
     };
 
     // First match of `signature` in the game module; logs a miss.
@@ -54,7 +61,7 @@ export namespace xla::patch
         {
             return false;
         }
-        auto* target = static_cast<std::uint8_t*>(site.address) + offset;
+        auto* target = site.At(offset);
         injector::WriteMemory<T>(injector::raw_ptr(target), value, true);
         log::Info("{}: wrote {:#x} at {:08X}", label, static_cast<std::uint64_t>(value),
                   reinterpret_cast<std::uintptr_t>(target));
@@ -67,7 +74,7 @@ export namespace xla::patch
         {
             return false;
         }
-        auto* target = static_cast<std::uint8_t*>(site.address) + offset;
+        auto* target = site.At(offset);
         injector::MakeNOP(injector::raw_ptr(target), count, true);
         log::Info("{}: nop {} byte(s) at {:08X}", label, count,
                   reinterpret_cast<std::uintptr_t>(target));
@@ -83,7 +90,7 @@ export namespace xla::patch
         {
             return false;
         }
-        auto* target = static_cast<std::uint8_t*>(site.address) + offset;
+        auto* target = site.At(offset);
         injector::MakeRET(injector::raw_ptr(target), static_cast<std::uint16_t>(pop_bytes), true);
         log::Info("{}: ret {} at {:08X}", label, pop_bytes,
                   reinterpret_cast<std::uintptr_t>(target));
@@ -97,7 +104,7 @@ export namespace xla::patch
         {
             return false;
         }
-        auto* target = static_cast<std::uint8_t*>(site.address) + offset;
+        auto* target = site.At(offset);
         injector::MakeJMP(injector::raw_ptr(target),
                           injector::raw_ptr(const_cast<void*>(destination)), true);
         log::Info("{}: jmp to {:08X} at {:08X}", label,
@@ -113,7 +120,7 @@ export namespace xla::patch
         {
             return nullptr;
         }
-        auto* target = static_cast<std::uint8_t*>(site.address) + offset;
+        auto* target = site.At(offset);
         void* previous =
             injector::MakeCALL(injector::raw_ptr(target), injector::raw_ptr(destination), true)
                 .get<void*>();

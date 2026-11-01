@@ -7,15 +7,15 @@
 // `ZolikaPatch.ini`. The FusionFix gates disable any option whose subsystem FusionFix
 // owns, so two modules never write the same code.
 //
-// The parser is the vendored IniReader, compiled in its own translation unit
-// (IniReaderImpl.cpp); this module includes only its pimpl header, because mINI's inline
-// code crashed when instantiated in module purview.
+// The parser is the vendored IniReader. Upstream is header-only and all-inline, so
+// the module must not include it: ini_file.cpp owns the reader in a plain TU and this
+// unit includes only its declarations.
 
 module;
 
 #include "common.hxx"
 
-#include <IniReader.h>
+#include "ini_file.h"
 
 export module xla.config;
 
@@ -237,9 +237,9 @@ export namespace xla::config
                       path.string());
         }
 
-        // One INI file, opened through the vendored reader. CIniReader cannot tell
-        // "key absent" from "value equals the default", so Read maps a sentinel to
-        // nullopt; no real INI line can contain it.
+        // One INI file, opened through the plain-TU reader (ini_file.cpp owns the
+        // all-inline vendored header). The reader returns nullopt for an absent key;
+        // no sentinel or default value is involved.
         class IniFile
         {
         public:
@@ -257,20 +257,13 @@ export namespace xla::config
             [[nodiscard]] std::optional<std::string> Read(std::string_view section,
                                                           std::string_view key) const
             {
-                static constexpr std::string_view kMissing = "\x01xla-missing";
-                std::string value = m_reader.ReadString(section, key, kMissing);
-                if (value == kMissing)
-                {
-                    return std::nullopt;
-                }
-                return value;
+                return m_reader.Read(section, key);
             }
 
         private:
             explicit IniFile(const std::filesystem::path& path) : m_reader(path) {}
 
-            // ReadString is non-const in the vendored API; the wrapper stays const.
-            mutable CIniReader m_reader;
+            ini::Reader m_reader;
         };
 
         // The first present value for `key`: the add-on's own INI, then the legacy

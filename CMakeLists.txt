@@ -98,13 +98,13 @@ set(XLA_MODULES
     source/patches.ixx
     source/addon.ixx)
 
-# The plain translation units: the vendored Hooking.Patterns and the IniReader
-# implementation. The reader is a pimpl library (IniReader.h is declarations only)
-# so a module interface unit can include it: mINI's inline code crashed when it
-# was instantiated in module purview. dllmain.cpp is the ASI's own entry TU.
+# The plain translation units: the vendored Hooking.Patterns and our reader boundary.
+# The vendored IniReader is header-only and all-inline upstream, so mINI must not be
+# instantiated in module purview: source/ini_file.cpp owns it behind declarations.
+# dllmain.cpp is the ASI's own entry TU.
 set(XLA_PLAIN_SOURCES
     external/hooking/Hooking.Patterns.cpp
-    external/IniReader/IniReaderImpl.cpp)
+    source/ini_file.cpp)
 
 add_library(xla_core STATIC ${XLA_PLAIN_SOURCES})
 set_target_properties(xla_core PROPERTIES CXX_SCAN_FOR_MODULES ON)

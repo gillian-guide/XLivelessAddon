@@ -7,9 +7,10 @@ The layout is a contract (see AGENTS.md and GTAIV.EFLC.FusionFix):
     `export module xla.<stem>;`
   * `source/common.hxx` is the single shared include header, included in the
     `module;` global fragment of every interface unit;
-  * `source/dllmain.cpp` is the only plain translation unit in `source/` (the
-    entry point); the vendored libraries compile their own TUs under `external/`
-    (Hooking.Patterns and the IniReader pimpl implementation);
+  * `source/dllmain.cpp` is the entry point and `source/ini_file.cpp` is the
+    plain-TU boundary around the all-inline vendored IniReader; no other plain
+    translation units live in `source/` (the vendored libraries compile their own
+    TUs under `external/`, e.g. Hooking.Patterns);
   * every interface unit is listed in the `XLA_MODULES` CXX_MODULES file set,
     so CMake scans it instead of compiling it as an ordinary source;
   * standard headers live in `common.hxx` — nothing is included after the module
@@ -26,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 
-PLAIN_TUS = {"dllmain.cpp"}
+PLAIN_TUS = {"dllmain.cpp", "ini_file.cpp"}
 HEADERS = {"common.hxx"}
 MODULE = re.compile(r"^\s*export\s+module\s+([A-Za-z_][\w.]*)\s*;", re.M)
 IMPORT = re.compile(r"^\s*import\s+([^;]+);", re.M)

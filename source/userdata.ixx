@@ -37,19 +37,31 @@ namespace xla::userdata
         ShGetFolderPathAFn g_shellFolderA = nullptr;
         ShGetFolderPathWFn g_shellFolderW = nullptr;
 
+        // SHGetFolderPath's caller buffer is MAX_PATH by contract.
+        constexpr std::size_t kShellPathCapacity = MAX_PATH;
+
+        // Writes the redirect target into the caller's buffer, truncated (and always
+        // terminated) to the shell's buffer size. One body: the A/W difference is
+        // the character type only.
+        template <typename CharT>
+        HRESULT CopyProfilePath(const std::basic_string<CharT>& path, CharT* buffer) noexcept
+        {
+            if (buffer == nullptr)
+            {
+                return E_INVALIDARG;
+            }
+            const std::size_t length = (std::min)(path.size(), kShellPathCapacity - 1);
+            std::copy_n(path.data(), length, buffer);
+            buffer[length] = 0;
+            return S_OK;
+        }
+
         HRESULT WINAPI ShellFolderPathA(HWND window, int csidl, HANDLE token, DWORD flags,
                                         LPSTR path)
         {
             if (ShouldRedirect(csidl))
             {
-                if (path == nullptr)
-                {
-                    return E_INVALIDARG;
-                }
-                // SHGetFolderPath's caller buffer is MAX_PATH by contract.
-                return ::strncpy_s(path, MAX_PATH, g_profilePath.c_str(), _TRUNCATE) == 0
-                           ? S_OK
-                           : E_FAIL;
+                return CopyProfilePath(g_profilePath, path);
             }
             return g_shellFolderA != nullptr ? g_shellFolderA(window, csidl, token, flags, path)
                                              : E_FAIL;
@@ -60,14 +72,7 @@ namespace xla::userdata
         {
             if (ShouldRedirect(csidl))
             {
-                if (path == nullptr)
-                {
-                    return E_INVALIDARG;
-                }
-                // SHGetFolderPath's caller buffer is MAX_PATH by contract.
-                return ::wcsncpy_s(path, MAX_PATH, g_profilePathW.c_str(), _TRUNCATE) == 0
-                           ? S_OK
-                           : E_FAIL;
+                return CopyProfilePath(g_profilePathW, path);
             }
             return g_shellFolderW != nullptr ? g_shellFolderW(window, csidl, token, flags, path)
                                              : E_FAIL;

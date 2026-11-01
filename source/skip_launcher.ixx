@@ -132,7 +132,9 @@ export namespace xla
     };
 
     // Multi-hit collector: the original patches the first two matches of one
-    // pattern and the last two of another with "mov al,1; ret; nop".
+    // pattern and the last two of another with "mov al,1; ret; nop". `stub` is the
+    // exact byte window it stores; the window's size is the store length, so there
+    // is no second number to keep in sync.
     struct SkipLauncherCollector
     {
         enum class Target : std::uint8_t
@@ -143,8 +145,7 @@ export namespace xla
 
         std::string_view pattern;
         Target target;
-        const std::uint8_t* bytes;
-        std::uint16_t length;
+        std::span<const std::uint8_t> stub;
     };
 
     // Reimplemented hook bodies the installers jump to; the original installs
@@ -308,10 +309,6 @@ namespace xla
     namespace
     {
         constexpr std::size_t kBranchLength = 5; // E8/E9 <rel32>
-
-        // The collectors write the shared "mov al,1; ret; nop" window.
-        constexpr std::uint16_t kCollectorStubLength =
-            static_cast<std::uint16_t>(std::size(ops::kMovAl1RetNop));
 
         // Each collector rule covers two sites: the first two matches, or the last
         // two. (A pattern with a single match is one site for either rule.)
@@ -590,11 +587,10 @@ namespace xla
         constexpr SkipLauncherCollector kSkipLauncherCollectors[] = {
             // `mov eax,[imm32]; test eax,eax; mov ecx,[imm32]; jne`
             {"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75", SkipLauncherCollector::Target::first_two,
-             ops::kMovAl1RetNop, kCollectorStubLength},
+             ops::kMovAl1RetNop},
             // `xor eax,eax; cmp dword [imm32],1; sete al; ret`
             {"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3",
-             SkipLauncherCollector::Target::last_two, ops::kMovAl1RetNop,
-             kCollectorStubLength},
+             SkipLauncherCollector::Target::last_two, ops::kMovAl1RetNop},
         };
 
         static_assert(std::size(kSkipLauncherCollectors) == 2);
@@ -948,7 +944,7 @@ namespace xla
                         }
 
                         std::uint8_t* site = match.get<std::uint8_t>();
-                        if (!InBounds(image, site, collector.length))
+                        if (!InBounds(image, site, collector.stub.size()))
                         {
                             status = std::unexpected(PatchError{PatchErrorCode::out_of_bounds,
                                                                 "site out of bounds"});
@@ -956,8 +952,8 @@ namespace xla
                         }
 
                         injector::WriteMemoryRaw(injector::raw_ptr(site),
-                                                 const_cast<std::uint8_t*>(collector.bytes),
-                                                 collector.length, true);
+                                                 const_cast<std::uint8_t*>(collector.stub.data()),
+                                                 collector.stub.size(), true);
                         ++report.collectorWrites;
                         ++applied;
                     });
@@ -990,27 +986,34 @@ namespace xla
             PublishCreateFileSlot(report);
         }
 
+        // What one install table did: branches written and branches skipped.
+        struct HookCounts
+        {
+            std::size_t installed{};
+            std::size_t missing{};
+        };
+
         // Installs one stage's E8/E9 branches. A body the resolver does not know,
         // or a missing signature, counts as missing; a site outside the image is
         // the only failure.
-        PatchOutcome InstallHooks(std::span<std::byte> image,
-                                  std::span<const SkipLauncherInstall> installs,
-                                  SkipHookResolver resolve, void* resolverUser,
-                                  std::size_t& applied, std::size_t& missing)
+        std::expected<HookCounts, PatchError> InstallHooks(
+            std::span<std::byte> image, std::span<const SkipLauncherInstall> installs,
+            SkipHookResolver resolve, void* resolverUser)
         {
+            HookCounts counts;
             for (const SkipLauncherInstall& install : installs)
             {
                 const std::uintptr_t destination = resolve(install.hook, resolverUser);
                 if (destination == 0)
                 {
-                    ++missing;
+                    ++counts.missing;
                     continue;
                 }
 
                 hook::pattern hookSite = Scan(image, install.signature);
                 if (hookSite.empty())
                 {
-                    ++missing;
+                    ++counts.missing;
                     continue;
                 }
 
@@ -1037,17 +1040,24 @@ namespace xla
                     return std::unexpected(PatchError{PatchErrorCode::invalid_input,
                                                       "unsupported branch opcode"});
                 }
-                ++applied;
+                ++counts.installed;
             }
-            return {};
+            return counts;
         }
 
         // Stage dfa, part 2: the six file-API hooks.
         PatchOutcome InstallDfaHooks(std::span<std::byte> image, SkipHookResolver resolve,
                                      void* resolverUser, SkipLauncherReport& report)
         {
-            return InstallHooks(image, SkipLauncherDfaInstalls(), resolve, resolverUser,
-                                report.dfaInstalls, report.dfaMissing);
+            const auto counts =
+                InstallHooks(image, SkipLauncherDfaInstalls(), resolve, resolverUser);
+            if (!counts)
+            {
+                return std::unexpected(counts.error());
+            }
+            report.dfaInstalls += counts->installed;
+            report.dfaMissing += counts->missing;
+            return {};
         }
 
         // Stage dfa, part 3: each collected anchor match becomes a jump to the
@@ -1091,8 +1101,15 @@ namespace xla
         PatchOutcome InstallRomHooks(std::span<std::byte> image, SkipHookResolver resolve,
                                      void* resolverUser, SkipLauncherReport& report)
         {
-            return InstallHooks(image, SkipLauncherRomInstalls(), resolve, resolverUser,
-                                report.romInstalls, report.romMissing);
+            const auto counts =
+                InstallHooks(image, SkipLauncherRomInstalls(), resolve, resolverUser);
+            if (!counts)
+            {
+                return std::unexpected(counts.error());
+            }
+            report.romInstalls += counts->installed;
+            report.romMissing += counts->missing;
+            return {};
         }
     } // namespace
 

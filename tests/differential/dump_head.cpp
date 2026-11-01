@@ -165,8 +165,8 @@ namespace
                               collector.target == xla::SkipLauncherCollector::Target::first_two
                                   ? "first_two"
                                   : "last_two",
-                              Hex(collector.bytes, collector.length),
-                              collector.length));
+                              Hex(collector.stub.data(), collector.stub.size()),
+                              collector.stub.size()));
         }
         for (const auto& [name, installs] :
              {std::pair<std::string_view, std::span<const xla::SkipLauncherInstall>>{

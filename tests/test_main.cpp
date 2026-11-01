@@ -986,9 +986,10 @@ namespace
         for (const xla::SkipLauncherCollector& collector : xla::SkipLauncherCollectors())
         {
             CHECK(!collector.pattern.empty());
-            CHECK(collector.bytes != nullptr);
-            CHECK_EQ(collector.length, std::size(xla::ops::kMovAl1RetNop));
-            CHECK(std::memcmp(collector.bytes, xla::ops::kMovAl1RetNop,
+            // The window's own size is the store length: the row has no second
+            // number that could disagree with the bytes.
+            CHECK_EQ(collector.stub.size(), std::size(xla::ops::kMovAl1RetNop));
+            CHECK(std::memcmp(collector.stub.data(), xla::ops::kMovAl1RetNop,
                               std::size(xla::ops::kMovAl1RetNop)) == 0);
         }
 

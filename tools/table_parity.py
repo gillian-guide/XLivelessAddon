@@ -358,15 +358,14 @@ def parse_entries(text: str, op_tables: dict[str, list[dict]]) -> list[dict]:
     return entries
 
 
-def parse_collectors(text: str, arrays: dict[str, list[int]],
-                     constants: dict[str, int]) -> list[dict]:
+def parse_collectors(text: str, arrays: dict[str, list[int]]) -> list[dict]:
     body = block_body(text, r"SkipLauncherCollector\s+kSkipLauncherCollectors\s*\[\s*\]\s*=")
     if body is None:
         raise SystemExit("table_parity: kSkipLauncherCollectors not found")
     collectors: list[dict] = []
     for group in brace_groups(body):
         fields = split_fields(group)
-        if len(fields) != 4:
+        if len(fields) != 3:
             raise SystemExit(f"table_parity: collector row has {len(fields)} fields")
         pattern = fields[0].strip().strip('"')
         target = fields[1].strip()
@@ -377,13 +376,10 @@ def parse_collectors(text: str, arrays: dict[str, list[int]],
         else:
             raise SystemExit(f"table_parity: unknown collector target {fields[1]!r}")
         stub_bytes = resolve_bytes(fields[2], arrays)
-        length_expr = fields[3].strip()
-        # `kCollectorStubLength` is std::size(ops::kMovAl1RetNop) in the source;
-        # derive it from the stub the row names instead of hard-coding 4 here.
-        length = len(stub_bytes) if length_expr == "kCollectorStubLength" \
-            else parse_integer(length_expr, constants, "collector length")
+        # The row stores the window as a span, so its size IS the store length;
+        # the golden's `len` column still has to match it.
         collectors.append({"pattern": pattern, "target": target,
-                           "bytes": stub_bytes, "length": length})
+                           "bytes": stub_bytes, "length": len(stub_bytes)})
     return collectors
 
 
@@ -535,7 +531,7 @@ def parse_tables(text: str, common: str, jump_target: int) -> dict:
     constants = parse_int_constants(text)
     writes = parse_patch_ops(text, arrays, jump_target, constants)
     entries = parse_entries(text, writes)
-    collectors = parse_collectors(text, arrays, constants)
+    collectors = parse_collectors(text, arrays)
     capture = parse_capture(text)
     installs = parse_installs(text, opcodes, constants)
     targets, collected = parse_collected(text)

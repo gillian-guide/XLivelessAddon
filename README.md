@@ -2,15 +2,10 @@
 
 [![Build](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml/badge.svg)](https://github.com/gillian-guide/XLivelessAddon/actions/workflows/build.yml)
 
-XLivelessAddon is an open-source successor to the community XLivelessAddon, the GTA IV / Episodes
-from Liberty City loader add-on. It keeps the original's launcher bypass, save/settings redirection
-and windowing fixes, rewrites them as readable, maintainable C++23, and modernises the loader,
+XLivelessAddon is an open-source successor to the XLivelessAddon. It modernises the loader,
 hooking and configuration layers around the same recovered signature data.
 
-It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV.EFLC.OpenPreCEPatch)
-as a companion, because some features belong there; it also works on its own. Every entry below is
-an option in `XLivelessAddon.ini`, which records the default and whether FusionFix owns the
-subsystem.
+It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV.EFLC.OpenPreCEPatch) as a companion, because some features belong there; it also works on its own.
 
 ## Features
 
@@ -21,12 +16,6 @@ subsystem.
 - Shorten the intro screens to 300 ms and skip the main menu (hold SHIFT on startup to reach it).
 - Add borderless windowed mode and keep rendering while the borderless window is unfocused.
 - Fix the VRAM detection so the settings are not locked out.
-
-`CustomSettingsPath` is implemented with a reconstructed 5-byte call body: the pinned injector's
-`MakeInline` is SafetyHook-based and this build compiles no SafetyHook. The recovered path logic is
-unit-tested, but the hook has not been validated in-game; an absolute path (one with a drive
-letter) uses the documented intent rather than the original's undefined empty-string check. Prefer
-`LocalSettingsPath` or FusionFix's `userdata.ixx` if the hook does not fit.
 
 ## Installation
 
@@ -59,17 +48,10 @@ CPack zip, which also carries `README.md`, `LICENSE`, `NOTICE` and `CREDITS.md`.
 
 ## Credits
 
-- **GTAmodding / XLivelessAddon contributors** — the original add-on: the launcher bypass, the
-  save-file path redirect, the WM_ROM message window and the borderless window patches.
-- **Zolika1351** — ZolikaPatch, whose recovered SkipLauncher tables, GFWL bypasses and intro/menu
-  behaviour this module reimplements.
-- **ThirteenAG and the FusionFix contributors** — GTAIV.EFLC.FusionFix (GPL-3.0), which supplied
+- **ThirteenAG** — the original add-on: the launcher bypass, the save-file path redirect, the WM_ROM message window and the borderless window patches.
+- **Zolika1351** — ZolikaPatch, whose recovered SkipLauncher tables and GFWL bypasses this module reimplements.
+- **ThirteenAG and the FusionFix contributors** — GTAIV.EFLC.FusionFix, which supplied
   the windowed/focus-loss implementation, the 300 ms intro-skip variant, the per-feature FusionFix
   compatibility gates and the overall module layout conventions.
-- **LINK/2012 and ThirteenAG** — the `injector` memory-patching library.
-- **cursey** — `safetyhook`, `kananlib`; **Bitdefender** — `bddisasm`; **Tsuda Kageyu** —
-  `minhook` (nested `injector` submodules).
-- **CitizenFX / NTAuthority** — `Hooking.Patterns`.
-- **ThirteenAG** — `IniReader`.
 
 Licensed under the GNU General Public License, version 3 or later; see `LICENSE` and `NOTICE`.

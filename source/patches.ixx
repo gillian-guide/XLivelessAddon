@@ -93,6 +93,11 @@ namespace xla::patches
         constexpr std::ptrdiff_t kMenuCallOffsetV1002 = 23;  // E8 inside [1002-1008]
         constexpr std::ptrdiff_t kMenuCallOffsetEarly = 2;   // E8 inside [1000]/[1001]
 
+        // `68 88 13 00 00` is `push 0x1388` (5000 ms) before the sleep call; the
+        // original stores 1 into that imm32 to disable the sleep.
+        constexpr std::ptrdiff_t kSleepPushOperand = 1;
+        constexpr std::uint32_t kSleepDisabled = 1;
+
         // ModRM of `mov [imm32], ebx` (89 1D): the original's 1.0.0.x/1.0.1.0
         // variant changes the `mov [imm32], esi` operand's register field to ebx.
         // (This is the ModRM byte of `89 /r`, not the A3/A1 moffs form.)
@@ -223,7 +228,8 @@ namespace xla::patches
         void PatchIntegrityChecks()
         {
             // disable sleep [v1002 - v1008]
-            patch::WriteDword("68 88 13 00 00 FF 15", 1, 1, "core: disable sleep");
+            patch::WriteDword("68 88 13 00 00 FF 15", kSleepPushOperand, kSleepDisabled,
+                              "core: disable sleep");
 
             // RETN - enable debugger in error menu (don't load WER.dll) [v1000 - v1008]
             patch::WriteByte(
@@ -354,6 +360,32 @@ namespace xla::patches
             }
         }
 
+        // The two 0xBACxxx "fixed sequences": the original rewrites two matches of
+        // each pattern to `mov al,1; retn`. The sites differ only in which two of
+        // the matches they are, so that is the parameter.
+        enum class MatchPick : std::uint8_t
+        {
+            first,
+            last,
+        };
+
+        void PatchTwoMatchedFunctions(hook::pattern& pattern, MatchPick pick,
+                                      std::string_view label)
+        {
+            if (pattern.size() < 2)
+            {
+                log::Info("{}: expected two matches, found {}", label, pattern.size());
+                return;
+            }
+
+            const std::size_t first = pick == MatchPick::first ? 0 : pattern.size() - 2;
+            injector::WriteMemory<std::uint32_t>(
+                injector::raw_ptr(pattern.get(first).get<void>()), kMovAl1RetNop, true);
+            injector::WriteMemory<std::uint32_t>(
+                injector::raw_ptr(pattern.get(first + 1).get<void>()), kMovAl1RetNop, true);
+            log::Info("{}: two matches patched", label);
+        }
+
         // Whole-function rewrites: the EFC20 wipe and the two 0xBACxxx
         // fixed-sequence tables (the original patches two matches of each).
         void PatchRecoveredFunctionBodies()
@@ -362,43 +394,16 @@ namespace xla::patches
             patch::NopFirst("57 51 C7 44 24 ? ? ? ? ? C7 44 24 ? ? ? ? ? C7 44 24", 1,
                             kEfc20NopBytes, "core: EFC20 [1003-1004]");
 
-            // fix messed sequences (the original patches the first two matches)
-            // 0xBAC160 / 0xBAC190: `mov al,1; retn` (dcc4f31 dllmain.cpp).
-            {
-                hook::pattern pattern{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
-                if (pattern.size() >= 2)
-                {
-                    injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(0).get<void>()), kMovAl1RetNop, true);
-                    injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(1).get<void>()), kMovAl1RetNop, true);
-                    log::Write("core: fixed sequences patched (two matches)");
-                }
-                else
-                {
-                    log::Write("core: fixed sequences missing");
-                }
-            }
+            // fix messed sequences, first two matches:
+            // 0xBAC160 / 0xBAC190 `mov al,1; retn` (dcc4f31 dllmain.cpp).
+            hook::pattern firstTable{"A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75"};
+            PatchTwoMatchedFunctions(firstTable, MatchPick::first, "core: fixed sequences");
 
-            // fix messed sequences (the original patches the last two matches)
-            // 0xBAC180 / 0xBAC1C0: `mov al,1; retn` (dcc4f31 dllmain.cpp).
-            {
-                hook::pattern pattern{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
-                if (pattern.size() >= 2)
-                {
-                    injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(pattern.size() - 2).get<void>()),
-                        kMovAl1RetNop, true);
-                    injector::WriteMemory<std::uint32_t>(
-                        injector::raw_ptr(pattern.get(pattern.size() - 1).get<void>()),
-                        kMovAl1RetNop, true);
-                    log::Write("core: fixed sequences patched (last two matches)");
-                }
-                else
-                {
-                    log::Write("core: fixed sequences (second table) missing");
-                }
-            }
+            // fix messed sequences, last two matches:
+            // 0xBAC180 / 0xBAC1C0 `mov al,1; retn` (dcc4f31 dllmain.cpp).
+            hook::pattern secondTable{"33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3"};
+            PatchTwoMatchedFunctions(secondTable, MatchPick::last,
+                                     "core: fixed sequences (second table)");
         }
 
         // The rows that reuse the EFC anchor: the RGSC/EFC jump and the
@@ -721,8 +726,10 @@ namespace xla::patches
             "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
         constexpr std::size_t kSettingsPathSites = 4;
         constexpr std::size_t kSettingsPatchCount = 2;
-        constexpr std::size_t kSettingsPatchOffset = 5;   // the `mov ecx, imm32` opcode
-        constexpr std::size_t kSettingsCallLength = 5;    // E8 + rel32 replaces it
+        constexpr std::size_t kSettingsPatchOffset = 5;      // the `mov ecx, imm32` opcode
+        constexpr std::size_t kSettingsCallLength = 5;       // E8 + rel32 replaces it
+        constexpr std::ptrdiff_t kSettingsBufferOperand = 1; // pushed settings-path buffer
+        constexpr std::ptrdiff_t kSettingsGlobalOperand = 6; // the original ECX global
         constexpr std::uint16_t kSettingsCopyLimit = 256;
 
         std::string g_customSettingsPath;
@@ -843,8 +850,8 @@ namespace xla::patches
                 log::Write("settings: CustomSettingsPath site outside the image; skipped");
                 return;
             }
-            const std::uint32_t buffer = *match.get<std::uint32_t>(1);
-            const std::uint32_t global = *match.get<std::uint32_t>(6);
+            const std::uint32_t buffer = *match.get<std::uint32_t>(kSettingsBufferOperand);
+            const std::uint32_t global = *match.get<std::uint32_t>(kSettingsGlobalOperand);
             void* stub = MakeSettingsStub(
                 buffer, global,
                 static_cast<std::uint32_t>(

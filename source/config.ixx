@@ -141,8 +141,9 @@ export namespace xla::config
                 const int digit = text[index] - '0';
                 if (value > (LLONG_MAX - digit) / 10)
                 {
+                    // Saturate: the remaining digits cannot change LLONG_MAX.
                     value = LLONG_MAX;
-                    continue;
+                    break;
                 }
                 value = value * 10 + digit;
             }

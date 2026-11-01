@@ -29,7 +29,8 @@ export namespace xla::rom_window
         8, 11, 241, 1, 240, 2, 7, 12, 3, 243, 9, 6, 10, 5, 4, 242,
     };
 
-    // Message payload: [4] action, [5] and [6] its operands.
+    // Message payload, indexed as the original's 32-bit slots: slot 4 (offset 16)
+    // is the action, slots 5 and 6 (offsets 20/24) are its operands.
     struct Payload
     {
         char reserved[16];
@@ -61,6 +62,9 @@ namespace xla::rom_window
         {
             if (message != kMessage)
             {
+                // The original answers 1 for a message it does not handle (the
+                // skip_launcher copy of this protocol calls DefWindowProcA instead;
+                // these are two independent services, see the file header).
                 return 1;
             }
 
@@ -95,29 +99,24 @@ namespace xla::rom_window
         static_assert(kRomBackgroundColor == 5);        // recovered: COLOR_WINDOW index 5
         static_assert(kRomWindowStyle == 0x0CC00000);  // recovered: disabled|clipsiblings|caption
         static_assert(kArrowCursorId == 0x7F00);       // recovered: IDC_ARROW id
-
-        HWND CreateRomWindow()
-        {
-            WNDCLASSEXW wc{};
-            wc.cbSize = sizeof(wc);
-            wc.style = CS_VREDRAW | CS_HREDRAW;
-            wc.lpfnWndProc = &WindowProc;
-            wc.lpszClassName = L"banana";
-            wc.hInstance = ::GetModuleHandleW(nullptr);
-            wc.hbrBackground =
-                reinterpret_cast<HBRUSH>(static_cast<std::uintptr_t>(kRomBackgroundColor));
-            wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
-
-            ::RegisterClassExW(&wc);
-
-            return ::CreateWindowExW(0, L"banana", L"", kRomWindowStyle, 0, 0, 0, 0, nullptr,
-                                     nullptr, ::GetModuleHandleW(nullptr), nullptr);
-        }
     } // namespace
 
     HWND CreateServiceWindow()
     {
-        return CreateRomWindow();
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.style = CS_VREDRAW | CS_HREDRAW;
+        wc.lpfnWndProc = &WindowProc;
+        wc.lpszClassName = L"banana";
+        wc.hInstance = ::GetModuleHandleW(nullptr);
+        wc.hbrBackground =
+            reinterpret_cast<HBRUSH>(static_cast<std::uintptr_t>(kRomBackgroundColor));
+        wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
+
+        ::RegisterClassExW(&wc);
+
+        return ::CreateWindowExW(0, L"banana", L"", kRomWindowStyle, 0, 0, 0, 0, nullptr, nullptr,
+                                 ::GetModuleHandleW(nullptr), nullptr);
     }
 
     void __stdcall SendMessageStub(int, int, int, int)
@@ -151,8 +150,8 @@ namespace xla::rom_window
                     injector::raw_ptr(static_cast<std::uintptr_t>(messageSlot)), kMessage, true);
                 injector::WriteMemory<std::uint32_t>(
                     injector::raw_ptr(static_cast<std::uintptr_t>(windowSlot)),
-                    static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
-                        rom_window::CreateServiceWindow())),
+                    static_cast<std::uint32_t>(
+                        reinterpret_cast<std::uintptr_t>(CreateServiceWindow())),
                     true);
                 log::Info("rom: window slot {:08X}, message id {}", windowSlot, kMessage);
             }

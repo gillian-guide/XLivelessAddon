@@ -206,19 +206,6 @@ export namespace xla::config
             text.resize(read);
 
             bool hasBareLf = false;
-            for (std::size_t i = 0; i < text.size(); ++i)
-            {
-                if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
-                {
-                    hasBareLf = true;
-                    break;
-                }
-            }
-            if (!hasBareLf)
-            {
-                return;
-            }
-
             std::string normalized;
             normalized.reserve(text.size() + 16);
             for (std::size_t i = 0; i < text.size(); ++i)
@@ -226,11 +213,16 @@ export namespace xla::config
                 if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r'))
                 {
                     normalized += "\r\n";
+                    hasBareLf = true;
                 }
                 else
                 {
                     normalized += text[i];
                 }
+            }
+            if (!hasBareLf)
+            {
+                return;
             }
 
             std::FILE* out = ::_wfopen(path.c_str(), L"wb");

@@ -133,17 +133,20 @@ namespace xla::savegames
         // The path buffer lives in a helper around the third match; the original
         // scanned back 0x80 bytes from it (128 - a byte count, not a mask).
         constexpr std::uintptr_t kPathScanBackBytes = 128;
+        constexpr std::size_t kPathAnchorMatch = 2;    // the 0-based third anchor match
+        constexpr std::ptrdiff_t kRedirectOperand = 2; // disp32 of `mov cl,[eax+disp32]`
         hook::pattern anchor{
             "8A 10 83 C0 01 84 D2 75 F7 56 57 BF ? ? ? ? 2B C1 8B F1 83 C7 FF 8A 4F 01 83 C7 01"};
-        if (anchor.size() >= 3)
+        if (anchor.size() > kPathAnchorMatch)
         {
-            const auto rangeEnd = reinterpret_cast<std::uintptr_t>(anchor.get(2).get<void>());
+            const auto rangeEnd = reinterpret_cast<std::uintptr_t>(
+                anchor.get(kPathAnchorMatch).get<void>());
             hook::pattern redirect = hook::make_range_pattern(
                 rangeEnd - kPathScanBackBytes, rangeEnd,
                 "8A 88 ? ? ? ? 88 88 ? ? ? ? 83 C0 01");
             if (!redirect.empty())
             {
-                const auto* slot = redirect.get(0).get<const char*>(2);
+                const auto* slot = redirect.get(0).get<const char*>(kRedirectOperand);
                 if (slot != nullptr && image.contains(slot, sizeof(void*)))
                 {
                     g_gameDefaultSavePath = ReadCString(image, *slot, kGamePathCapacity);

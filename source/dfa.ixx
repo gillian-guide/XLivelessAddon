@@ -85,6 +85,8 @@ namespace xla::dfa
 
     void Install(const Image& image)
     {
+        // The rows scan the live game module through patch::; the image handle is
+        // the install-time contract, not a gate (see patch.ixx).
         (void)image;
         patch::CallFirst("E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00", 0,
                          reinterpret_cast<void*>(&DfaInit), "dfa: init");
@@ -106,12 +108,20 @@ namespace xla::dfa
                          reinterpret_cast<const void*>(&ReadFileHook), "dfa: read file");
 
         // The original rewrites the first two matches of one pattern into jumps to
-        // the first matches of two helper patterns.
-        hook::pattern anchor{"A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6"};
-        if (anchor.size() >= 2)
+        // the first matches of two helper patterns. The names stay here, after the
+        // install scans, because the scan order is data (xla_signature_parity).
+        constexpr std::string_view kCollectedAnchor =
+            "A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6";
+        constexpr std::string_view kCollectedFirst = "80 BC 24 ? ? ? ? ? 6A 00";
+        constexpr std::string_view kCollectedSecond =
+            "6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57";
+        constexpr std::size_t kCollectedSites = 2;
+
+        hook::pattern anchor{kCollectedAnchor};
+        if (anchor.size() >= kCollectedSites)
         {
-            hook::pattern first{"80 BC 24 ? ? ? ? ? 6A 00"};
-            hook::pattern second{"6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57"};
+            hook::pattern first{kCollectedFirst};
+            hook::pattern second{kCollectedSecond};
             if (!first.empty() && !second.empty())
             {
                 injector::MakeJMP(injector::raw_ptr(anchor.get(0).get<void>()),

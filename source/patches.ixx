@@ -47,7 +47,9 @@ export namespace xla::patches
     void InstallCustomSettingsPath(const Image& image, std::string_view customSettingsPath);
 
     // The path the original body composes; exported for the native test.
-    [[nodiscard]] std::string ComposeSettingsPath(std::string_view moduleDirectory,
+    // `gameDirectory` prefixes a relative configured path, as documented in the
+    // INI; an absolute configured path is used as-is.
+    [[nodiscard]] std::string ComposeSettingsPath(std::string_view gameDirectory,
                                                   std::string_view configured,
                                                   std::string_view subfolder);
 
@@ -689,7 +691,7 @@ namespace xla::patches
 
 namespace xla::patches
 {
-    std::string ComposeSettingsPath(std::string_view moduleDirectory, std::string_view configured,
+    std::string ComposeSettingsPath(std::string_view gameDirectory, std::string_view configured,
                                     std::string_view subfolder)
     {
         // The recovered order: a relative configured path is prefixed with the
@@ -701,7 +703,7 @@ namespace xla::patches
         std::string path;
         if (configured.find(':') == std::string_view::npos)
         {
-            path.assign(moduleDirectory);
+            path.assign(gameDirectory);
             if (!path.empty() && path.back() != '\\')
             {
                 path += '\\';
@@ -746,8 +748,11 @@ namespace xla::patches
             }
             try
             {
+                // A relative CustomSettingsPath is relative to the game folder,
+                // not to the ASI's folder (the INI says so, and the original
+                // prefixed the executable's directory).
                 const std::string path = ComposeSettingsPath(
-                    paths::ModuleDirectory().string(), g_customSettingsPath, subfolder);
+                    paths::GameDirectory().string(), g_customSettingsPath, subfolder);
                 if (::GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
                 {
                     ::CreateDirectoryA(path.c_str(), nullptr);

@@ -174,12 +174,15 @@ namespace xla::userdata
             return false;
         }
 
+        // <game>\saves, not <ASI folder>\saves: the redirect is documented as a
+        // saves folder inside the game folder, so a plugins\ install keeps the
+        // game's own tree.
         std::error_code error;
         const std::filesystem::path directory =
-            std::filesystem::path(paths::ModuleDirectory(error)) / "saves";
+            std::filesystem::path(paths::GameDirectory(error)) / "saves";
         if (error)
         {
-            log::Write("userdata: module directory unavailable");
+            log::Write("userdata: game directory unavailable");
             return false;
         }
 

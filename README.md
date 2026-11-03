@@ -40,8 +40,15 @@ worker thread because it initializes from `DllMain`:
 ## Installation
 
 1. Install [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest).
-2. Extract the archive next to `GTAIV.exe` and `EFLC.exe`.
+2. Extract the archive anywhere the ASI loader loads from: the game folder, `plugins\`,
+   `scripts\` or `update\`.
 3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what was applied.
+
+The add-on resolves its own directory, so `XLivelessAddon.ini`, `XLivelessAddon.log` and the
+FusionFix notice are always next to the ASI. Options documented as relative to the game folder
+(`CustomSettingsPath`, the `LocalSettingsPath` `saves` folder, the registry install-folder
+answer) use the executable's folder instead. A legacy `ZolikaPatch.ini` is read from the ASI's
+folder or from the loader folders under the game folder (`plugins`, `scripts`, `update`).
 
 The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
 

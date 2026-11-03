@@ -47,7 +47,9 @@ namespace xla::registry
         std::string GameDirectoryWithSeparator()
         {
             std::error_code error;
-            const auto directory = paths::ModuleDirectory(error);
+            // The game's install folder, not the ASI's folder: the registry
+            // answer must stay <game>\ even for a plugins\ install.
+            const auto directory = paths::GameDirectory(error);
             if (error)
             {
                 return {};

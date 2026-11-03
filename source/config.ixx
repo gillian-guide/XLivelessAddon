@@ -338,16 +338,58 @@ export namespace xla::config
         return ini;
     }
 
-    // Reads the options for `directory` (the game folder).
-    inline LoadResult Load(const std::filesystem::path& directory)
+    // Finds the old ZolikaPatch.ini. It is read next to the ASI first, then in
+    // the folders the ASI loader uses under the game folder (root, plugins,
+    // scripts, update), because an old install may have left it in any of them.
+    // No other directory is searched.
+    inline std::filesystem::path FindLegacyIni(
+        const std::filesystem::path& moduleDirectory,
+        const std::filesystem::path& gameDirectory)
+    {
+        std::error_code error;
+        const auto exists = [&error](const std::filesystem::path& path) {
+            error.clear();
+            return std::filesystem::exists(path, error) && !error;
+        };
+
+        const std::filesystem::path own = moduleDirectory / "ZolikaPatch.ini";
+        if (!moduleDirectory.empty() && exists(own))
+        {
+            return own;
+        }
+
+        if (!gameDirectory.empty())
+        {
+            constexpr const wchar_t* kLoaderFolders[] = {L"", L"plugins", L"scripts",
+                                                        L"update"};
+            for (const wchar_t* folder : kLoaderFolders)
+            {
+                const std::filesystem::path candidate =
+                    folder[0] == 0 ? gameDirectory / "ZolikaPatch.ini"
+                                   : gameDirectory / folder / "ZolikaPatch.ini";
+                if (candidate != own && exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return own;
+    }
+
+    // Reads the options next to the ASI (`moduleDirectory`). The legacy
+    // `ZolikaPatch.ini` may be next to it or in one of the loader folders.
+    inline LoadResult Load(const std::filesystem::path& moduleDirectory,
+                           const std::filesystem::path& gameDirectory = {})
     {
         std::error_code absoluteError;
-        const std::filesystem::path base = std::filesystem::absolute(directory, absoluteError);
-        const std::filesystem::path& resolved = absoluteError ? directory : base;
+        const std::filesystem::path base =
+            std::filesystem::absolute(moduleDirectory, absoluteError);
+        const std::filesystem::path& resolved = absoluteError ? moduleDirectory : base;
 
         LoadResult result;
         result.iniPath = EnsureIni(resolved);
-        result.legacyPath = resolved / "ZolikaPatch.ini";
+        result.legacyPath = FindLegacyIni(resolved, gameDirectory);
 
         std::error_code error;
         result.legacyPresent = std::filesystem::exists(result.legacyPath, error) && !error;
@@ -389,11 +431,23 @@ export namespace xla::config
         return result;
     }
 
-    // True when an *FusionFix*.asi sits next to the game executable.
-    inline bool FusionFixPresent(const std::filesystem::path& directory) noexcept
+    // True when FusionFix is loaded in the process, or its ASI sits next to
+    // this one. Its folder does not matter: the loaded-module check covers any
+    // loader folder.
+    inline bool FusionFixPresent(const std::filesystem::path& moduleDirectory) noexcept
     {
+        if (::GetModuleHandleW(L"GTAIV.EFLC.FusionFix.asi") != nullptr ||
+            ::GetModuleHandleW(L"GTAIV.FusionFix.asi") != nullptr)
+        {
+            return true;
+        }
+        if (moduleDirectory.empty())
+        {
+            return false;
+        }
+
         WIN32_FIND_DATAA data{};
-        const std::string pattern = (directory / "*FusionFix*.asi").string();
+        const std::string pattern = (moduleDirectory / "*FusionFix*.asi").string();
         const HANDLE find = ::FindFirstFileA(pattern.c_str(), &data);
         if (find == INVALID_HANDLE_VALUE)
         {

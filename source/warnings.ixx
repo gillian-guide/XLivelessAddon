@@ -545,7 +545,7 @@ namespace xla::warnings
         }
 
         file << "XLivelessAddon: FusionFix compatibility notice\r\n"
-                "FusionFix is installed next to the game executable. These "
+                "FusionFix is installed. These "
                 "XLivelessAddon.ini options are enabled but were switched off because "
                 "FusionFix owns the same feature:\r\n\r\n";
         for (const std::wstring& line : lines)

@@ -203,6 +203,68 @@ namespace
         std::filesystem::remove_all(directory, error);
     }
 
+    void TestConfigModuleAndGameDirectories()
+    {
+        // An ASI in plugins\: its own INI is next to it, the legacy
+        // ZolikaPatch.ini is still imported from the game folder.
+        const auto moduleDirectory = MakeTempDirectory("module-dir");
+        const auto gameDirectory = MakeTempDirectory("game-dir");
+        std::error_code createError;
+        std::filesystem::create_directories(gameDirectory / "plugins", createError);
+        WriteFile(moduleDirectory / "XLivelessAddon.ini", "[Options]\nSkipIntro=1\n");
+        // An old install left the legacy INI in a loader folder.
+        WriteFile(gameDirectory / "plugins" / "ZolikaPatch.ini",
+                  "[MAIN]\nSkipLauncher=0\n");
+
+        auto loaded = xla::config::Load(moduleDirectory, gameDirectory);
+        CHECK(loaded.iniPath.parent_path() == moduleDirectory);
+        CHECK(loaded.legacyPath == gameDirectory / "plugins" / "ZolikaPatch.ini");
+        CHECK_EQ(loaded.legacyPresent, true);
+        CHECK_EQ(loaded.options.skipIntro, true);
+        CHECK_EQ(loaded.options.skipLauncher, false); // legacy fallback found in plugins\
+
+        // The ASI's own INI wins even when a same-named file sits in the game
+        // folder: the add-on never reads a second copy elsewhere.
+        WriteFile(gameDirectory / "XLivelessAddon.ini", "[Options]\nSkipIntro=0\n");
+        loaded = xla::config::Load(moduleDirectory, gameDirectory);
+        CHECK(loaded.iniPath.parent_path() == moduleDirectory);
+        CHECK_EQ(loaded.options.skipIntro, true);
+
+        std::error_code error;
+        std::filesystem::remove_all(moduleDirectory, error);
+        std::filesystem::remove_all(gameDirectory, error);
+    }
+
+    void TestPathSplit()
+    {
+        // The test executable is both the main module and (for these two APIs)
+        // the module the ASI directory is resolved from, so the split is
+        // observable only as "both match the executable's directory". The value
+        // is that ModuleDirectory no longer uses GetModuleFileNameW(nullptr).
+        wchar_t executable[MAX_PATH]{};
+        const DWORD length = ::GetModuleFileNameW(nullptr, executable, MAX_PATH);
+        CHECK(length != 0 && length < MAX_PATH);
+        const std::filesystem::path expected =
+            std::filesystem::path(std::wstring_view(executable, length)).parent_path();
+        CHECK(!xla::paths::ModuleDirectory().empty());
+        CHECK(xla::paths::ModuleDirectory() == expected);
+        CHECK(xla::paths::GameDirectory() == expected);
+    }
+
+    void TestFusionFixPresence()
+    {
+        const auto moduleDirectory = MakeTempDirectory("ff-module");
+        CHECK(!xla::config::FusionFixPresent(moduleDirectory));
+
+        // FusionFix next to this ASI is found; its loaded module is found by
+        // name regardless of folder (the process-level check).
+        WriteFile(moduleDirectory / "GTAIV.EFLC.FusionFix.asi", "");
+        CHECK(xla::config::FusionFixPresent(moduleDirectory));
+
+        std::error_code error;
+        std::filesystem::remove_all(moduleDirectory, error);
+    }
+
     void TestConfigFlagGrammar()
     {
         struct Case
@@ -1221,6 +1283,9 @@ int main(int argc, char** argv)
     }
     run("config precedence and FusionFix gates", TestConfigPrecedenceAndGates);
     run("config defaults and EnsureIni", TestConfigDefaultsAndEnsureIni);
+    run("config module and game directories", TestConfigModuleAndGameDirectories);
+    run("path split", TestPathSplit);
+    run("fusionfix presence", TestFusionFixPresence);
     run("config flag grammar", TestConfigFlagGrammar);
     run("config option table", TestConfigOptionTable);
     run("config section order and duplicates", TestConfigSectionOrderAndDuplicates);

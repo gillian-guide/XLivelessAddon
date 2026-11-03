@@ -87,7 +87,11 @@ namespace xla
         // registration table is the only thing that decides the sequence.
         struct RunState
         {
-            std::filesystem::path directory;
+            // The ASI's own folder (INI, log, notice) and the game folder
+            // (game-relative option values). They differ when the ASI is
+            // installed in plugins\.
+            std::filesystem::path moduleDirectory;
+            std::filesystem::path gameDirectory;
             config::LoadResult loaded;
             bool fusionFix{};
             Image image;
@@ -239,19 +243,24 @@ namespace xla
 
         Outcome StepPaths(RunState& state)
         {
-            state.directory = paths::ModuleDirectory();
+            state.moduleDirectory = paths::ModuleDirectory();
+            state.gameDirectory = paths::GameDirectory();
+            log::Info("paths: module={} game={}", state.moduleDirectory.string(),
+                      state.gameDirectory.string());
             return Outcome::next;
         }
 
         Outcome StepConfig(RunState& state)
         {
-            state.loaded = config::Load(state.directory);
+            // The add-on's own INI is read next to the ASI; the legacy
+            // ZolikaPatch.ini is found in the ASI folder or a loader folder.
+            state.loaded = config::Load(state.moduleDirectory, state.gameDirectory);
             return Outcome::next;
         }
 
         Outcome StepFusionFix(RunState& state)
         {
-            state.fusionFix = config::FusionFixPresent(state.directory);
+            state.fusionFix = config::FusionFixPresent(state.moduleDirectory);
             if (!state.fusionFix)
             {
                 return Outcome::next;
@@ -264,7 +273,8 @@ namespace xla
                 log::Info("fusionfix: gating {} (FusionFix {})", gate.option,
                           gate.fusionFixModule);
             }
-            warnings::PublishFusionFixNotice(state.directory, gated);
+            // The notice belongs next to the ASI, like the INI and the log.
+            warnings::PublishFusionFixNotice(state.moduleDirectory, gated);
             return Outcome::next;
         }
 

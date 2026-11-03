@@ -186,22 +186,57 @@ export namespace xla
 
     namespace paths
     {
-        // The module's directory, reporting why it failed through `error`.
-        inline std::filesystem::path ModuleDirectory(std::error_code& error) noexcept
+        namespace detail
         {
             // Windows' documented maximum path length (including the terminator).
-            constexpr std::size_t kMaxModulePathChars = 32768;
-            std::array<wchar_t, kMaxModulePathChars> buffer{};
-            const DWORD length =
-                ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-            if (length == 0 || length >= buffer.size())
+            inline constexpr std::size_t kMaxModulePathChars = 32768;
+
+            // The directory of `module`; nullptr means the process's main
+            // executable (the game folder), never the working directory.
+            inline std::filesystem::path DirectoryOfModule(HMODULE module,
+                                                           std::error_code& error) noexcept
             {
-                error = std::error_code(static_cast<int>(::GetLastError()),
-                                        std::system_category());
-                return {};
+                std::array<wchar_t, kMaxModulePathChars> buffer{};
+                const DWORD length = ::GetModuleFileNameW(
+                    module, buffer.data(), static_cast<DWORD>(buffer.size()));
+                if (length == 0)
+                {
+                    error = std::error_code(static_cast<int>(::GetLastError()),
+                                            std::system_category());
+                    return {};
+                }
+                if (length >= buffer.size())
+                {
+                    // The path did not fit: say so instead of returning a
+                    // silently truncated directory.
+                    error = std::error_code(ERROR_INSUFFICIENT_BUFFER,
+                                            std::system_category());
+                    return {};
+                }
+                error.clear();
+                return std::filesystem::path(std::wstring_view(buffer.data(), length))
+                    .parent_path();
             }
-            error.clear();
-            return std::filesystem::path(std::wstring_view(buffer.data(), length)).parent_path();
+
+            // Any address in this ASI; GetModuleHandleExW resolves it to the
+            // module handle even when the file was renamed.
+            inline void ModuleAnchor() noexcept {}
+
+            inline HMODULE ThisModule() noexcept
+            {
+                HMODULE module = nullptr;
+                ::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                     reinterpret_cast<LPCWSTR>(&ModuleAnchor), &module);
+                return module;
+            }
+        } // namespace detail
+
+        // The directory containing this ASI. The INI, log and FusionFix notice
+        // live here, whatever folder the ASI was installed in.
+        inline std::filesystem::path ModuleDirectory(std::error_code& error) noexcept
+        {
+            return detail::DirectoryOfModule(detail::ThisModule(), error);
         }
 
         // The same path, ignoring the failure reason; empty when it fails.
@@ -209,6 +244,20 @@ export namespace xla
         {
             std::error_code error;
             return ModuleDirectory(error);
+        }
+
+        // The game folder (the directory of the process executable). Options
+        // documented as relative to the game folder (saves/settings paths) use
+        // this, so a plugins\ install still writes into the game tree.
+        inline std::filesystem::path GameDirectory(std::error_code& error) noexcept
+        {
+            return detail::DirectoryOfModule(nullptr, error);
+        }
+
+        inline std::filesystem::path GameDirectory() noexcept
+        {
+            std::error_code error;
+            return GameDirectory(error);
         }
     } // namespace paths
 

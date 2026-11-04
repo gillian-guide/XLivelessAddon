@@ -80,73 +80,27 @@ namespace xla::userdata
 
         // Replaces one shell32 IAT slot and returns the value it held (the function
         // the game keeps calling), or nullopt when there is no such slot. The value
-        // can be null, so the optional says whether the slot was replaced.
-        // Near-copy of windowed::ReplaceImport (HMODULE vs Image) and registry's
-        // walker; this one trusts the PE, registry's is bounds-checked.
+        // can be null, so the optional says whether the slot was replaced. The walk
+        // is FusionFix's IATHook; the map lookup is the "was it present" answer.
         [[nodiscard]] std::optional<void*> ReplaceShellImport(const Image& image,
                                                               const char* function,
                                                               void* replacement) noexcept
         {
-            if (image.empty() || function == nullptr || replacement == nullptr)
+            if (image.empty() || function == nullptr || replacement == nullptr ||
+                NtHeaders(image.base) == nullptr)
             {
                 return std::nullopt;
             }
 
-            auto* base = reinterpret_cast<std::uint8_t*>(image.base);
-            const IMAGE_NT_HEADERS* nt = NtHeaders(base);
-            if (nt == nullptr)
+            auto originals = IATHook::Replace(
+                reinterpret_cast<HMODULE>(image.base), "SHELL32.DLL",
+                std::pair<const char*, void*>{function, replacement});
+            const auto found = originals.find(function);
+            if (found == originals.end())
             {
                 return std::nullopt;
             }
-
-            const auto& directory =
-                nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-            if (directory.VirtualAddress == 0)
-            {
-                return std::nullopt;
-            }
-
-            auto* descriptor =
-                reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
-            for (; descriptor->Name != 0; ++descriptor)
-            {
-                const char* module = reinterpret_cast<const char*>(base + descriptor->Name);
-                if (_stricmp(module, "SHELL32.DLL") != 0)
-                {
-                    continue;
-                }
-
-                auto* thunk = reinterpret_cast<IMAGE_THUNK_DATA*>(
-                    base + (descriptor->OriginalFirstThunk != 0 ? descriptor->OriginalFirstThunk
-                                                                : descriptor->FirstThunk));
-                auto* slot = reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->FirstThunk);
-                for (; thunk->u1.AddressOfData != 0; ++thunk, ++slot)
-                {
-                    if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    const auto* import = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
-                        base + thunk->u1.AddressOfData);
-                    if (std::strcmp(reinterpret_cast<const char*>(import->Name), function) != 0)
-                    {
-                        continue;
-                    }
-
-                    DWORD previous = 0;
-                    if (!::VirtualProtect(&slot->u1.Function, sizeof(void*), PAGE_READWRITE,
-                                          &previous))
-                    {
-                        return std::nullopt;
-                    }
-                    const auto original = reinterpret_cast<void*>(slot->u1.Function);
-                    slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
-                    ::VirtualProtect(&slot->u1.Function, sizeof(void*), previous, &previous);
-                    return original;
-                }
-            }
-            return std::nullopt;
+            return found->second.get();
         }
     } // namespace
 

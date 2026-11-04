@@ -40,10 +40,12 @@ export namespace xla::patch
         }
     };
 
-    // First match of `signature` in the game module; logs a miss.
+    // First match of `signature` in the published game image; logs a miss. The
+    // scan itself is FusionFix's find_pattern (see xla.common), so the build
+    // variants and the executable-section range live in one place.
     inline Site Find(std::string_view signature, std::string_view label)
     {
-        hook::pattern pattern{signature};
+        hook::pattern pattern = find_pattern(signature);
         if (pattern.empty())
         {
             log::Info("{}: signature missing", label);

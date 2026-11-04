@@ -21,10 +21,12 @@ source is redistributed here.
 
 ## GTAIV.EFLC.FusionFix
 
-The borderless-window/focus-loss logic (`source/windowed.ixx`) and the 300 ms intro-skip variant
-(`SkipIntro` in `source/patches.ixx`) follow GTAIV.EFLC.FusionFix (`windowed.ixx`,
-`skipintro.ixx`), Copyright (C) ThirteenAG and contributors, GPL-3.0. The per-feature FusionFix
-gating in `source/config.ixx` follows the same project's compatibility approach.
+The borderless-window/focus-loss logic (`source/windowed.ixx`), the 300 ms intro-skip variant
+(`SkipIntro` in `source/patches.ixx`) and the shared `Event`, `IATHook`, `find_pattern` and
+byte/pattern helpers in `source/common.ixx` follow GTAIV.EFLC.FusionFix (`windowed.ixx`,
+`skipintro.ixx`, `common.ixx`), Copyright (C) ThirteenAG and contributors, GPL-3.0. The
+per-feature FusionFix gating in `source/config.ixx` follows the same project's compatibility
+approach.
 
 ## Vendored libraries (git submodules)
 

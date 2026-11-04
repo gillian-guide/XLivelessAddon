@@ -541,23 +541,24 @@ namespace
                  std::string{"none"});
     }
 
-    // The exact effective init order, frozen. This list is the behavioural
-    // contract of the pipeline: any insertion, removal or reordering has to be a
-    // reviewed change to the registration table (and this array), not a silent
-    // one.
+    // The exact effective init order, frozen. The sequence comes from the
+    // feature classes' static-init subscriptions (init tier, then install tier,
+    // then post tier), not from a table: any insertion, removal, retiering or
+    // reordering has to be a reviewed change to the classes and this array, not a
+    // silent one.
     constexpr std::array<std::string_view, 27> kPipelineGolden{{
-        "banner",           "console",        "single-instance", "loader",
-        "probe",            "paths",          "config",          "fusionfix",
-        "report-config",    "image",          "writable",        "build",
-        "local-settings",   "savegames",      "skip-launcher",   "borderless-hooks",
-        "focus-loss",       "core-patches",   "launcher-stage",  "web-connect",
-        "intro",            "menu",           "do-not-pause",    "defwindow-shims",
-        "registry",         "vram",           "complete",
+        "Banner",          "Console",        "SingleInstance", "Loader",
+        "Probe",           "Paths",          "Config",         "FusionFix",
+        "ReportConfiguration", "Image",      "Writable",       "Build",
+        "LocalSettings",   "Savegames",      "SkipLauncher",   "BorderlessWindow",
+        "FocusLoss",       "CorePatches",    "LauncherStage",  "WebConnect",
+        "SkipIntro",       "SkipMenu",       "DoNotPauseOnMinimize", "DefWindowProcShims",
+        "Registry",        "VramFix",        "Complete",
     }};
 
     void TestPipelineOrder()
     {
-        const std::span<const std::string_view> order = xla::StepOrder();
+        const std::span<const std::string_view> order = xla::StartupOrder();
         CHECK_EQ(order.size(), kPipelineGolden.size());
         if (order.size() != kPipelineGolden.size())
         {
@@ -574,6 +575,67 @@ namespace
                 ++g_failures;
             }
         }
+    }
+
+    void TestSharedHelpers()
+    {
+        // FusionFix's Event: += appends and returns the token that unsubscribes,
+        // executeAll runs a snapshot in subscription order, and a removed handler
+        // does not run again.
+        xla::Event<> event;
+        std::string order;
+        auto removeSecond = event += [&order] { order += 'b'; };
+        event += [&order] { order += 'a'; };
+        event.executeAll();
+        CHECK_EQ(order, std::string{"ba"});
+
+        removeSecond();
+        order.clear();
+        event.executeAll();
+        CHECK_EQ(order, std::string{"a"});
+
+        // The byte helpers round-trip through the same representation the
+        // recovered tables use.
+        const std::uint32_t value = 0x11223344u;
+        const std::array<std::uint8_t, sizeof(value)> bytes = xla::to_bytes(value);
+        CHECK_EQ(bytes[0], std::uint8_t{0x44});
+        CHECK_EQ(bytes[3], std::uint8_t{0x11});
+        std::uint32_t restored = 0;
+        CHECK_EQ(xla::from_bytes(bytes, restored), value);
+        CHECK_EQ(xla::from_bytes<std::uint32_t>(bytes), value);
+        CHECK_EQ(xla::pattern_str(bytes), std::string{"44 33 22 11 "});
+    }
+
+    void TestScanHelpers()
+    {
+        // find_pattern reads the image published by Game and tries the build
+        // variants in argument order. A synthetic buffer is not a PE, so
+        // ExecutableView keeps the whole range.
+        std::array<std::byte, 64> buffer{};
+        constexpr std::uint8_t first[] = {0xAA, 0xBB, 0xCC, 0xDD};
+        constexpr std::uint8_t second[] = {0x11, 0x22, 0x33, 0x44};
+        std::memcpy(buffer.data() + 4, first, sizeof(first));
+        std::memcpy(buffer.data() + 20, second, sizeof(second));
+        xla::scan::SetImage(xla::Image{buffer.data(), buffer.size()});
+
+        hook::pattern found = xla::find_pattern("AA BB CC DD");
+        CHECK_EQ(found.size(), std::size_t{1});
+        if (!found.empty())
+        {
+            CHECK(found.get_first<std::uint8_t>() ==
+                  reinterpret_cast<std::uint8_t*>(buffer.data() + 4));
+        }
+
+        // The first variant misses; the second one is the fallback.
+        hook::pattern fallback = xla::find_pattern("DE AD BE EF", "11 22 33 44");
+        CHECK_EQ(fallback.size(), std::size_t{1});
+        if (!fallback.empty())
+        {
+            CHECK(fallback.get_first<std::uint8_t>() ==
+                  reinterpret_cast<std::uint8_t*>(buffer.data() + 20));
+        }
+
+        xla::scan::SetImage(xla::Image{});
     }
 
     void TestWarnings()
@@ -1295,6 +1357,8 @@ int main(int argc, char** argv)
     run("missing-test tail NOPs", TestMissingTestTailNops);
     run("shipped launcher stages", TestShippedLauncherStages);
     run("pipeline order", TestPipelineOrder);
+    run("shared helpers", TestSharedHelpers);
+    run("scan helpers", TestScanHelpers);
     run("warnings", TestWarnings);
     run("build detection", TestBuildDetection);
     run("patch primitives", TestPatchPrimitives);

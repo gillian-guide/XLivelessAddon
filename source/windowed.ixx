@@ -77,90 +77,29 @@ namespace xla::windowed
         bool g_borderlessInstalled = false;
         bool g_focusInstalled = false;
 
-        bool EqualsIgnoreCase(const char* left, const char* right) noexcept
-        {
-            return left != nullptr && right != nullptr && _stricmp(left, right) == 0;
-        }
-
         // Replaces the first matching USER32 import slot and returns the value it
         // held (the function the game keeps calling), or nullopt when there is no
         // such slot. The value can itself be null, so the optional, not the pointer,
-        // says whether the slot was replaced.
-        // Deliberate near-copy of userdata::ReplaceShellImport and registry's inline
-        // walker (the header validation is shared through xla::NtHeaders): this one
-        // trusts the descriptor/thunk chain (the other two bounds-check more), and
-        // the OriginalFirstThunk == 0 fallback must be kept in sync by hand.
+        // says whether the slot was replaced. The walk is FusionFix's IATHook; the
+        // map lookup is what distinguishes "not present" from "present and null".
         [[nodiscard]] std::optional<void*> ReplaceImport(HMODULE module, const char* function,
                                                          void* replacement) noexcept
         {
-            if (module == nullptr || function == nullptr || replacement == nullptr)
+            if (module == nullptr || function == nullptr || replacement == nullptr ||
+                NtHeaders(module) == nullptr)
             {
                 return std::nullopt;
             }
 
-            const auto* base = reinterpret_cast<const std::uint8_t*>(module);
-            const IMAGE_NT_HEADERS* nt = NtHeaders(module);
-            if (nt == nullptr)
+            auto originals = IATHook::Replace(
+                module, "USER32.dll",
+                std::pair<const char*, void*>{function, replacement});
+            const auto found = originals.find(function);
+            if (found == originals.end())
             {
                 return std::nullopt;
             }
-
-            const auto& directory =
-                nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-            if (directory.VirtualAddress == 0)
-            {
-                return std::nullopt;
-            }
-
-            auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(
-                const_cast<std::uint8_t*>(base) + directory.VirtualAddress);
-            for (; descriptor->Name != 0; ++descriptor)
-            {
-                const char* moduleName =
-                    reinterpret_cast<const char*>(base + descriptor->Name);
-                if (!EqualsIgnoreCase(moduleName, "USER32.dll") &&
-                    !EqualsIgnoreCase(moduleName, "USER32"))
-                {
-                    continue;
-                }
-
-                auto* thunk = reinterpret_cast<IMAGE_THUNK_DATA*>(
-                    const_cast<std::uint8_t*>(base) + descriptor->OriginalFirstThunk);
-                auto* slot = reinterpret_cast<IMAGE_THUNK_DATA*>(
-                    const_cast<std::uint8_t*>(base) + descriptor->FirstThunk);
-                if (descriptor->OriginalFirstThunk == 0)
-                {
-                    thunk = slot;
-                }
-
-                for (; thunk->u1.AddressOfData != 0; ++thunk, ++slot)
-                {
-                    if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    const auto* import = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(
-                        base + thunk->u1.AddressOfData);
-                    if (!EqualsIgnoreCase(reinterpret_cast<const char*>(import->Name),
-                                          function))
-                    {
-                        continue;
-                    }
-
-                    DWORD previous = 0;
-                    if (!::VirtualProtect(&slot->u1.Function, sizeof(void*), PAGE_READWRITE,
-                                          &previous))
-                    {
-                        return std::nullopt;
-                    }
-                    const auto original = reinterpret_cast<void*>(slot->u1.Function);
-                    slot->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
-                    ::VirtualProtect(&slot->u1.Function, sizeof(void*), previous, &previous);
-                    return original;
-                }
-            }
-            return std::nullopt;
+            return found->second.get();
         }
 
         void* User32Proc(const char* name) noexcept
@@ -328,11 +267,7 @@ namespace xla::windowed
         [[nodiscard]] bool* ResolveGlobalBool(const Image& image, std::string_view primary,
                                               std::string_view fallback = {}) noexcept
         {
-            hook::pattern pattern{primary};
-            if (pattern.empty() && !fallback.empty())
-            {
-                pattern = hook::pattern{fallback};
-            }
+            hook::pattern pattern = find_pattern(primary, fallback);
             if (pattern.empty())
             {
                 return nullptr;
@@ -506,11 +441,9 @@ namespace xla::windowed
         // (SetWindowPosHook and SetWindowLongAHook check g_onTop for null).
         g_onTop = ResolveGlobalBool(image, "80 3D ? ? ? ? ? 74 07 BF");
 
-        hook::pattern pattern{"E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04"};
-        if (pattern.empty())
-        {
-            pattern = hook::pattern{"E8 ? ? ? ? 8B 0D ? ? ? ? 8B 15 ? ? ? ? 83 C4 04 83 3D"};
-        }
+        hook::pattern pattern =
+            find_pattern("E8 ? ? ? ? A1 ? ? ? ? A3 ? ? ? ? A1 ? ? ? ? 83 C4 04",
+                         "E8 ? ? ? ? 8B 0D ? ? ? ? 8B 15 ? ? ? ? 83 C4 04 83 3D");
         if (pattern.empty())
         {
             log::Write("windowed: input call pattern not found");
@@ -540,7 +473,8 @@ namespace xla::windowed
         constexpr std::size_t kImportCallLength = 6;
         constexpr std::size_t kShimCount = 2;
 
-        hook::pattern pattern{"FF 15 ? ? ? ? 5F 5E 5D 5B 83 C4 10 C2 10 00"};
+        hook::pattern pattern =
+            find_pattern<2>("FF 15 ? ? ? ? 5F 5E 5D 5B 83 C4 10 C2 10 00");
         if (pattern.size() < kShimCount)
         {
             log::Info("windowed: DefWindowProc patterns missing ({})", pattern.size());

@@ -74,6 +74,87 @@ export namespace xla
         return nt->Signature == IMAGE_NT_SIGNATURE ? nt : nullptr;
     }
 
+    // FusionFix's Event, verbatim: a mutex-guarded std::function handler list. A
+    // subscription returns the token that removes it; executeAll runs a snapshot
+    // in subscription order, executeAllAsync runs each handler on its own thread.
+    // The startup tiers below are Event<> because their handlers read the Game.
+    template <typename... Args>
+    class Event : public std::function<void(Args...)>
+    {
+    public:
+        using std::function<void(Args...)>::function;
+
+    private:
+        struct Handler
+        {
+            std::function<void(Args...)> callback;
+            std::atomic<bool> active{true};
+
+            explicit Handler(std::function<void(Args...)>&& fn) : callback(std::move(fn)) {}
+        };
+
+        mutable std::mutex handlersMutex;
+        std::list<std::shared_ptr<Handler>> handlers;
+
+        auto snapshot() const
+        {
+            std::lock_guard lock(handlersMutex);
+            return std::vector<std::shared_ptr<Handler>>(handlers.begin(), handlers.end());
+        }
+
+    public:
+        auto operator+=(std::function<void(Args...)>&& callback) -> std::function<void()>
+        {
+            auto handler = std::make_shared<Handler>(std::move(callback));
+            {
+                std::lock_guard lock(handlersMutex);
+                handlers.push_back(handler);
+            }
+            return [this, handler]()
+            {
+                std::lock_guard lock(handlersMutex);
+                handler->active = false;
+                handlers.remove(handler);
+            };
+        }
+
+        void executeAll(Args... args) const
+        {
+            for (const auto& handler : snapshot())
+            {
+                if (handler->active)
+                {
+                    handler->callback(args...);
+                }
+            }
+        }
+
+        std::vector<std::future<void>> executeAllAsync(Args... args) const
+        {
+            std::vector<std::future<void>> futures;
+            for (const auto& handler : snapshot())
+            {
+                futures.emplace_back(std::async(
+                    std::launch::async,
+                    [handler, values = std::tuple<Args...>(args...)]() mutable
+                    {
+                        if (handler->active)
+                        {
+                            std::apply(handler->callback, values);
+                        }
+                    }));
+            }
+            return futures;
+        }
+    };
+
+    // The startup tiers, run in this order by xla::Run. The init tier detects the
+    // executable and publishes everything the installers read; the install tier
+    // keeps the original handler order; the post tier closes the log.
+    Event<>& InitEvent() noexcept;
+    Event<>& InstallEvent() noexcept;
+    Event<>& PostEvent() noexcept;
+
     enum class PatchErrorCode : std::uint8_t
     {
         invalid_input,
@@ -340,6 +421,453 @@ export namespace xla
         }
     } // namespace log
 
+    // The image the shared scan helper reads. xla::Game publishes the running
+    // game image once in Run; the native tests publish their own buffer. It is a
+    // single value, not a second image registry: the Game owns the image and this
+    // is only how the scan helper in this module can see it.
+    namespace scan
+    {
+        namespace detail
+        {
+            inline Image g_image{};
+        } // namespace detail
+
+        inline void SetImage(Image image) noexcept
+        {
+            detail::g_image = image;
+        }
+
+        [[nodiscard]] inline Image GetImage() noexcept
+        {
+            return detail::g_image;
+        }
+    } // namespace scan
+
+    // The range Hooking.Patterns' own module pattern scans: module base up to the
+    // end of the last executable section. A buffer that is not a readable PE32
+    // image keeps the whole-image range, so the tests can scan synthetic data.
+    [[nodiscard]] inline Image ExecutableView(Image image) noexcept
+    {
+        const Image whole = image;
+        if (image.base == nullptr || image.size < sizeof(IMAGE_DOS_HEADER))
+        {
+            return whole;
+        }
+
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image.base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
+        {
+            return whole;
+        }
+
+        const std::size_t ntOffset = static_cast<std::size_t>(dos->e_lfanew);
+        if (ntOffset + sizeof(IMAGE_NT_HEADERS) > image.size)
+        {
+            return whole;
+        }
+
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image.base + ntOffset);
+        if (nt->Signature != IMAGE_NT_SIGNATURE ||
+            nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+        {
+            return whole;
+        }
+
+        const std::size_t sectionTable = static_cast<std::size_t>(
+            reinterpret_cast<std::uintptr_t>(IMAGE_FIRST_SECTION(nt)) -
+            reinterpret_cast<std::uintptr_t>(image.base));
+        const std::size_t sectionCount = nt->FileHeader.NumberOfSections;
+        if (sectionCount == 0 || sectionTable < ntOffset ||
+            sectionTable + sectionCount * sizeof(IMAGE_SECTION_HEADER) > image.size)
+        {
+            return whole;
+        }
+
+        const auto* sections =
+            reinterpret_cast<const IMAGE_SECTION_HEADER*>(image.base + sectionTable);
+        std::size_t end = 0;
+        for (std::size_t index = 0; index < sectionCount; ++index)
+        {
+            const IMAGE_SECTION_HEADER& section = sections[index];
+            // Hooking.Patterns' own range: the raw size when the section has one,
+            // otherwise the virtual size, and the last executable section in
+            // table order wins.
+            const std::size_t sectionSize =
+                section.SizeOfRawData != 0 ? section.SizeOfRawData : section.Misc.VirtualSize;
+            if ((section.Characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)
+            {
+                end = static_cast<std::size_t>(section.VirtualAddress) + sectionSize;
+            }
+        }
+
+        // No executable section, or headers that leave the mapped image: keep the
+        // whole-image behaviour instead of silently scanning less.
+        if (end == 0 || end > image.size)
+        {
+            return whole;
+        }
+        return {image.base, end};
+    }
+
+    // One scan over the executable view of the published image. Hooking.Patterns
+    // applies its own wildcard grammar; the literal is passed through unchanged.
+    [[nodiscard]] inline hook::pattern make_game_pattern(std::string_view signature)
+    {
+        if (signature.empty())
+        {
+            return hook::pattern{};
+        }
+        const Image view = ExecutableView(scan::GetImage());
+        if (view.empty())
+        {
+            return hook::pattern{};
+        }
+        const auto begin = reinterpret_cast<std::uintptr_t>(view.base);
+        return hook::make_range_pattern(begin, begin + view.size, signature);
+    }
+
+    // The original's hook::pattern with FusionFix's build variants: each argument
+    // is a signature for a different build and the first one that matches wins.
+    // `count` is the number of matches the caller needs (0 scans every match).
+    template <std::size_t count = 1, typename... Args>
+    hook::pattern find_pattern(Args... args)
+    {
+        hook::pattern pattern;
+        ((pattern = make_game_pattern(args),
+          !pattern.count_hint(static_cast<std::uint32_t>(count)).empty()) ||
+         ...);
+        if (pattern.empty())
+        {
+            std::string_view first;
+            ((first = std::string_view(args), true) || ...);
+            log::Info("pattern missing: {}", first);
+        }
+        return pattern;
+    }
+
+    // FusionFix's byte helpers, verbatim where the types exist in this tree.
+    inline std::string format(const char* fmt, ...)
+    {
+        va_list args;
+        va_start(args, fmt);
+        std::vector<char> v(1024);
+        while (true)
+        {
+            va_list args2;
+            va_copy(args2, args);
+            int res = vsnprintf(v.data(), v.size(), fmt, args2);
+            if ((res >= 0) && (res < static_cast<int>(v.size())))
+            {
+                va_end(args);
+                va_end(args2);
+                return std::string(v.data());
+            }
+            size_t size;
+            if (res < 0)
+            {
+                size = v.size() * 2;
+            }
+            else
+            {
+                size = static_cast<size_t>(res) + 1;
+            }
+            v.clear();
+            v.resize(size);
+            va_end(args2);
+        }
+    }
+
+    template <typename T>
+    std::array<std::uint8_t, sizeof(T)> to_bytes(const T& object)
+    {
+        std::array<std::uint8_t, sizeof(T)> bytes;
+        const std::uint8_t* begin = reinterpret_cast<const std::uint8_t*>(std::addressof(object));
+        const std::uint8_t* end = begin + sizeof(T);
+        std::copy(begin, end, std::begin(bytes));
+        return bytes;
+    }
+
+    template <typename T>
+    T& from_bytes(const std::array<std::uint8_t, sizeof(T)>& bytes, T& object)
+    {
+        static_assert(std::is_trivially_copyable<T>::value, "not a TriviallyCopyable type");
+        std::uint8_t* beginObject = reinterpret_cast<std::uint8_t*>(std::addressof(object));
+        std::copy(std::begin(bytes), std::end(bytes), beginObject);
+        return object;
+    }
+
+    template <class T, class T1>
+    T from_bytes(const T1& bytes)
+    {
+        static_assert(std::is_trivially_copyable<T>::value, "not a TriviallyCopyable type");
+        T object;
+        std::uint8_t* beginObject = reinterpret_cast<std::uint8_t*>(std::addressof(object));
+        std::copy(std::begin(bytes), std::end(bytes) - (sizeof(T1) - sizeof(T)), beginObject);
+        return object;
+    }
+
+    template <size_t n>
+    std::string pattern_str(const std::array<std::uint8_t, n> bytes)
+    {
+        std::string result;
+        for (size_t index = 0; index < n; index++)
+        {
+            result += format("%02X ", bytes[index]);
+        }
+        return result;
+    }
+
+    template <typename T>
+    std::string pattern_str(T value)
+    {
+        return std::string(
+            (std::is_same<T, char>::value ? format("%c ", value) : format("%02X ", value)));
+    }
+
+    template <typename T, typename... Rest>
+    std::string pattern_str(T value, Rest... rest)
+    {
+        return std::string((std::is_same<T, char>::value ? format("%c ", value)
+                                                         : format("%02X ", value)) +
+                           pattern_str(rest...));
+    }
+
+    inline std::string pattern_str(std::string_view text)
+    {
+        std::stringstream stream;
+        for (const auto& item : text)
+        {
+            stream << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+                   << +std::uint8_t(item) << " ";
+        }
+        return stream.str();
+    }
+
+    // FusionFix's IAT replacement: walk the import descriptors of `target_module`
+    // and replace every `dll_name!name` (or `name@ordinal`) slot in `inputs`.
+    // The return value maps each input name to a future holding the value the slot
+    // held before the replacement. A name that does not exist in that module has
+    // no map entry, so "was it replaced" is the map lookup, not a null pointer.
+    class IATHook
+    {
+    public:
+        template <class... Ts>
+        static auto Replace(HMODULE target_module, std::string_view dll_name, Ts&&... inputs)
+        {
+            std::map<std::string, std::future<void*>> originalPtrs;
+
+            const DWORD_PTR instance = reinterpret_cast<DWORD_PTR>(target_module);
+            if (instance == 0)
+            {
+                return originalPtrs;
+            }
+            const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(instance);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+            {
+                return originalPtrs;
+            }
+            const auto* ntHeader = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+                instance + dos->e_lfanew);
+            if (ntHeader->Signature != IMAGE_NT_SIGNATURE)
+            {
+                return originalPtrs;
+            }
+
+            const auto& importDirectory =
+                ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+            if (importDirectory.VirtualAddress == 0)
+            {
+                return originalPtrs;
+            }
+            PIMAGE_IMPORT_DESCRIPTOR pImports = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(
+                instance + importDirectory.VirtualAddress);
+            DWORD dwProtect[2];
+
+            // Regular imports
+            for (; pImports->Name != 0; pImports++)
+            {
+                if (_stricmp(reinterpret_cast<const char*>(instance + pImports->Name),
+                             dll_name.data()) == 0)
+                {
+                    if (pImports->OriginalFirstThunk != 0)
+                    {
+                        const PIMAGE_THUNK_DATA pThunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
+                            instance + pImports->OriginalFirstThunk);
+
+                        for (ptrdiff_t j = 0; pThunk[j].u1.AddressOfData != 0; j++)
+                        {
+                            auto pAddress =
+                                reinterpret_cast<void**>(instance + pImports->FirstThunk) + j;
+                            if (!pAddress)
+                            {
+                                continue;
+                            }
+                            VirtualProtect(pAddress, sizeof(void*),
+                                           PAGE_EXECUTE_READWRITE, &dwProtect[0]);
+                            ([&]
+                             {
+                                 auto name = std::string_view(std::get<0>(inputs));
+                                 auto num = std::string("-1");
+                                 if (name.contains("@"))
+                                 {
+                                     num = name.substr(name.find_last_of("@") + 1);
+                                     name = name.substr(0, name.find_last_of("@"));
+                                 }
+
+                                 if (pThunk[j].u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                                 {
+                                     try
+                                     {
+                                         if (IMAGE_ORDINAL(pThunk[j].u1.Ordinal) ==
+                                             static_cast<DWORD>(std::stoi(num.data())))
+                                         {
+                                             originalPtrs[std::get<0>(inputs)] =
+                                                 std::async(std::launch::deferred,
+                                                            [&]() -> void* {
+                                                                return *pAddress;
+                                                            });
+                                             originalPtrs[std::get<0>(inputs)].wait();
+                                             *pAddress = std::get<1>(inputs);
+                                         }
+                                     }
+                                     catch (...)
+                                     {
+                                     }
+                                 }
+                                 else if ((*pAddress &&
+                                           *pAddress ==
+                                               (void*)GetProcAddress(
+                                                   GetModuleHandleA(dll_name.data()),
+                                                   name.data())) ||
+                                          (strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(
+                                                      instance + pThunk[j].u1.AddressOfData)
+                                                      ->Name,
+                                                  name.data()) == 0))
+                                 {
+                                     originalPtrs[std::get<0>(inputs)] =
+                                         std::async(std::launch::deferred,
+                                                    [&]() -> void* { return *pAddress; });
+                                     originalPtrs[std::get<0>(inputs)].wait();
+                                     *pAddress = std::get<1>(inputs);
+                                 }
+                             }(),
+                             ...);
+                            VirtualProtect(pAddress, sizeof(void*), dwProtect[0], &dwProtect[1]);
+                        }
+                    }
+                    else
+                    {
+                        auto pFunctions =
+                            reinterpret_cast<void**>(instance + pImports->FirstThunk);
+
+                        for (ptrdiff_t j = 0; pFunctions[j] != nullptr; j++)
+                        {
+                            auto pAddress = &pFunctions[j];
+                            VirtualProtect(pAddress, sizeof(void*),
+                                           PAGE_EXECUTE_READWRITE, &dwProtect[0]);
+                            ([&]
+                             {
+                                 if (*pAddress &&
+                                     *pAddress == (void*)GetProcAddress(
+                                                       GetModuleHandleA(dll_name.data()),
+                                                       std::get<0>(inputs)))
+                                 {
+                                     originalPtrs[std::get<0>(inputs)] =
+                                         std::async(std::launch::deferred,
+                                                    [&]() -> void* { return *pAddress; });
+                                     originalPtrs[std::get<0>(inputs)].wait();
+                                     *pAddress = std::get<1>(inputs);
+                                 }
+                             }(),
+                             ...);
+                            VirtualProtect(pAddress, sizeof(void*), dwProtect[0], &dwProtect[1]);
+                        }
+                    }
+                }
+            }
+
+            // Delay-loaded imports. The directory is absent on the game image; a
+            // zero RVA must not be read as a descriptor at the module base.
+            const auto& delayDirectory =
+                ntHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
+            if (delayDirectory.VirtualAddress != 0 && delayDirectory.Size != 0)
+            {
+                PIMAGE_DELAYLOAD_DESCRIPTOR pDelayImports =
+                    reinterpret_cast<PIMAGE_DELAYLOAD_DESCRIPTOR>(instance +
+                                                                  delayDirectory.VirtualAddress);
+                for (; pDelayImports->DllNameRVA != 0; pDelayImports++)
+                {
+                    if (_stricmp(reinterpret_cast<const char*>(instance +
+                                                               pDelayImports->DllNameRVA),
+                                 dll_name.data()) == 0)
+                    {
+                        if (pDelayImports->ImportAddressTableRVA == 0)
+                        {
+                            continue;
+                        }
+                        PIMAGE_THUNK_DATA pThunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
+                            instance + pDelayImports->ImportNameTableRVA);
+                        PIMAGE_THUNK_DATA pAddressThunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
+                            instance + pDelayImports->ImportAddressTableRVA);
+
+                        for (; pThunk->u1.AddressOfData != 0; pThunk++, pAddressThunk++)
+                        {
+                            auto pAddress = reinterpret_cast<void**>(pAddressThunk);
+                            VirtualProtect(pAddress, sizeof(void*),
+                                           PAGE_EXECUTE_READWRITE, &dwProtect[0]);
+                            ([&]
+                             {
+                                 auto name = std::string_view(std::get<0>(inputs));
+                                 auto num = std::string("-1");
+                                 if (name.contains("@"))
+                                 {
+                                     num = name.substr(name.find_last_of("@") + 1);
+                                     name = name.substr(0, name.find_last_of("@"));
+                                 }
+
+                                 if (pThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
+                                 {
+                                     try
+                                     {
+                                         if (IMAGE_ORDINAL(pThunk->u1.Ordinal) ==
+                                             static_cast<DWORD>(std::stoi(num.data())))
+                                         {
+                                             originalPtrs[std::get<0>(inputs)] =
+                                                 std::async(std::launch::deferred,
+                                                            [&]() -> void* {
+                                                                return *pAddress;
+                                                            });
+                                             originalPtrs[std::get<0>(inputs)].wait();
+                                             *pAddress = std::get<1>(inputs);
+                                         }
+                                     }
+                                     catch (...)
+                                     {
+                                     }
+                                 }
+                                 else if (strcmp(reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(
+                                                     instance + pThunk->u1.AddressOfData)
+                                                     ->Name,
+                                                 name.data()) == 0)
+                                 {
+                                     originalPtrs[std::get<0>(inputs)] =
+                                         std::async(std::launch::deferred,
+                                                    [&]() -> void* { return *pAddress; });
+                                     originalPtrs[std::get<0>(inputs)].wait();
+                                     *pAddress = std::get<1>(inputs);
+                                 }
+                             }(),
+                             ...);
+                            VirtualProtect(pAddress, sizeof(void*), dwProtect[0], &dwProtect[1]);
+                        }
+                    }
+                }
+            }
+
+            return originalPtrs;
+        }
+    };
+
     // Makes .text and .rdata writable so the patch helpers can store into them.
     // Returns false (and logs) instead of terminating the game when the image is
     // not the one this build expects.
@@ -405,5 +933,25 @@ export namespace xla
         }
 
         return true;
+    }
+
+    // Function-local statics, as in FusionFix: the tier is constructed on first
+    // use, and a feature's file-scope constructor is that first use.
+    Event<>& InitEvent() noexcept
+    {
+        static Event<> event;
+        return event;
+    }
+
+    Event<>& InstallEvent() noexcept
+    {
+        static Event<> event;
+        return event;
+    }
+
+    Event<>& PostEvent() noexcept
+    {
+        static Event<> event;
+        return event;
     }
 } // namespace xla

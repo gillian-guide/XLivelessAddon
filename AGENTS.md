@@ -21,10 +21,14 @@ its sources.
   writes); every helper logs applied/missing.
 - `source/patches.ixx` — the recovered patch list, in the original handler's order; its scan
   sequence is pinned by `tests/signature_golden.tsv` (CTest `xla_signature_parity`).
-- `source/addon.ixx` — the entry pipeline: one `constexpr` registration table of
-  `{phase, name, callback}` rows (probe, config, install, post). The runner executes the phases
-  in order and the rows in table order; the 27-name golden test pins the effective sequence.
-  There is no dependency graph — the publish-before-install contracts are commented at their rows.
+- `source/addon.ixx` — the entry pipeline in FusionFix's shape: `Game` (directories, loaded INI,
+  FusionFix flag, image, build, install states, exit code) is initialized once by `Run`, and the
+  three `Event<>` tiers (`InitEvent`, `InstallEvent`, `PostEvent`) drive the pass. Each step is a
+  feature class whose constructor subscribes one handler; the file-scope instances are the
+  registration. There is no step table and no dependency graph: the effective order is the tier
+  order plus static-init subscription order, exposed as `StartupOrder()` and pinned by the
+  27-name golden test. The publish-before-install contracts are commented at the classes that
+  own them. `xla.common` owns FusionFix's `Event`, `find_pattern` and `IATHook`.
 - `source/warnings.ixx` — the startup warnings: the ASI loader probe (Ultimate ASI Loader
   >= 6.9.0, identified by its `IsUltimateASILoader` export), the process-wide single-instance
   marker, the FusionFix notice file and the task-dialog renderer. Details that must not drift:

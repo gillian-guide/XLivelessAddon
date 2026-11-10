@@ -637,7 +637,10 @@ namespace xla::skip_launcher
             {
                 const EntryPatch& entry = entries[index];
 
-                patch::Pattern pattern = patch::FindIn(image, entry.signature, 1);
+                // Scan every hit, like the recovered single-match finder's
+                // `size()` call: the count is reported, never used as a gate. A
+                // duplicate signature is still applied at the first match.
+                patch::Pattern pattern = patch::FindIn(image, entry.signature, 0);
                 if (pattern.empty())
                 {
                     ++report.entriesMissing;

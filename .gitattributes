@@ -1,0 +1,7 @@
+# Keep the sources and the shipped INI byte-stable across checkouts: the native
+# suite compares the built-in default INI text with data/XLivelessAddon.ini, and
+# the recovered tables are easier to diff with LF.
+* text=auto eol=lf
+*.asi binary
+*.lib binary
+*.pdb binary

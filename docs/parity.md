@@ -31,7 +31,7 @@ old companion.
 | Savegame path redirect + CRC32 bypass (`SavegameFix`) | `source/savegames.ixx` | — | `source/savegames.ixx` | `TestSavegames` (path composition, NUL-bounded read, synthetic anchor/redirect scan, CRC NOP, redirect jump) |
 | Rockstar Games registry path dependency | `source/registry.ixx` | — | `source/registry.ixx` | `TestRegistry` (key/value predicates, install-folder answer), `TestIatReplacement` (the shared IAT walker) |
 | `LocalSettingsPath` (shell user-data redirect) | `source/userdata.ixx` | `source/userdata.ixx` | `source/userdata.ixx` | `TestUserdata` (`ShouldRedirect`, saves folder, synthetic SHELL32 replacement, end-to-end `CSIDL_APPDATA` answer), `TestFusionFixPresenceAndDivergence` |
-| `SkipLauncher=1`: recovered DFA + ROM stages | `source/skip_launcher.ixx` | — (ZolikaPatch recovered data) | `source/skip_launcher.ixx` | `TestSkipLauncherTable`, `TestSkipLauncherPass`, `TestSkipLauncherCreateFileSlot`, `TestSkipLauncherStub` |
+| `SkipLauncher=1`: recovered DFA + ROM stages | `source/skip_launcher.ixx` | — (ZolikaPatch recovered data) | `source/skip_launcher.ixx`, `source/skip_launcher_recovered.inc` | `xla_skip_tables` (71 records), `TestSkipLauncherTable`, `TestSkipLauncherPass`, `TestSkipLauncherCreateFileSlot`, `TestSkipLauncherStub` |
 | `SkipLauncher=0`: legacy DFA file-API stage (`LegacyLauncher`) | `source/dfa.ixx` | — | `source/dfa.ixx` | `TestDfaAndRomWindow` (init ABI), the six install patterns are source-reviewed against the old addon |
 | `SkipLauncher=0`: legacy WM_ROM message window (`LegacyLauncher`) | `source/rom_window.ixx` | — | `source/rom_window.ixx` | `TestDfaAndRomWindow` (message id, action table, payload layout, window creation, all three actions, synthetic install) |
 | Windowed mode: borderless, centring, focus-loss input, DefWindowProc shims, pause-branch NOP | `source/windowed.ixx` | `source/windowed.ixx` | `source/windowed.ixx` | `TestWindowed` (foreign-image guards), `TestIatReplacement` (the shared import walker), the hook bodies are source-reviewed against FusionFix |
@@ -132,10 +132,13 @@ that `CustomSavePath` alone is not an install (`SavegameFix` gates it) and that
 
 ## Recovered data and hook-body contracts
 
-The SkipLauncher tables are data, not code. The new tree was diffed against the
-old addon's table extraction: all 25 entry rows, the two collectors, the six DFA
-installs, the two ROM installs, the collected-jump table and all 32 patch ops are
-token-for-token identical. The native suite additionally pins:
+The SkipLauncher tables are data, not code. The readable rewrite keeps the
+25-entry main table in `source/skip_launcher_recovered.inc` (data only, not
+shipped) and the shipping rows in `source/skip_launcher.ixx`. `xla_skip_tables`
+resolves every named offset and `ops::` window and compares 71 records with the
+old addon's committed golden: all 25 entries, all 32 edits, the two collectors,
+the capture pattern/offset, the eight installs, the two collected targets and the
+collected install. The native suite additionally pins:
 
 - `entries[0]` offsets `+34`/`+223`, `entries[8]`'s 447-byte NOP fill, entry 9's
   jump target (`kSkipLauncherJumpTargetEntry == 1`);
@@ -203,7 +206,7 @@ cmake --build --preset trace
 ctest --preset trace
 ```
 
-- `xla_tests` — 295 native checks: event tiers, INI grammar/precedence/defaults/
+- `xla_tests` — 307 native checks: event tiers, INI grammar/precedence/defaults/
   legacy/line endings, build table, patch primitives and widths, IAT walker,
   savegame path/install, registry helpers, userdata redirect, settings path and
   stub register contract, SkipLauncher tables/pass/bodies, DFA/ROM window,
@@ -218,6 +221,8 @@ ctest --preset trace
   `VirtualProtect`/`IATHook` use is confined to `source/patch.ixx`.
 - `xla_module_layout` — one `.ixx` per feature, `dllmain.cpp` the only plain TU,
   the CMake module file set complete.
+- `xla_skip_tables` — the readable SkipLauncher rewrite's 71 recovered records
+  against the old addon's golden (`tests/skip_launcher_tables.tsv`).
 
 ## What remains unverified without a live game
 

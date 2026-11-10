@@ -1,38 +1,42 @@
 # NOTICE
 
-XLivelessAddon (FusionFix-style reimplementation) is free software: you can
-redistribute it and/or modify it under the terms of the GNU General Public
-License, version 3 or later (see `LICENSE`). It is a derivative work of the
-projects below; this file records what was taken from each of them and under
-which licence.
+XLivelessAddon is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License, version 3 or later (see `LICENSE`).
+It is a derivative work of the projects below; this file records what was taken
+from each of them and under which licence.
 
 ## XLivelessAddon (original)
 
-The launcher/SecuROM bypass, the save/settings path redirects, the WM_ROM
-message window, the borderless window handling and the INI layout descend from
+The launcher/SecuROM bypass, the save/settings path redirects, the WM_ROM message
+window, the borderless window handling and the INI layout descend from
 [XLivelessAddon](https://github.com/GTAmodding/XLivelessAddon) by the GTAmodding
-community, released into the public domain. Every file that carries adapted
-code says so in its header.
+community, released into the public domain. `source/skip_launcher.ixx`,
+`source/skip_launcher_recovered.inc`, `source/rom_window.ixx`,
+`source/savegames.ixx` and `source/windowed.ixx` carry a header that attributes
+the bodies.
 
 ## ZolikaPatch
 
-The recovered signature tables and the SkipLauncher stage split (main, DFA,
-ROM) are a reimplementation of the machine-level behaviour of ZolikaPatch 7.65
-by Zolika1351. ZolikaPatch shipped as a compiled ASI without source; no
-original source is redistributed here. The recovered strings, offsets and
-stored bytes are data, not code.
+The recovered signature tables, the SkipLauncher stage split (main, DFA, ROM),
+the DFA file-API hooks and the legacy launcher stage are a reimplementation of
+the machine-level behaviour of ZolikaPatch 7.65 by Zolika1351. ZolikaPatch shipped
+as a compiled ASI without source; no original source is redistributed here.
 
 ## GTAIV.EFLC.FusionFix
 
 The borderless-window/focus-loss logic (`source/windowed.ixx`), the
-SHGetFolderPath user-data redirect (`source/userdata.ixx`) and the
-`Event<Args...>` tiers, `Log`, `Game` install context and path helpers
-(`source/common.ixx`) follow GTAIV.EFLC.FusionFix (`windowed.ixx`,
-`userdata.ixx`, `common.ixx`), Copyright (C) ThirteenAG and contributors,
-GPL-3.0. The per-feature FusionFix gating in `source/config.ixx` follows the
-same project's compatibility approach.
+SHGetFolderPath user-data redirect (`source/userdata.ixx`) and the shared
+`Event`, `Log`, `Game` and `find_pattern` shapes (`source/common.ixx`) follow
+GTAIV.EFLC.FusionFix (`windowed.ixx`, `userdata.ixx`, `common.ixx`), Copyright
+(C) ThirteenAG and contributors, GPL-3.0. The windowed compatibility gates in
+`source/config.ixx` follow the same project's approach. The local-directory
+options are deliberately **not** gated on FusionFix being present; see
+`docs/parity.md`.
 
 ## Vendored libraries (committed, not submodules)
+
+The licence text of each library is committed next to it. The libraries are
+compiled from these pinned copies only; nothing is fetched at build time.
 
 | Path | Project | Revision | Licence |
 | --- | --- | --- | --- |
@@ -40,9 +44,6 @@ same project's compatibility approach.
 | `external/hooking` | [ThirteenAG/Hooking.Patterns](https://github.com/ThirteenAG/Hooking.Patterns) (NTAuthority, CitizenFX) | `460a47bc813085b66c79768531caab1ed5ea96fc` | MIT |
 | `external/inireader` | [ThirteenAG/IniReader](https://github.com/ThirteenAG/IniReader) | `206c4b343d3cb0d2ca83afd1fccbe71331137a37` | MIT |
 | `external/inireader/mINI` | [metayeti/mINI](https://github.com/metayeti/mINI) (Danijel Durakovic) | bundled by the above | MIT |
-
-The licence text of each library is committed next to it. The libraries are
-compiled from these pinned copies only; nothing is fetched at build time.
 
 The pinned injector is the classic 2017 tree. Its `MakeRET` stores
 `pop ? 0xC2 : 0xC3` through a deduced `int`, so it writes four bytes for both
@@ -53,12 +54,12 @@ one-/three-byte width. The vendored header is unmodified.
 The pinned `CIniReader` is all-inline; MSVC 19.51's CL.exe crashes when a
 function body that instantiates it is imported into another module interface
 unit. The tree keeps the reader inside `source/config.ixx` and makes
-`config::Load`/`config::Publish` out-of-line, so `source/dllmain.cpp` can remain
-the only plain TU. The reader is unmodified.
+`config::Load`/`config::Publish` out-of-line, so `source/dllmain.cpp` remains the
+only plain TU. The reader is unmodified.
 
 ## Game assets
 
-Grand Theft Auto IV and Episodes from Liberty City are property of Rockstar
-Games and Take-Two Interactive. This repository ships no game executables,
-archives, textures or other game data. It only writes to memory of a game the
-user already owns.
+Grand Theft Auto IV and Episodes from Liberty City are property of Rockstar Games
+and Take-Two Interactive. This repository ships no game executables, archives,
+textures or other game data. It only writes to memory of a game the user already
+owns.

@@ -1,0 +1,41 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "win-x86",
+      "displayName": "Win32 (Visual Studio 18 2026, MSVC)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/win-x86",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;Trace"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "win-x86", "configuration": "Debug" },
+    { "name": "release", "configurePreset": "win-x86", "configuration": "Release" },
+    { "name": "trace", "configurePreset": "win-x86", "configuration": "Trace" }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "win-x86",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release",
+      "configurePreset": "win-x86",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "trace",
+      "configurePreset": "win-x86",
+      "configuration": "Trace",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

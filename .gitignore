@@ -1,0 +1,10 @@
+build/
+.scratch/
+out/
+*.log
+*.map
+*.user
+*.suo
+*.VC.db
+.vs/
+/CMakeUserPresets.json

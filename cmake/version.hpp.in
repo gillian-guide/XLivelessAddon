@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The add-on's identity. CMake generates `xla/version.hpp` from this template so
+// the log banner, the PE version resource and the release package always agree
+// with the commit that was built.
+
+#pragma once
+
+#define XLA_PRODUCT_NAME "XLivelessAddon"
+#define XLA_VERSION_TEXT "@XLA_VERSION_STRING@"
+#define XLA_GIT_SHA_TEXT "@XLA_GIT_SHA@"

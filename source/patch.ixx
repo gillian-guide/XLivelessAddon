@@ -543,7 +543,8 @@ export namespace xla::patch
                      reinterpret_cast<const DelayLoadDescriptor*>(base + delay.VirtualAddress);
                  descriptor->DllNameRVA != 0; ++descriptor)
             {
-                if (descriptor->ImportNameTableRVA == 0 ||
+                if (descriptor->DllNameRVA == 0 || descriptor->ImportNameTableRVA == 0 ||
+                    descriptor->ImportAddressTableRVA == 0 ||
                     !iequals(std::string_view(
                                  reinterpret_cast<const char*>(base + descriptor->DllNameRVA)),
                              library))

@@ -83,7 +83,11 @@ set(XLA_MODULES
     source/windowed.ixx
     source/startup.ixx)
 
-add_library(xla_modules STATIC external/hooking/Hooking.Patterns.cpp)
+add_library(xla_modules STATIC
+  external/hooking/Hooking.Patterns.cpp
+  # A data include, not a compiled TU; listed so the IDE and dependency scan see
+  # it. skip_launcher.ixx includes it inside the module.
+  source/skip_launcher_recovered.inc)
 set_target_properties(xla_modules PROPERTIES CXX_SCAN_FOR_MODULES ON)
 target_sources(xla_modules PUBLIC
   FILE_SET CXX_MODULES FILES ${XLA_MODULES})
@@ -165,5 +169,16 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_module_layout.py
             --source ${CMAKE_CURRENT_SOURCE_DIR}/source)
   set_tests_properties(xla_module_layout PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+  # The recovered SkipLauncher rows are data. This resolves the named offsets
+  # and ops:: windows and compares them with the golden captured from the old
+  # addon, so the readable rewrite cannot drift from the recovered table.
+  add_test(NAME xla_skip_tables
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_skip_launcher_tables.py
+            --source ${CMAKE_CURRENT_SOURCE_DIR}/source
+            --golden ${CMAKE_CURRENT_SOURCE_DIR}/tests/skip_launcher_tables.tsv)
+  set_tests_properties(xla_skip_tables PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

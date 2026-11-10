@@ -886,15 +886,32 @@ namespace
         using namespace xla::skip_launcher;
         const auto entries = SkipLauncherEntries();
         Check(entries.size() == 25, "skipLauncher: 25 main entries");
-        Check(entries[0].ops[0].offset == 34 && entries[0].ops[1].offset == 223,
+        Check(!entries[0].label.empty() && !entries[24].label.empty(),
+              "skipLauncher: every row is named");
+        Check(entries[0].edits[0].offset == 34 && entries[0].edits[1].offset == 223,
               "skipLauncher: entry 0's two branch offsets");
-        Check(entries[8].ops[0].count == 447, "skipLauncher: entry 8's 447-byte NOP fill");
-        Check(entries[9].ops[2].target == kSkipLauncherJumpTargetEntry,
+        Check(entries[8].edits[0].count == 447, "skipLauncher: entry 8's 447-byte NOP fill");
+        Check(entries[9].edits[2].target == kSkipLauncherJumpTargetEntry,
               "skipLauncher: entry 9 jumps to entry 1");
         Check(SkipLauncherCollectors().size() == 2, "skipLauncher: two collectors");
+        Check(!SkipLauncherCollectors()[0].label.empty(),
+              "skipLauncher: the collectors are named");
         Check(SkipLauncherDfaInstalls().size() == 6, "skipLauncher: six DFA hooks");
         Check(SkipLauncherRomInstalls().size() == 2, "skipLauncher: two ROM hooks");
-        Check(SkipLauncherDfaCollected().size() == 1, "skipLauncher: one collected table");
+        for (const Install& install : SkipLauncherDfaInstalls())
+        {
+            Check(!install.label.empty(), "skipLauncher: every DFA hook is named");
+        }
+        for (const Install& install : SkipLauncherRomInstalls())
+        {
+            Check(!install.label.empty(), "skipLauncher: every ROM hook is named");
+        }
+        const auto collected = SkipLauncherDfaCollected();
+        Check(collected.size() == 1, "skipLauncher: one collected table");
+        Check(!collected[0].label.empty() && collected[0].count == 2,
+              "skipLauncher: the collected table has a label and two targets");
+        Check(!collected[0].targets[0].label.empty() && !collected[0].targets[1].signature.empty(),
+              "skipLauncher: the collected targets are named");
         Check(!HasStage(kShippedStages, SkipLauncherStage::main),
               "skipLauncher: the shipped stages never apply main");
         Check(HasStage(kShippedStages, SkipLauncherStage::dfa) &&
@@ -904,24 +921,25 @@ namespace
               "skipLauncher: the stage description is dfa|rom");
 
         std::size_t patchRows = 0;
-        for (const EntryPatch& entry : entries)
+        for (const Entry& entry : entries)
         {
-            Check(!entry.signature.empty(), "skipLauncher: every entry has a signature");
-            for (const PatchOp& op : entry.ops)
+            Check(!entry.label.empty() && !entry.signature.empty(),
+                  "skipLauncher: every entry has a label and a signature");
+            for (const Edit& edit : entry.edits)
             {
                 ++patchRows;
-                Check(op.offset >= 0, "skipLauncher: every op has a non-negative offset");
-                switch (op.kind)
+                Check(edit.offset >= 0, "skipLauncher: every edit has a non-negative offset");
+                switch (edit.kind)
                 {
-                case PatchOp::Kind::write:
-                    Check(!op.bytes.empty(), "skipLauncher: a write carries bytes");
+                case Edit::Kind::bytes:
+                    Check(!edit.bytes.empty(), "skipLauncher: a byte edit carries bytes");
                     break;
-                case PatchOp::Kind::fill:
-                    Check(op.count > 0 && op.fill == xla::Byte(xla::Opcode::kNop),
-                          "skipLauncher: a fill is a NOP fill");
+                case Edit::Kind::nop:
+                    Check(edit.count > 0 && edit.fill == xla::Byte(xla::Opcode::kNop),
+                          "skipLauncher: a nop edit is a NOP fill");
                     break;
-                case PatchOp::Kind::jump:
-                    Check(op.target < entries.size(), "skipLauncher: a jump target exists");
+                case Edit::Kind::jump_to_entry:
+                    Check(edit.target < entries.size(), "skipLauncher: a jump target exists");
                     break;
                 }
             }

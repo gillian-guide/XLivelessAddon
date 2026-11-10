@@ -45,6 +45,10 @@ export namespace xla::startup
     // The registration order the native test pins. This is the subscription order
     // inside the single onInit tier; the event remains the only runner.
     std::span<const std::string_view> Order() noexcept;
+
+    // True when at least one install would do something. The driver uses it to
+    // leave the image's page protections untouched when every feature is off.
+    bool AnyInstallEnabled() noexcept;
 } // namespace xla::startup
 
 namespace xla::startup
@@ -55,6 +59,8 @@ namespace xla::startup
         std::vector<std::string_view> g_order;
         bool g_bannerWritten = false;
         bool g_loaderReported = false;
+        bool g_loaderNeedsWarning = false;
+        warnings::LoaderInfo g_loaderInfo;
         config::LoadResult g_loaded;
 
         void Record(std::string_view name)
@@ -82,13 +88,17 @@ namespace xla::startup
             const Game& game = Game::Get();
             Log::Print("ini={} legacy={} fusionfix={}", loaded.iniPath.string(),
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
-            Log::Print("options: savegameFix={} launcher={} localSettings={} customSave=\"{}\" "
-                       "customSettings=\"{}\" borderless={} dontPause={}",
+            Log::Print("options: savegameFix={} launcher={} legacyLauncher={} "
+                       "localSettings={} customSave=\"{}\" customSettings=\"{}\" "
+                       "borderless={} dontPause={} warnings={}",
                        game.Option("SavegameFix"), game.Option("SkipLauncher"),
-                       game.Option("LocalSettingsPath"), game.OptionString("CustomSavePath"),
+                       game.Option("LegacyLauncher"), game.Option("LocalSettingsPath"),
+                       game.OptionString("CustomSavePath"),
                        game.OptionString("CustomSettingsPath"),
-                       game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"));
+                       game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
+                       game.Option("StartupWarnings"));
         }
+
 
         void InstallSkipLauncher(const Image& image)
         {
@@ -161,11 +171,12 @@ namespace xla::startup
                 }
                 g_loaderReported = true;
 
-                const warnings::LoaderInfo info = warnings::QueryLoader();
-                if (info.detected)
+                g_loaderInfo = warnings::QueryLoader();
+                if (g_loaderInfo.detected)
                 {
-                    Log::Print("loader: {} {}", info.name,
-                               info.version.empty() ? "(version unknown)" : info.version);
+                    Log::Print("loader: {} {}", g_loaderInfo.name,
+                               g_loaderInfo.version.empty() ? "(version unknown)"
+                                                           : g_loaderInfo.version);
                 }
                 else
                 {
@@ -173,13 +184,14 @@ namespace xla::startup
                 }
 
                 const bool modern =
-                    info.detected &&
-                    (!info.versionKnown ||
-                     warnings::LoaderVersionAccepted(info.versionMs, info.versionLs));
-                if (!modern)
-                {
-                    warnings::ShowAsync(warnings::OldLoaderDialog(info), std::nullopt);
-                }
+                    g_loaderInfo.detected &&
+                    (!g_loaderInfo.versionKnown ||
+                     warnings::LoaderVersionAccepted(g_loaderInfo.versionMs,
+                                                     g_loaderInfo.versionLs));
+                // The INI is not loaded yet at this step; `FusionFix` shows the
+                // non-fatal loader warning after Config so StartupWarnings can
+                // gate it.
+                g_loaderNeedsWarning = !modern;
             };
 
             Record("Probe");
@@ -218,6 +230,12 @@ namespace xla::startup
                     return;
                 }
 
+                if (g_loaderNeedsWarning && game.Option("StartupWarnings"))
+                {
+                    warnings::ShowAsync(warnings::OldLoaderDialog(g_loaderInfo), std::nullopt);
+                    g_loaderNeedsWarning = false;
+                }
+
                 if (!config::FusionFixPresent(game.ModuleDirectory()))
                 {
                     return;
@@ -231,7 +249,10 @@ namespace xla::startup
                     Log::Print("fusionfix: gating {} (FusionFix {})", gate.option,
                                gate.fusionFixModule);
                 }
-                warnings::PublishFusionFixNotice(game.ModuleDirectory(), gated);
+                if (game.Option("StartupWarnings"))
+                {
+                    warnings::PublishFusionFixNotice(game.ModuleDirectory(), gated);
+                }
             };
 
             Record("ReportConfiguration");
@@ -266,6 +287,11 @@ namespace xla::startup
                 Game& game = Game::Get();
                 if (game.Stopped())
                 {
+                    return;
+                }
+                if (!AnyInstallEnabled())
+                {
+                    Log::Line("init: every feature is off; image left untouched");
                     return;
                 }
                 if (!patch::MakeImageWritable(game.View()))
@@ -417,6 +443,11 @@ namespace xla::startup
                 {
                     return;
                 }
+                if (!game.Option("LegacyLauncher"))
+                {
+                    Log::Trace("launcherStage: legacy option off");
+                    return;
+                }
 
                 // The original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0:
                 // DFA there faulted with an unhandled exception at 0x00426440
@@ -486,6 +517,19 @@ namespace xla::startup
             };
         }
     } // namespace
+
+    bool AnyInstallEnabled() noexcept
+    {
+        const Game& game = Game::Get();
+        const bool skipLauncher = game.Option("SkipLauncher");
+        const bool legacyLauncher = !skipLauncher && game.Option("LegacyLauncher");
+        return game.Option("SavegameFix") || skipLauncher || legacyLauncher ||
+               game.Option("RemoveRegistryPathDependency") ||
+               game.Option("LocalSettingsPath") ||
+               !game.OptionString("CustomSettingsPath").empty() ||
+               game.Option("BorderlessWindowed") ||
+               game.Option("DoNotPauseOnMinimize");
+    }
 
     int Run(HMODULE module)
     {

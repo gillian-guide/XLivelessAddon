@@ -22,10 +22,13 @@ users know, `XLivelessAddon.asi`.
 - Move the shell user-data folders into `<game>\saves` (`LocalSettingsPath`).
 - Redirect the settings folder (`CustomSettingsPath`).
 - Skip the launcher/DRM checks (`SkipLauncher`): the recovered DFA/ROM stages, or
-  the legacy DFA file-API + WM_ROM message window when `SkipLauncher=0`.
+  the legacy DFA file-API + WM_ROM message window when `SkipLauncher=0`
+  (`LegacyLauncher`).
 - Borderless window and keep rendering while unfocused
   (`BorderlessWindowed`, `DoNotPauseOnMinimize`).
-- Startup warnings as FusionFix-style task dialogs, with a message-box fallback.
+- Startup warnings as FusionFix-style task dialogs, with a message-box fallback
+  (`StartupWarnings` for the non-fatal ones; the unsupported-version and
+  loaded-twice dialogs are safety checks and always fire).
 
 ## Install
 
@@ -48,6 +51,21 @@ installed**. The old addon gated them on a FusionFix check, and that misbehaves
 with FusionFix on 1.0.8.0 (the two redirects fight over the same shell/import
 slots). The windowed options are still gated, because FusionFix owns that
 subsystem. `docs/parity.md` has the full statement and the tests.
+
+## Switching everything off
+
+Set every boolean to `0` and leave `CustomSavePath` / `CustomSettingsPath` empty:
+
+- no savegame redirect or CRC bypass,
+- no launcher work (`SkipLauncher=0` and `LegacyLauncher=0`),
+- no registry, user-data or settings redirect,
+- no borderless/focus-loss hooks,
+- no non-fatal startup dialogs or FusionFix notice.
+
+The image's page protections are left untouched too: the driver skips the
+unprotect when no install is enabled. The ASI still writes its log and checks the
+build; the fatal unsupported-version and loaded-twice checks are safety guards,
+not features, and are not controlled by a feature key.
 
 ## Build
 

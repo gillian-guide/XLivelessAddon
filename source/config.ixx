@@ -38,10 +38,12 @@ export namespace xla::config
         std::string customSettingsPath;
         bool savegameFix{true};
         bool skipLauncher{true};
+        bool legacyLauncher{true};
         bool removeRegistryPathDependency{true};
         bool doNotPauseOnMinimize{false};
         bool borderlessWindowed{false};
         bool localSettingsPath{false};
+        bool startupWarnings{true};
     };
 
     // An option that was switched off because FusionFix owns the subsystem.
@@ -104,6 +106,9 @@ CustomSettingsPath=
 SavegameFix=1
 ; Skip the launcher/DRM checks (recovered DFA and ROM stages).
 SkipLauncher=1
+; The legacy DFA + WM_ROM stage, used only when SkipLauncher=0. With both
+; launcher keys at 0 the add-on does no launcher work at all.
+LegacyLauncher=1
 ; Remove the Rockstar Games registry path dependency.
 RemoveRegistryPathDependency=1
 ; Keep rendering while the borderless window is unfocused.
@@ -113,6 +118,10 @@ BorderlessWindowed=1
 ; Move the shell user-data folders (saves and settings) into <game>\saves.
 ; This is independent of FusionFix being installed.
 LocalSettingsPath=0
+; Non-fatal startup warnings: the old ASI loader dialog and the FusionFix
+; compatibility notice. The fatal unsupported-version and loaded-twice dialogs
+; are safety checks and are not controlled by this key.
+StartupWarnings=1
 )";
 
     inline constexpr std::string_view DefaultIniText() noexcept
@@ -136,13 +145,15 @@ LocalSettingsPath=0
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 6> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 8> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"SkipLauncher", &Options::skipLauncher},
+            {"LegacyLauncher", &Options::legacyLauncher},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},
             {"BorderlessWindowed", &Options::borderlessWindowed},
             {"LocalSettingsPath", &Options::localSettingsPath},
+            {"StartupWarnings", &Options::startupWarnings},
         }};
 
         inline constexpr std::array<StringOption, 2> kStringOptions{{

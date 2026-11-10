@@ -287,6 +287,7 @@ namespace
         xla::config::Publish(xla::config::Load(work.Path()));
         const auto& game = xla::Game::Get();
         Check(game.Option("SkipLauncher"), "config: SkipLauncher defaults on");
+        Check(game.Option("LegacyLauncher"), "config: LegacyLauncher defaults on");
         Check(game.Option("SavegameFix"), "config: SavegameFix defaults on");
         Check(game.Option("RemoveRegistryPathDependency"),
               "config: RemoveRegistryPathDependency defaults on");
@@ -294,6 +295,7 @@ namespace
         Check(!game.Option("BorderlessWindowed"), "config: BorderlessWindowed code default is off");
         Check(!game.Option("DoNotPauseOnMinimize"),
               "config: DoNotPauseOnMinimize code default is off");
+        Check(game.Option("StartupWarnings"), "config: StartupWarnings defaults on");
 
         TempDir missing("xla-config-missing");
         (void)xla::config::Load(missing.Path());
@@ -412,6 +414,53 @@ namespace
         Check(xla::Game::Get().Option("LocalSettingsPath") &&
                   xla::Game::Get().OptionString("CustomSavePath") == "D:\\Saves",
               "divergence: the local paths are still published after the gate");
+    }
+
+    void TestAllOff()
+    {
+        TempDir work("xla-all-off");
+        WriteFile(work / "XLivelessAddon.ini",
+                  "[Options]\nSavegameFix=0\nSkipLauncher=0\nLegacyLauncher=0\n"
+                  "RemoveRegistryPathDependency=0\nDoNotPauseOnMinimize=0\n"
+                  "BorderlessWindowed=0\nLocalSettingsPath=0\nStartupWarnings=0\n"
+                  "CustomSavePath=\nCustomSettingsPath=\n");
+        auto loaded = xla::config::Load(work.Path(), work.Path());
+        xla::config::Publish(loaded);
+        Check(!loaded.options.legacyLauncher && !loaded.options.startupWarnings,
+              "all-off: the new toggles are read");
+        Check(!xla::startup::AnyInstallEnabled(),
+              "all-off: no install is enabled");
+
+        auto& game = xla::Game::Get();
+        const auto flip = [&](const char* key)
+        {
+            game.SetOption(key, "1");
+            Check(xla::startup::AnyInstallEnabled(),
+                  std::format("all-off: {} alone enables an install", key));
+            game.SetOption(key, "0");
+        };
+        flip("SavegameFix");
+        flip("SkipLauncher");
+        flip("LegacyLauncher"); // SkipLauncher is 0 here
+        flip("RemoveRegistryPathDependency");
+        flip("LocalSettingsPath");
+        flip("BorderlessWindowed");
+        flip("DoNotPauseOnMinimize");
+
+        game.SetOption("CustomSettingsPath", "Settings");
+        Check(xla::startup::AnyInstallEnabled(),
+              "all-off: a non-empty CustomSettingsPath enables its install");
+        game.SetOption("CustomSettingsPath", "");
+
+        // These are values, not installs on their own.
+        game.SetOption("CustomSavePath", "D:\\Saves");
+        Check(!xla::startup::AnyInstallEnabled(),
+              "all-off: CustomSavePath alone is not an install (SavegameFix gates it)");
+        game.SetOption("CustomSavePath", "");
+        game.SetOption("StartupWarnings", "1");
+        Check(!xla::startup::AnyInstallEnabled(),
+              "all-off: StartupWarnings alone is not an install");
+        game.SetOption("StartupWarnings", "0");
     }
 
     void TestBuild()
@@ -1165,6 +1214,7 @@ int main()
     TestConfigWhitespaceCommentsQuotes();
     TestConfigLineEndings();
     TestFusionFixPresenceAndDivergence();
+    TestAllOff();
     TestBuild();
     TestPatchPrimitives();
     TestPatchScan();

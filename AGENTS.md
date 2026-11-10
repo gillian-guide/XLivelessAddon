@@ -27,10 +27,14 @@ cite, never edit them.
   `RomSet` is `ret 8` with the object in `ESI`, resumes are tail-jumped (`jmp`),
   never called. A naked body is `static` in the interface unit or lives in an
   implementation unit; MSVC rejects an exported naked member (C2488).
-- **Every install is INI-gated.** A missing signature is a logged skip, never a
-  fault. `SavegameFix` is the explicit gate for the savegame redirect + CRC
-  bypass; `CustomSettingsPath` is gated by being non-empty; `SkipLauncher=0`
-  selects the legacy DFA/ROM stage.
+- **Every install is INI-gated, and all-off is inert.** A missing signature is a
+  logged skip, never a fault. `SavegameFix` gates the savegame redirect + CRC
+  bypass; `SkipLauncher` selects the recovered stage; `LegacyLauncher` gates the
+  `SkipLauncher=0` legacy DFA/ROM stage; `CustomSettingsPath` is gated by being
+  non-empty. With every install key `0` (and both paths empty),
+  `startup::AnyInstallEnabled()` is false, no install runs and the image unprotect
+  is skipped; `TestAllOff` pins it. `StartupWarnings` only gates the non-fatal
+  dialogs/notice, not the fatal safety checks.
 - **The local-path divergence is intentional.** `LocalSettingsPath`,
   `CustomSavePath`, `CustomSettingsPath` are never switched off because FusionFix
   is present. Only `BorderlessWindowed` and `DoNotPauseOnMinimize` are gated.

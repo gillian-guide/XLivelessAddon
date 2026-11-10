@@ -28,14 +28,14 @@ old companion.
 | Game-executable probe and its one retry | `source/addon.ixx` (probe step) | — | `source/probe.ixx` | `TestProbe` (signature/spin constants), the retry path is source-reviewed, not drivable in a test process |
 | Unsupported game build exit | `source/build.ixx`, `source/addon.ixx`, `source/warnings.ixx` | — | `source/build.ixx`, `source/startup.ixx`, `source/warnings.ixx` | `TestBuild`, `TestWarnings` (dialog), startup order pins the Build step |
 | Loaded-twice exit | `source/warnings.ixx`, `source/addon.ixx` | — | `source/warnings.ixx`, `source/startup.ixx` | `TestWarnings` (`ClaimSingleInstance` twice) |
-| Savegame path redirect + CRC32 bypass | `source/savegames.ixx` | — | `source/savegames.ixx` | `TestSavegames` (path composition, NUL-bounded read, synthetic anchor/redirect scan, CRC NOP, redirect jump) |
+| Savegame path redirect + CRC32 bypass (`SavegameFix`) | `source/savegames.ixx` | — | `source/savegames.ixx` | `TestSavegames` (path composition, NUL-bounded read, synthetic anchor/redirect scan, CRC NOP, redirect jump) |
 | Rockstar Games registry path dependency | `source/registry.ixx` | — | `source/registry.ixx` | `TestRegistry` (key/value predicates, install-folder answer), `TestIatReplacement` (the shared IAT walker) |
 | `LocalSettingsPath` (shell user-data redirect) | `source/userdata.ixx` | `source/userdata.ixx` | `source/userdata.ixx` | `TestUserdata` (`ShouldRedirect`, saves folder, synthetic SHELL32 replacement, end-to-end `CSIDL_APPDATA` answer), `TestFusionFixPresenceAndDivergence` |
 | `SkipLauncher=1`: recovered DFA + ROM stages | `source/skip_launcher.ixx` | — (ZolikaPatch recovered data) | `source/skip_launcher.ixx` | `TestSkipLauncherTable`, `TestSkipLauncherPass`, `TestSkipLauncherCreateFileSlot`, `TestSkipLauncherStub` |
-| `SkipLauncher=0`: legacy DFA file-API stage | `source/dfa.ixx` | — | `source/dfa.ixx` | `TestDfaAndRomWindow` (init ABI), the six install patterns are source-reviewed against the old addon |
-| `SkipLauncher=0`: legacy WM_ROM message window | `source/rom_window.ixx` | — | `source/rom_window.ixx` | `TestDfaAndRomWindow` (message id, action table, payload layout, window creation, all three actions, synthetic install) |
+| `SkipLauncher=0`: legacy DFA file-API stage (`LegacyLauncher`) | `source/dfa.ixx` | — | `source/dfa.ixx` | `TestDfaAndRomWindow` (init ABI), the six install patterns are source-reviewed against the old addon |
+| `SkipLauncher=0`: legacy WM_ROM message window (`LegacyLauncher`) | `source/rom_window.ixx` | — | `source/rom_window.ixx` | `TestDfaAndRomWindow` (message id, action table, payload layout, window creation, all three actions, synthetic install) |
 | Windowed mode: borderless, centring, focus-loss input, DefWindowProc shims, pause-branch NOP | `source/windowed.ixx` | `source/windowed.ixx` | `source/windowed.ixx` | `TestWindowed` (foreign-image guards), `TestIatReplacement` (the shared import walker), the hook bodies are source-reviewed against FusionFix |
-| Startup warnings (TaskDialog, activation context, message-box fallback, FusionFix notice) | `source/warnings.ixx` | FusionFix's task-dialog/notice shape | `source/warnings.ixx` | `TestWarnings` (notice write/content, dialog shapes, single instance) |
+| Startup warnings (`StartupWarnings` for the non-fatal ones; TaskDialog, activation context, message-box fallback, FusionFix notice) | `source/warnings.ixx` | FusionFix's task-dialog/notice shape | `source/warnings.ixx` | `TestWarnings` (notice write/content, dialog shapes, single instance) |
 | `CustomSettingsPath` (the old "parsed but not hooked" gap) | `source/patches.ixx` (`InstallCustomSettingsPath`) | — | `source/settings_path.ixx` | `TestSettingsPath` (composition, four-site install, stub bytes), `TestSettingsStubContract` (executes the real body and checks EBX/ECX/EFLAGS preservation) |
 | Recovered opcode/byte catalogue | `source/common.ixx` | FusionFix byte helpers | `source/common.ixx` | `TestPatchPrimitives`, `TestSettingsPath`, `TestSkipLauncherTable` |
 | Scanning and install primitives | `source/patch.ixx` | FusionFix `find_pattern` idiom | `source/patch.ixx` | `TestPatchScan`, `TestPatchPrimitives`, `TestIatReplacement` |
@@ -63,7 +63,8 @@ constexpr std::array<Gate, 2> gates{{
 
 `LocalSettingsPath`, `CustomSavePath` and `CustomSettingsPath` are never switched
 off. They are installed on this add-on's own detection: the game build (already
-gated by `build::Detect`) and their own INI key.
+gated by `build::Detect`) and their own INI key. `LegacyLauncher` and
+`StartupWarnings` are ordinary independent keys, not FusionFix gates either.
 
 ### Reason
 
@@ -99,14 +100,35 @@ mods redirect user data. This tree does not try to arbitrate between them; the
 user must configure one. The old gate avoided that by disabling this add-on's
 redirect, which is precisely the behaviour that broke on 1.0.8.0.
 
-### Added gate: `SavegameFix`
+### Added toggles for otherwise-unconditional behaviour
 
-The old addon installed the savegame path redirect and the save-file CRC32
-bypass unconditionally. The brief's non-negotiable is that every install is
-INI-gated, so this tree adds `SavegameFix` (default `1`, present in the shipped
-INI). At its default it is behaviour-identical to the old addon; setting it to
-`0` is a new opt-out, not a change to any default path. `TestConfigDefaultsAndIni`
-pins the default and the shipped file.
+Three pieces of the old addon had no independent enable/disable key. They now do,
+all defaulting to the old behaviour:
+
+| Key | Default | Gates |
+| --- | --- | --- |
+| `SavegameFix` | `1` | the savegame path redirect + save-file CRC32 bypass (old addon: always installed) |
+| `LegacyLauncher` | `1` | the legacy DFA + WM_ROM stage, only consulted when `SkipLauncher=0` (old addon: always installed on that path) |
+| `StartupWarnings` | `1` | the non-fatal old-loader dialog and the FusionFix compatibility notice |
+
+The defaults preserve the old addon exactly. `StartupWarnings` does not gate the
+fatal unsupported-version and loaded-twice dialogs: those are safety checks, not
+features. `TestConfigDefaultsAndIni` pins all three defaults and the shipped file.
+
+### All-off behaviour
+
+Every install is behind an INI key. With `SavegameFix=0`, `SkipLauncher=0`,
+`LegacyLauncher=0`, `RemoveRegistryPathDependency=0`, `DoNotPauseOnMinimize=0`,
+`BorderlessWindowed=0`, `LocalSettingsPath=0`, `StartupWarnings=0` and both path
+strings empty, the driver's `startup::AnyInstallEnabled()` is false: no hook or
+store runs, and the `Writable` step skips the image unprotect so the image is not
+even made writable. The ASI still opens its log and checks the build; the fatal
+safety dialogs remain.
+
+`TestAllOff` loads exactly that INI, asserts the predicate is false, then flips
+each install key on its own and asserts it becomes true again. It also checks
+that `CustomSavePath` alone is not an install (`SavegameFix` gates it) and that
+`StartupWarnings` alone is not an install.
 
 ## Recovered data and hook-body contracts
 
@@ -181,7 +203,7 @@ cmake --build --preset trace
 ctest --preset trace
 ```
 
-- `xla_tests` — 281 native checks: event tiers, INI grammar/precedence/defaults/
+- `xla_tests` — 295 native checks: event tiers, INI grammar/precedence/defaults/
   legacy/line endings, build table, patch primitives and widths, IAT walker,
   savegame path/install, registry helpers, userdata redirect, settings path and
   stub register contract, SkipLauncher tables/pass/bodies, DFA/ROM window,

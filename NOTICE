@@ -44,6 +44,18 @@ same project's compatibility approach.
 The licence text of each library is committed next to it. The libraries are
 compiled from these pinned copies only; nothing is fetched at build time.
 
+The pinned injector is the classic 2017 tree. Its `MakeRET` stores
+`pop ? 0xC2 : 0xC3` through a deduced `int`, so it writes four bytes for both
+`ret` forms; the maintained fork fixed this, but this tree keeps the requested
+classic pin and `source/patch.ixx` writes `ret`/`ret N` itself at the exact
+one-/three-byte width. The vendored header is unmodified.
+
+The pinned `CIniReader` is all-inline; MSVC 19.51's CL.exe crashes when a
+function body that instantiates it is imported into another module interface
+unit. The tree keeps the reader inside `source/config.ixx` and makes
+`config::Load`/`config::Publish` out-of-line, so `source/dllmain.cpp` can remain
+the only plain TU. The reader is unmodified.
+
 ## Game assets
 
 Grand Theft Auto IV and Episodes from Liberty City are property of Rockstar

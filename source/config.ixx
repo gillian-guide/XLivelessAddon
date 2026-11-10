@@ -3,6 +3,8 @@
 // xla.config - the add-on's INI: defaults, loading, the legacy ZolikaPatch.ini
 // fallback and the FusionFix compatibility gates.
 //
+// Ported from openprecepatch/xlivelessaddon/source/config.ixx.
+//
 // Precedence is the original's: `XLivelessAddon.ini` wins, then a flat/legacy
 // `ZolikaPatch.ini`. The parser is the vendored IniReader (ThirteenAG, MIT);
 // upstream is all-inline and this project's module-probe build shows it compiles

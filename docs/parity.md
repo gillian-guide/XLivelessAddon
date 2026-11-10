@@ -99,6 +99,15 @@ mods redirect user data. This tree does not try to arbitrate between them; the
 user must configure one. The old gate avoided that by disabling this add-on's
 redirect, which is precisely the behaviour that broke on 1.0.8.0.
 
+### Added gate: `SavegameFix`
+
+The old addon installed the savegame path redirect and the save-file CRC32
+bypass unconditionally. The brief's non-negotiable is that every install is
+INI-gated, so this tree adds `SavegameFix` (default `1`, present in the shipped
+INI). At its default it is behaviour-identical to the old addon; setting it to
+`0` is a new opt-out, not a change to any default path. `TestConfigDefaultsAndIni`
+pins the default and the shipped file.
+
 ## Recovered data and hook-body contracts
 
 The SkipLauncher tables are data, not code. The new tree was diffed against the
@@ -138,6 +147,26 @@ imported into another module interface unit. `config::Load` and
 `config::Publish` are therefore out-of-line; the INI reader stays in
 `config.ixx` and no extra plain TU is needed. This is why `source/dllmain.cpp`
 can remain the only plain TU, as the brief requires.
+
+## Not ported in this scope
+
+The brief's feature list is the scope of this tree. These old-addon features are
+deliberately **not** in it; they are named here so the omission is not silent.
+They can be added later without changing the architecture (one module each, with
+its own install arms through `patch.ixx`):
+
+| Feature | Old addon source | Why it is not here |
+| --- | --- | --- |
+| `SkipIntro` (300 ms load screens) | `source/patches.ixx` (`InstallIntro`), `source/addon.ixx` | It is a different mechanism from FusionFix's `skipintro.ixx` and a different INI key (`SkipIntro` vs `PREF_SKIP_INTRO`); the brief's list does not include it, and adding it needs a decision about which mechanism this companion owns. |
+| `SkipMenu` (hold SHIFT to keep the menu) | `source/patches.ixx` (`InstallMenu`) | Same as `SkipIntro`; the recovered three call sites are in the old file if it is added. |
+| `VRAMFix` | `source/patches.ixx` (`InstallVramFix`) | FusionFix's `memory.ixx` implements the same feature with a different hook site; the brief's list does not include it, so this tree does not duplicate FusionFix's subsystem. |
+| `SkipWebConnect` (GFWL web-connect/health checks) | `source/patches.ixx` (`InstallWebConnectChecks`) | Not in the brief's list; FusionFix owns the GFWL compatibility surface in a co-install. |
+| The "core" recovered list (RGSC connect/init gating, files.txt/certificate/integrity checks, DLC token/first-play) | `source/patches.ixx` (`InstallCore`) | Not in the brief's list. It is a separate unconditional patch list, not part of the SkipLauncher DFA/ROM stage. |
+
+Everything above is still in the old addon tree and in
+`../GTAIV.EFLC.FusionFix/`; nothing was deleted or weakened. The new tree's
+`SkipLauncher` is the recovered DFA + ROM stage the old addon shipped, not the
+separate core list.
 
 ## Verification summary
 

@@ -3,6 +3,8 @@
 // xla.rom_window - the legacy WM_ROM message window (installed when
 // SkipLauncher=0), descended from XLivelessAddon.
 //
+// Ported from openprecepatch/xlivelessaddon/source/rom_window.ixx.
+//
 // The game sends WM_ROM to a window it creates once; the add-on answers it with
 // the original's action table (copy table / add / set). The SendMessage call that
 // deadlocks the audio thread is redirected to an empty stub.

@@ -6,6 +6,10 @@
 // injector/safetyhook/VirtualProtect itself, which tools/check_no_installs.py
 // enforces.
 //
+// Ported from openprecepatch/xlivelessaddon/source/patch.ixx; the IAT walker and
+// the find_pattern shape follow GTAIV.EFLC.FusionFix's common.ixx/IATHook
+// (GPL-3.0, ThirteenAG and contributors).
+//
 // The scanning idiom is FusionFix's: `find_pattern` tries build variants in order
 // and the first one that matches wins, then `get_first<T>(offset)` recovers the
 // operand/global the row names. A wildcard is one `?` per byte in this scanner

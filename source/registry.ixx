@@ -2,6 +2,8 @@
 //
 // xla.registry - remove the "Rockstar Games" registry path dependency.
 //
+// Ported from openprecepatch/xlivelessaddon/source/registry.ixx.
+//
 // The original patched the game's ADVAPI32 import slots so that opening the
 // Rockstar Games key succeeds, and answers InstallFolder with the game's own
 // directory. The replacement is unchanged; the IAT walk is now the shared

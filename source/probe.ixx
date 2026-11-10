@@ -2,6 +2,8 @@
 //
 // xla.probe - the game-executable probe and its one allowed retry.
 //
+// Ported from the probe step of openprecepatch/xlivelessaddon/source/addon.ixx.
+//
 // The original add-on waited for a machine-code signature in the executable
 // before trusting any pattern. The first pass is synchronous in DllMain; when the
 // probe is absent (the DRM has not rewritten the image yet on some builds), one

@@ -5,6 +5,9 @@
 // folders (CSIDL_APPDATA/PERSONAL/...) to <game>\saves instead of rewriting the
 // game's path buffers. One hook covers saves and settings.
 //
+// Ported from openprecepatch/xlivelessaddon/source/userdata.ixx, itself adapted
+// from FusionFix's userdata.ixx (GPL-3.0, ThirteenAG and contributors).
+//
 // DIVERGENCE FROM THE OLD ADDON: this option is not switched off when FusionFix is
 // installed. It works on the game build and its own INI key alone. See
 // docs/parity.md for the reason (the FusionFix gate misbehaves on 1.0.8.0).

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // xla.startup - the startup driver: one synchronous pass in DllMain, in the
-// FusionFix tier shape.
+// FusionFix tier shape. Ported from the pipeline in
+// openprecepatch/xlivelessaddon/source/addon.ixx.
 //
 // `Game` is filled once, every feature subscribes one handler to `onInitEvent`,
 // and the driver runs the tier. There is no install tier separate from init: the

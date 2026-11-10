@@ -3,6 +3,8 @@
 // xla.savegames - the custom savegame folder and the save-file CRC32 bypass,
 // descended from XLivelessAddon's getSavefilePath replacement.
 //
+// Ported from openprecepatch/xlivelessaddon/source/savegames.ixx.
+//
 // The original replaced the game's path builder and copied 256 bytes into the
 // caller's buffer. The transport is unchanged; the copy is bounded and
 // NUL-terminated here, so an over-long custom path truncates instead of writing

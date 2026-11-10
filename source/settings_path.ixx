@@ -3,6 +3,9 @@
 // xla.settings_path - CustomSettingsPath, closing the old add-on's "parsed but
 // not hooked" gap.
 //
+// Ported from InstallCustomSettingsPath in
+// openprecepatch/xlivelessaddon/source/patches.ixx.
+//
 // The recovered XLivelessAddon body is a register-contract inline hook at two of
 // four matched sites: the site's `mov ecx, <global>` is replaced by a 5-byte call
 // to a stub that preserves every register and EFLAGS, calls the C helper that

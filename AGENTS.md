@@ -27,12 +27,10 @@ cite, never edit them.
   `RomSet` is `ret 8` with the object in `ESI`, resumes are tail-jumped (`jmp`),
   never called. A naked body is `static` in the interface unit or lives in an
   implementation unit; MSVC rejects an exported naked member (C2488).
-- **Every optional install is INI-gated.** A missing signature is a logged skip,
-  never a fault. `CustomSettingsPath` is gated by being non-empty; `SkipLauncher=0`
-  selects the legacy DFA/ROM stage. The savegame path reconstruction and CRC32
-  bypass are the original's one unconditional core install (the old addon's
-  `AGENTS.md` says so); `CustomSavePath` only chooses the folder and is never
-  FusionFix-gated.
+- **Every install is INI-gated.** A missing signature is a logged skip, never a
+  fault. `SavegameFix` is the explicit gate for the savegame redirect + CRC
+  bypass; `CustomSettingsPath` is gated by being non-empty; `SkipLauncher=0`
+  selects the legacy DFA/ROM stage.
 - **The local-path divergence is intentional.** `LocalSettingsPath`,
   `CustomSavePath`, `CustomSettingsPath` are never switched off because FusionFix
   is present. Only `BorderlessWindowed` and `DoNotPauseOnMinimize` are gated.

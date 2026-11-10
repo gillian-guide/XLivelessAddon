@@ -82,10 +82,10 @@ namespace xla::startup
             const Game& game = Game::Get();
             Log::Print("ini={} legacy={} fusionfix={}", loaded.iniPath.string(),
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
-            Log::Print("options: launcher={} localSettings={} customSave=\"{}\" "
+            Log::Print("options: savegameFix={} launcher={} localSettings={} customSave=\"{}\" "
                        "customSettings=\"{}\" borderless={} dontPause={}",
-                       game.Option("SkipLauncher"), game.Option("LocalSettingsPath"),
-                       game.OptionString("CustomSavePath"),
+                       game.Option("SavegameFix"), game.Option("SkipLauncher"),
+                       game.Option("LocalSettingsPath"), game.OptionString("CustomSavePath"),
                        game.OptionString("CustomSettingsPath"),
                        game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"));
         }
@@ -337,10 +337,11 @@ namespace xla::startup
                 {
                     return;
                 }
-                // The savegame path reconstruction and the CRC32 bypass are the
-                // original's unconditional core install (the old addon's AGENTS
-                // says so explicitly). CustomSavePath selects the folder and is
-                // never FusionFix-gated; an empty value keeps the game default.
+                if (!game.Option("SavegameFix"))
+                {
+                    Log::Trace("savegames: option off");
+                    return;
+                }
                 savegames::Install(game.View(), game.OptionString("CustomSavePath"));
             };
 

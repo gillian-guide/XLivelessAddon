@@ -28,10 +28,9 @@ export namespace xla::savegames
     std::string JoinSaveName(std::string_view basePath, std::string_view saveName);
     std::string ReadCString(const Image& image, const void* address, std::size_t limit);
 
-    // Installs the CRC32 bypass and the path redirect. This is the original's
-    // unconditional core install (the old addon's AGENTS says so explicitly);
-    // `customSavePath` only selects the folder and an empty value keeps the game
-    // default. A missing signature is a logged skip, never a fault.
+    // Installs the CRC32 bypass and the path redirect. The caller gates it on the
+    // SavegameFix INI key. Logs which signatures were found; a missing signature
+    // is a logged skip, never a fault.
     void Install(const Image& image, std::string_view customSavePath);
 } // namespace xla::savegames
 

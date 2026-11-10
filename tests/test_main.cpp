@@ -287,6 +287,7 @@ namespace
         xla::config::Publish(xla::config::Load(work.Path()));
         const auto& game = xla::Game::Get();
         Check(game.Option("SkipLauncher"), "config: SkipLauncher defaults on");
+        Check(game.Option("SavegameFix"), "config: SavegameFix defaults on");
         Check(game.Option("RemoveRegistryPathDependency"),
               "config: RemoveRegistryPathDependency defaults on");
         Check(!game.Option("LocalSettingsPath"), "config: LocalSettingsPath defaults off");
@@ -304,12 +305,13 @@ namespace
     {
         TempDir work("xla-config-precedence");
         WriteFile(work / "XLivelessAddon.ini",
-                  "[Options]\nSkipLauncher=0\nCustomSavePath=D:\\Saves\n"
+                  "[Options]\nSkipLauncher=0\nSavegameFix=0\nCustomSavePath=D:\\Saves\n"
                   "CustomSettingsPath=Settings\nBorderlessWindowed=1\nLocalSettingsPath=1\n");
         WriteFile(work / "ZolikaPatch.ini", "[MAIN]\nSkipLauncher=1\n");
 
         auto loaded = xla::config::Load(work.Path(), work.Path());
         Check(!loaded.options.skipLauncher, "config: the add-on's own INI wins over the legacy one");
+        Check(!loaded.options.savegameFix, "config: a present key is read");
         Check(loaded.options.customSavePath == "D:\\Saves", "config: a string key is read");
         Check(loaded.options.localSettingsPath, "config: a local path option is read");
         Check(loaded.legacyPresent, "config: the legacy INI is found next to the ASI");

@@ -36,6 +36,7 @@ export namespace xla::config
     {
         std::string customSavePath;
         std::string customSettingsPath;
+        bool savegameFix{true};
         bool skipLauncher{true};
         bool removeRegistryPathDependency{true};
         bool doNotPauseOnMinimize{false};
@@ -99,6 +100,8 @@ CustomSavePath=
 ; Custom settings folder. Relative to the game folder unless it has a drive
 ; letter. Empty = the game's own settings path.
 CustomSettingsPath=
+; Install the savegame path redirect and the save-file CRC32 bypass.
+SavegameFix=1
 ; Skip the launcher/DRM checks (recovered DFA and ROM stages).
 SkipLauncher=1
 ; Remove the Rockstar Games registry path dependency.
@@ -133,7 +136,8 @@ LocalSettingsPath=0
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 5> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 6> kBoolOptions{{
+            {"SavegameFix", &Options::savegameFix},
             {"SkipLauncher", &Options::skipLauncher},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},

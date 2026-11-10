@@ -15,8 +15,8 @@ users know, `XLivelessAddon.asi`.
 - Detect the ASI loader and warn when it is older than Ultimate ASI Loader 6.9.0.
 - Exit with an explanation on an unsupported game build and when the ASI was
   loaded twice.
-- Reconstruct the game's savegame folder, or redirect it with `CustomSavePath`,
-  and apply the save-file CRC32 bypass (the original's unconditional core fix).
+- Redirect the savegame folder (`CustomSavePath`) and apply the save-file CRC32
+  bypass (`SavegameFix`).
 - Remove the Rockstar Games registry path dependency
   (`RemoveRegistryPathDependency`).
 - Move the shell user-data folders into `<game>\saves` (`LocalSettingsPath`).

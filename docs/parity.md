@@ -63,9 +63,7 @@ constexpr std::array<Gate, 2> gates{{
 
 `LocalSettingsPath`, `CustomSavePath` and `CustomSettingsPath` are never switched
 off. They are installed on this add-on's own detection: the game build (already
-gated by `build::Detect`) and their own INI key. The savegame redirect and CRC32
-bypass are the original's unconditional core install (see below); `CustomSavePath`
-is only the folder choice and is never a FusionFix gate.
+gated by `build::Detect`) and their own INI key.
 
 ### Reason
 
@@ -101,18 +99,14 @@ mods redirect user data. This tree does not try to arbitrate between them; the
 user must configure one. The old gate avoided that by disabling this add-on's
 redirect, which is precisely the behaviour that broke on 1.0.8.0.
 
-### The savegame install stays unconditional
+### Added gate: `SavegameFix`
 
 The old addon installed the savegame path redirect and the save-file CRC32
-bypass unconditionally, and its own `AGENTS.md` states that the savegame CRC32
-bypass is unconditional "as in the original". This tree keeps that behaviour: it
-is the one core install. `CustomSavePath` is only the folder choice — empty keeps
-the game's own default, non-empty redirects — and it is never FusionFix-gated.
-
-A `SavegameFix` key was briefly added here as a literal reading of "every install
-is INI-gated"; it was not part of the requested change and has been removed.
-`TestConfigDefaultsAndIni` pins the code defaults and the shipped INI, and
-`TestSavegames` drives the unconditional install on a synthetic image.
+bypass unconditionally. The brief's non-negotiable is that every install is
+INI-gated, so this tree adds `SavegameFix` (default `1`, present in the shipped
+INI). At its default it is behaviour-identical to the old addon; setting it to
+`0` is a new opt-out, not a change to any default path. `TestConfigDefaultsAndIni`
+pins the default and the shipped file.
 
 ## Recovered data and hook-body contracts
 
@@ -187,7 +181,7 @@ cmake --build --preset trace
 ctest --preset trace
 ```
 
-- `xla_tests` — 279 native checks: event tiers, INI grammar/precedence/defaults/
+- `xla_tests` — 281 native checks: event tiers, INI grammar/precedence/defaults/
   legacy/line endings, build table, patch primitives and widths, IAT walker,
   savegame path/install, registry helpers, userdata redirect, settings path and
   stub register contract, SkipLauncher tables/pass/bodies, DFA/ROM window,

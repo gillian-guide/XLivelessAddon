@@ -544,6 +544,35 @@ namespace
         const auto other = xla::patch::ReplaceImports(
             module.Handle(), "USER32.DLL", {{"SHGetFolderPathA", &hookA}});
         Check(other.empty(), "iat: another library does not match");
+
+        // An image whose import descriptor has no name table: the slots hold
+        // resolved addresses and are matched against GetProcAddress.
+        HMODULE shell32 = ::GetModuleHandleA("shell32.dll");
+        if (shell32 == nullptr)
+        {
+            shell32 = ::LoadLibraryA("shell32.dll");
+        }
+        if (shell32 != nullptr)
+        {
+            SyntheticModule resolved("SHELL32.DLL");
+            resolved.Add("SHGetFolderPathA");
+            resolved.Add("SHGetFolderPathW");
+            auto* descriptor =
+                reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(resolved.image.data() + 0x200);
+            descriptor->OriginalFirstThunk = 0;
+            auto* iat = reinterpret_cast<IMAGE_THUNK_DATA*>(resolved.image.data() + 0x500);
+            iat[0].u1.Function = reinterpret_cast<std::uintptr_t>(
+                ::GetProcAddress(shell32, "SHGetFolderPathA"));
+            iat[1].u1.Function = reinterpret_cast<std::uintptr_t>(
+                ::GetProcAddress(shell32, "SHGetFolderPathW"));
+            const auto byAddress = xla::patch::ReplaceImports(
+                resolved.Handle(), "SHELL32.DLL",
+                {{"SHGetFolderPathA", &hookA}, {"SHGetFolderPathW", &hookW}});
+            Check(byAddress.size() == 2,
+                  "iat: a descriptor without a name table is matched by address");
+            Check(resolved.Slot(0) == &hookA && resolved.Slot(1) == &hookW,
+                  "iat: the address-matched slots hold the hooks");
+        }
     }
 
     void TestSavegames()

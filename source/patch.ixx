@@ -464,14 +464,42 @@ export namespace xla::patch
                         ? reinterpret_cast<const IMAGE_THUNK_DATA*>(base +
                                                                      descriptor->OriginalFirstThunk)
                         : nullptr;
+
+                if (thunks == nullptr)
+                {
+                    // No name table: the IAT holds resolved addresses. Match them
+                    // against the loader's own answer for each hook, which is what
+                    // the old addon's IATHook did for this case.
+                    const HMODULE libraryModule =
+                        ::GetModuleHandleA(std::string(library).c_str());
+                    if (libraryModule != nullptr)
+                    {
+                        for (size_t index = 0; slots[index] != nullptr; ++index)
+                        {
+                            for (const auto& [hook, replacement] : hooks)
+                            {
+                                std::string_view name;
+                                std::uint16_t ordinal = 0;
+                                splitHook(hook, name, ordinal);
+                                const auto address = ordinal != 0
+                                                         ? ::GetProcAddress(
+                                                               libraryModule,
+                                                               MAKEINTRESOURCEA(ordinal))
+                                                         : ::GetProcAddress(
+                                                               libraryModule,
+                                                               std::string(name).c_str());
+                                if (address != nullptr && slots[index] == address)
+                                {
+                                    replaceSlot(&slots[index], hook, replacement);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 for (size_t index = 0; slots[index] != nullptr; ++index)
                 {
-                    if (thunks == nullptr)
-                    {
-                        // No name table: an ordinal import cannot be identified by
-                        // name, so nothing can be matched here.
-                        break;
-                    }
                     if (thunks[index].u1.AddressOfData == 0)
                     {
                         break;

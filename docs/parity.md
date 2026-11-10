@@ -181,7 +181,7 @@ cmake --build --preset trace
 ctest --preset trace
 ```
 
-- `xla_tests` — 279 native checks: event tiers, INI grammar/precedence/defaults/
+- `xla_tests` — 281 native checks: event tiers, INI grammar/precedence/defaults/
   legacy/line endings, build table, patch primitives and widths, IAT walker,
   savegame path/install, registry helpers, userdata redirect, settings path and
   stub register contract, SkipLauncher tables/pass/bodies, DFA/ROM window,

@@ -1,0 +1,99 @@
+name: build
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "**/*.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # No -G: use whichever Visual Studio generator the image provides (the
+      # windows-latest image moves between VS 2022 and VS 2026). -A Win32 is the
+      # part that matters, because the game and the ASI are 32-bit.
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build/win-x86 -A Win32 -DCMAKE_CONFIGURATION_TYPES="Debug;Release;Trace"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        run: cmake --build build/win-x86 --config Release -- /m
+
+      # The CI artifact is deliberately just the two files a user installs.
+      - name: Package (ASI + INI)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = 'dist'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item 'build/win-x86/Release/XLivelessAddon.asi' $dist
+          Copy-Item 'build/win-x86/Release/XLivelessAddon.ini' $dist
+
+          $expected = @('XLivelessAddon.asi', 'XLivelessAddon.ini')
+          $actual = @(Get-ChildItem $dist -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if (Compare-Object -ReferenceObject ($expected | Sort-Object) -DifferenceObject $actual) {
+            throw "release folder contains unexpected files: $($actual -join ', ')"
+          }
+
+          Compress-Archive -Force -Path "$dist/XLivelessAddon.asi", "$dist/XLivelessAddon.ini" `
+            -DestinationPath "$dist/XLivelessAddon.zip"
+          $hash = (Get-FileHash "$dist/XLivelessAddon.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  XLivelessAddon.zip" | Set-Content "$dist/XLivelessAddon.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLivelessAddon
+          path: |
+            dist/XLivelessAddon.zip
+            dist/XLivelessAddon.zip.sha256
+          if-no-files-found: error
+
+  tests:
+    name: tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build/win-x86 -A Win32 -DCMAKE_CONFIGURATION_TYPES="Debug;Release;Trace"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        run: cmake --build build/win-x86 --config Release -- /m
+
+      - name: Test
+        run: ctest --test-dir build/win-x86 -C Release --output-on-failure --timeout 600

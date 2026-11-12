@@ -11,7 +11,7 @@
 //
 // DIVERGENCE FROM THE OLD ADDON: the windowed options are still gated off when
 // FusionFix is present (FusionFix owns the same subsystem). Only the local-path
-// options are ungated; see docs/parity.md.
+// options are ungated.
 
 module;
 

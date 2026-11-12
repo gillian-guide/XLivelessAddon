@@ -25,13 +25,12 @@ as a compiled ASI without source; no original source is redistributed here.
 ## GTAIV.EFLC.FusionFix
 
 The borderless-window/focus-loss logic (`source/windowed.ixx`), the
-SHGetFolderPath user-data redirect (`source/userdata.ixx`) and the shared
+SHGetFolderPath user-data redirect (`source/profile.ixx`) and the shared
 `Event`, `Log`, `Game` and `find_pattern` shapes (`source/common.ixx`) follow
 GTAIV.EFLC.FusionFix (`windowed.ixx`, `userdata.ixx`, `common.ixx`), Copyright
 (C) ThirteenAG and contributors, GPL-3.0. The windowed compatibility gates in
 `source/config.ixx` follow the same project's approach. The local-directory
-options are deliberately **not** gated on FusionFix being present; see
-`docs/parity.md`.
+options are deliberately **not** gated on FusionFix being present.
 
 ## Vendored libraries (committed, not submodules)
 

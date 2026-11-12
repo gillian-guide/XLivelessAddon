@@ -34,7 +34,7 @@ The invariants the tree is built around:
   unprotect is skipped; `TestAllOff` pins it.
 - **The user-data divergence is intentional.** `CustomUserProfilePath` is never
   switched off because FusionFix is present; only the windowed options are gated.
-  See `docs/parity.md`; do not "restore" the old gate. It replaces the old addon's
+  Do not "restore" the old gate. It replaces the old addon's
   `LocalSettingsPath`, `CustomSavePath` and `CustomSettingsPath` with one redirect
   of the shell profile folders, and it installs from `DllMain` because the game
   caches its roots in `__initalizePaths` (`0x856BF0`) before FusionFix's async
@@ -74,9 +74,7 @@ The invariants the tree is built around:
   recovered SkipLauncher table golden.
 - `tools/` — `check_no_installs.py`, `check_module_layout.py` and
   `check_skip_launcher_tables.py`.
-- `docs/parity.md` — feature provenance, the user-data divergence, the tests
-  and the live-game gaps.
-- `README.md` — install, features, all-off and build.
+- `README.md` — features, startup warnings, install, credits and the build.
 
 ### FusionFix overlap
 
@@ -156,7 +154,5 @@ style: `area: summary` (e.g. `fix: write ret at its exact width`).
 
 ## Docs
 
-The README describes the current code and the INI keys. `docs/parity.md` records
-provenance, the divergence, the verification and what a live game still has to
-prove. Update both in the same commit as a behaviour change; no session
-narration.
+The README describes the current code, the INI keys and the startup warnings.
+Update it in the same commit as a behaviour change; no session narration.

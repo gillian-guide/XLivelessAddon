@@ -17,8 +17,7 @@
 // slots and the gate can clear a path the user configured for this add-on). Those
 // three keys are gone; `[USERPROFILE] CustomUserProfilePath` is one redirect of the
 // shell profile folders and works on this add-on's own detection. The new tree
-// gates only the windowed options, which are genuinely FusionFix's subsystem. See
-// docs/parity.md.
+// gates only the windowed options, which are genuinely FusionFix's subsystem.
 
 module;
 
@@ -400,7 +399,7 @@ CustomUserProfilePath=./Savefiles
 
     // Switches off the options whose subsystem FusionFix owns and returns what
     // was gated. The local-directory options are deliberately absent: they must
-    // work on this add-on's own detection (see the file header and docs/parity.md).
+    // work on this add-on's own detection (see the file header).
     inline std::vector<FusionFixGate> ApplyFusionFixGates(Options& options)
     {
         struct Gate

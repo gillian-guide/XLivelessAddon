@@ -10,33 +10,12 @@ It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV
 
 ## Features
 
-- Skip the launcher/DRM checks with the recovered DFA and ROM stages (`SkipLauncher`; `LegacyLauncher` adds the legacy DFA and WM_ROM stage when `SkipLauncher=0`).
-- Apply the save-file CRC32 bypass (`SavegameFix`).
-- Remove the Rockstar Games registry path dependency (`RemoveRegistryPathDependency`).
-- Move the game's user data — saves, settings, user music, videos and benchmarks — into one folder (`[USERPROFILE] CustomUserProfilePath`, default `./Savefiles`), replacing `LocalSettingsPath`, `CustomSavePath` and `CustomSettingsPath`.
-- Skip the five recovered core checks: data-integrity (VDS), DLC token activation, first-time-play ask, Internet connection and GFWL health (`RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipInternetConnectionCheck`, `SkipHealthCheck`).
-- Add borderless windowed mode and keep rendering while the borderless window is unfocused (`BorderlessWindowed`, `DoNotPauseOnMinimize`).
-- Show FusionFix-style startup warnings as task dialogs (`StartupWarnings` gates the non-fatal ones).
-
-## Startup warnings
-
-The add-on shows FusionFix-style task dialogs (comctl32 6.0 activated from its own
-embedded manifest; a plain message box if that cannot be activated), always on a
-worker thread because it initializes from `DllMain`:
-
-- **Old ASI Loader detected!** — the loader is not Ultimate ASI Loader 6.9.0 or
-  newer (the first release that exports `IsUltimateASILoader`, the marker
-  FusionFix's own compatibility check trusts). The dialog has a button for the
-  download page.
-- **Unsupported game version.** — the executable's classification dword is not
-  one of the supported builds; the game exits when the dialog is closed.
-- **XLivelessAddon was loaded twice!** — a second copy of the ASI initialized in
-  the same process (for example two loader files each with their own copy); the
-  game exits.
-- **FusionFix is installed.** — `XLivelessAddon.fusionfix-notice.txt` lists the
-  options that were switched off because FusionFix owns them. The file is
-  rewritten on every launch and the dialog is shown only while it does not
-  exist; delete it to show the dialog again.
+- Skip the launcher/DRM checks with the recovered DFA and ROM stages.
+- Apply the save-file CRC32 bypass.
+- Remove the Rockstar Games registry path dependency.
+- Ported CustomUserProfilePath from FusionFix with some improvements for 1.0.8.0.
+- Skip extra GFWL checks.
+- Add borderless windowed mode and keep rendering while the borderless window is unfocused.
 
 ## Installation
 
@@ -45,14 +24,6 @@ worker thread because it initializes from `DllMain`:
 2. Extract the archive anywhere the ASI loader loads from: the game folder, `plugins\`,
    `scripts\` or `update\`.
 3. Start the game and edit `XLivelessAddon.ini`; `XLivelessAddon.log` records what was applied.
-
-The add-on resolves its own directory, so `XLivelessAddon.ini`, `XLivelessAddon.log` and the
-FusionFix notice are always next to the ASI. Options documented as relative to the game folder
-(`CustomUserProfilePath`, the registry install-folder answer) use the executable's folder
-instead. A legacy `ZolikaPatch.ini` is read from the ASI's folder or from the loader folders
-under the game folder (`plugins`, `scripts`, `update`).
-
-The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
 
 ## Building
 
@@ -82,8 +53,7 @@ only.
   the save-file path redirect, the WM_ROM message window and the borderless window patches.
   Released into the public domain.
 - **Zolika1351** — ZolikaPatch, whose recovered SkipLauncher tables, DFA file-API behaviour
-  and legacy launcher stage this module reimplements. ZolikaPatch shipped as a compiled ASI;
-  no original source is redistributed.
+  and legacy launcher stage this module reimplements.
 - **ThirteenAG and the FusionFix contributors** — GTAIV.EFLC.FusionFix, which supplied the
   windowed/focus-loss implementation, the SHGetFolderPath user-data redirect, the task-dialog
   shape and the overall module conventions.

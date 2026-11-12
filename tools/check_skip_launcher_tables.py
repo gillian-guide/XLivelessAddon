@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Recovered-table parity for the readable SkipLauncher rewrite.
 
-The data in `source/skip_launcher_recovered.inc` and the shipping rows in
-`source/skip_launcher.ixx` are recovered data, not code. This check resolves the
+The data in `source/launcher_recovered.inc` and the shipping rows in
+`source/launcher.ixx` are recovered data, not code. This check resolves the
 named offsets and the `ops::` windows back to bytes and compares the result with
 `tests/skip_launcher_tables.tsv`, captured from the old addon's pre-modular
 source. A row added, removed, reordered or changed fails the test.
@@ -139,9 +139,9 @@ def main() -> int:
     args = parser.parse_args()
 
     inc = join_literals(strip_comments(
-        (args.source / "skip_launcher_recovered.inc").read_text(encoding="utf-8")))
+        (args.source / "launcher_recovered.inc").read_text(encoding="utf-8")))
     ixx = join_literals(strip_comments(
-        (args.source / "skip_launcher.ixx").read_text(encoding="utf-8")))
+        (args.source / "launcher.ixx").read_text(encoding="utf-8")))
 
     consts = {"kSkipLauncherJumpTargetEntry": 1}
     for text in (inc, ixx):

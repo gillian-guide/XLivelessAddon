@@ -10,12 +10,18 @@ It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV
 
 ## Features
 
-- Skip the launcher/DRM checks with the recovered DFA and ROM stages.
-- Apply the save-file CRC32 bypass.
-- Remove the Rockstar Games registry path dependency.
-- Ported CustomUserProfilePath from FusionFix with some improvements for 1.0.8.0.
-- Skip extra GFWL checks.
-- Add borderless windowed mode and keep rendering while the borderless window is unfocused.
+The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
+
+- `SkipLauncher`/`LegacyLauncher` — skip the launcher/DRM checks with the recovered DFA and
+  ROM stages, and run the legacy DFA file-API + WM_ROM stage when the launcher skip is off.
+- `SavegameFix` — apply the save-file CRC32 bypass.
+- `[USERPROFILE] CustomUserProfilePath` — ported from FusionFix with some improvements for
+  1.0.8.0.
+- `RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`,
+  `SkipInternetConnectionCheck`, `SkipHealthCheck` — skip the extra GFWL checks.
+- `RemoveRegistryPathDependency` — remove the Rockstar Games registry path dependency.
+- `BorderlessWindowed`/`DoNotPauseOnMinimize` — add borderless windowed mode and keep
+  rendering while the borderless window is unfocused.
 
 ## Installation
 

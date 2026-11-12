@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.core - the fixes the original distribution kept out of OpenPreCEPatch and
-// in this companion: the "core" list the old XLivelessAddon ran unconditionally,
-// under the five per-fix keys OpenPreCEPatch's legacy import maps an old
-// `MiscFixes` value onto.
+// xla.core - the five "core fixes" families, one section per INI key:
+// RemoveDataIntegrityChecks, SkipTokenActivation, SkipFirstTimePlayAsk,
+// SkipInternetConnectionCheck and SkipHealthCheck.
 //
-// Recovered rows, same bytes and offsets as the original ZolikaPatch 7.65
-// `MiscFixes` handler (`sub_10023DD0`) and the old addon's `InstallCore`: a
+// The old XLivelessAddon ran these unconditionally; this tree carries them under
+// the five per-fix keys OpenPreCEPatch's legacy import maps an old `MiscFixes`
+// value onto. Recovered rows, same bytes and offsets as the original ZolikaPatch
+// 7.65 `MiscFixes` handler (`sub_10023DD0`) and the old addon's `InstallCore`: a
 // branch turned into an unconditional jump, `jmp rel8` pairs, two-byte NOPs, a
 // `ret` on the health check and the token `mov eax,1`. The rows are applied one
 // signature at a time and a miss is a logged skip, exactly like the old addon.
@@ -92,39 +93,6 @@ namespace xla::core
 {
     namespace
     {
-        constexpr Row kDataIntegrity[] = {
-            // VDS102 [1.0.0.2 - 1.0.0.4]: the `74 19` after the store.
-            {"C7 06 ? ? ? ? 74 19", Shape::branchToJump, 6, 0},
-            // VDS102 [1.0.0.5 - 1.0.8.0]: five bytes past the seven-byte compare.
-            {"83 C4 ? 3B 46 20", Shape::branchToJump, 12, 0},
-            // VDS100 [1.0.6.0 - 1.0.8.0]: the pattern starts on the branch.
-            {"75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", Shape::branchToJump, 0, 0},
-        };
-
-        constexpr Row kTokenActivation[] = {
-            // `jmp +0xC9` over the token check.
-            {"8B 54 24 04 52 A3", Shape::shortJump, 0, 0xC9},
-            // the token value is forced to 1
-            {"83 F8 01 75 30 A3", Shape::movEaxOne, 0, 1},
-        };
-
-        constexpr Row kFirstTimePlay[] = {
-            // `jmp +0x0D` over the first-time-play ask.
-            {"C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", Shape::shortJump, 0, 0x0D},
-        };
-
-        constexpr Row kInternetConnection[] = {
-            {"FF 15 ? ? ? ? 85 C0 75 18", Shape::nop2, 8, 0},  // 1.0.0.0 / 1.0.1.0
-            {"FF 15 ? ? ? ? 85 C0 75 04 32", Shape::nop2, 8, 0},  // 1.0.0.4 - 1.0.4.0
-            {"FF 15 ? ? ? ? 85 C0 75 07 A0", Shape::nop2, 8, 0},  // 1.0.6.0 - 1.0.8.0
-        };
-
-        constexpr Row kHealthCheck[] = {
-            // the GFWL health check's entry becomes `ret`
-            {"81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 ? 53 50 E8",
-             Shape::ret, 0, 0},
-        };
-
         // One row's write, in the shape the recovered handler used. The image's
         // range is checked by the caller's scan (the site came out of it), and
         // `WriteRawAt` refuses a window past the image.
@@ -161,12 +129,97 @@ namespace xla::core
         }
     } // namespace
 
-    std::span<const Row> DataIntegrityRows() noexcept { return kDataIntegrity; }
-    std::span<const Row> TokenActivationRows() noexcept { return kTokenActivation; }
-    std::span<const Row> FirstTimePlayRows() noexcept { return kFirstTimePlay; }
-    std::span<const Row> InternetConnectionRows() noexcept { return kInternetConnection; }
-    std::span<const Row> HealthCheckRows() noexcept { return kHealthCheck; }
+    // ---------------------------------------------------------------------
+    // RemoveDataIntegrityChecks
+    // ---------------------------------------------------------------------
+    namespace
+    {
+        constexpr Row kDataIntegrity[] = {
+            // VDS102 [1.0.0.2 - 1.0.0.4]: the `74 19` after the store.
+            {"C7 06 ? ? ? ? 74 19", Shape::branchToJump, 6, 0},
+            // VDS102 [1.0.0.5 - 1.0.8.0]: five bytes past the seven-byte compare.
+            {"83 C4 ? 3B 46 20", Shape::branchToJump, 12, 0},
+            // VDS100 [1.0.6.0 - 1.0.8.0]: the pattern starts on the branch.
+            {"75 28 6A 00 6A 00 68 ? ? ? ? E8 ? ? ? ? 83 C4 0C", Shape::branchToJump, 0, 0},
+        };
+    } // namespace
 
+    std::span<const Row> DataIntegrityRows() noexcept
+    {
+        return kDataIntegrity;
+    }
+
+    // ---------------------------------------------------------------------
+    // SkipTokenActivation
+    // ---------------------------------------------------------------------
+    namespace
+    {
+        constexpr Row kTokenActivation[] = {
+            // `jmp +0xC9` over the token check.
+            {"8B 54 24 04 52 A3", Shape::shortJump, 0, 0xC9},
+            // the token value is forced to 1
+            {"83 F8 01 75 30 A3", Shape::movEaxOne, 0, 1},
+        };
+    } // namespace
+
+    std::span<const Row> TokenActivationRows() noexcept
+    {
+        return kTokenActivation;
+    }
+
+    // ---------------------------------------------------------------------
+    // SkipFirstTimePlayAsk
+    // ---------------------------------------------------------------------
+    namespace
+    {
+        constexpr Row kFirstTimePlay[] = {
+            // `jmp +0x0D` over the first-time-play ask.
+            {"C7 05 ? ? ? ? 03 00 00 00 33 C0 5E 59 C3 C7", Shape::shortJump, 0, 0x0D},
+        };
+    } // namespace
+
+    std::span<const Row> FirstTimePlayRows() noexcept
+    {
+        return kFirstTimePlay;
+    }
+
+    // ---------------------------------------------------------------------
+    // SkipInternetConnectionCheck
+    // ---------------------------------------------------------------------
+    namespace
+    {
+        constexpr Row kInternetConnection[] = {
+            {"FF 15 ? ? ? ? 85 C0 75 18", Shape::nop2, 8, 0},  // 1.0.0.0 / 1.0.1.0
+            {"FF 15 ? ? ? ? 85 C0 75 04 32", Shape::nop2, 8, 0},  // 1.0.0.4 - 1.0.4.0
+            {"FF 15 ? ? ? ? 85 C0 75 07 A0", Shape::nop2, 8, 0},  // 1.0.6.0 - 1.0.8.0
+        };
+    } // namespace
+
+    std::span<const Row> InternetConnectionRows() noexcept
+    {
+        return kInternetConnection;
+    }
+
+    // ---------------------------------------------------------------------
+    // SkipHealthCheck
+    // ---------------------------------------------------------------------
+    namespace
+    {
+        constexpr Row kHealthCheck[] = {
+            // the GFWL health check's entry becomes `ret`
+            {"81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 ? 53 50 E8",
+             Shape::ret, 0, 0},
+        };
+    } // namespace
+
+    std::span<const Row> HealthCheckRows() noexcept
+    {
+        return kHealthCheck;
+    }
+
+    // ---------------------------------------------------------------------
+    // The shared pass
+    // ---------------------------------------------------------------------
     Report Apply(const Image& image, std::span<const Row> rows, std::string_view key)
     {
         Report report;

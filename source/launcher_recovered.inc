@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The recovered main table from the original handler at 0x10045CE0. This is a
-// data include, not a module: `skip_launcher.ixx` defines the Edit/Entry types
-// and includes this file inside the module.
+// data include, not a module: `launcher.ixx` defines the Edit/Entry types and
+// includes this file inside the module.
 //
 // It is NOT part of the shipping path. XLivelessAddon only ever ran the DFA and
 // ROM stages; applying this table after the add-on had hooked the launcher broke

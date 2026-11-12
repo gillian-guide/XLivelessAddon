@@ -28,9 +28,7 @@ import savegames;
 import registry;
 import profile;
 import core;
-import skip_launcher;
-import dfa;
-import rom_window;
+import launcher;
 import windowed;
 
 export namespace xla::startup
@@ -97,26 +95,6 @@ namespace xla::startup
                        game.Option("StartupWarnings"));
         }
 
-
-        void InstallSkipLauncher(const Image& image)
-        {
-            const auto applied = skip_launcher::ApplySkipLauncher(
-                image, &skip_launcher::ResolveSkipHook, nullptr,
-                skip_launcher::kShippedStages);
-            if (!applied)
-            {
-                Log::Print("skipLauncher: failed with code {} ({})",
-                           static_cast<int>(applied.error().code), applied.error().detail);
-                return;
-            }
-
-            const auto& report = *applied;
-            Log::Print("skipLauncher: stages={} dfa={}/{} rom={}/{} collected={} "
-                       "createFileSlot={:08X}",
-                       skip_launcher::DescribeStages(skip_launcher::kShippedStages),
-                       report.dfaInstalls, report.dfaMissing, report.romInstalls,
-                       report.romMissing, report.collectedInstalls, report.createFileSlot);
-        }
 
         void RegisterAll()
         {
@@ -382,7 +360,7 @@ namespace xla::startup
                     Log::Trace("skipLauncher: option off");
                     return;
                 }
-                InstallSkipLauncher(game.View());
+                launcher::InstallSkipStage(game.View());
             };
 
             Record("BorderlessWindow");
@@ -455,15 +433,7 @@ namespace xla::startup
                     return;
                 }
 
-                // The original skipped the DFA hooks on EFLC 1.1.0.0/1.1.1.0:
-                // DFA there faulted with an unhandled exception at 0x00426440
-                // (0xC0000005), so the crash evidence is the reason for the build
-                // test, not a preference.
-                if (!IsBuild(game.Build(), {GameBuild::v1100, GameBuild::v1110}))
-                {
-                    dfa::Install(game.View());
-                }
-                rom_window::Install(game.View());
+                launcher::InstallLegacyStage(game.View(), game.Build());
             };
 
             Record("DoNotPauseOnMinimize");

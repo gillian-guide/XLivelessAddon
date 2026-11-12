@@ -21,6 +21,6 @@ add-on for GTA IV / Episodes from Liberty City. It is meant to run next to
 - **ThirteenAG** — `IniReader`; **Danijel Durakovic** — `mINI`.
 
 The signature tables, the hook bodies and the write behaviour were recovered
-from the shipped binaries; `source/skip_launcher.ixx`,
-`source/skip_launcher_recovered.inc` and `source/dfa.ixx` carry the provenance
+from the shipped binaries; `source/launcher.ixx`,
+`source/launcher_recovered.inc` and `source/core.ixx` carry the provenance
 comments.

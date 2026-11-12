@@ -22,9 +22,7 @@ import savegames;
 import registry;
 import profile;
 import core;
-import skip_launcher;
-import dfa;
-import rom_window;
+import launcher;
 import windowed;
 import startup;
 
@@ -819,7 +817,7 @@ namespace
 
     void TestSkipLauncherTable()
     {
-        using namespace xla::skip_launcher;
+        using namespace xla::launcher;
         const auto entries = SkipLauncherEntries();
         Check(entries.size() == 25, "skipLauncher: 25 main entries");
         Check(!entries[0].label.empty() && !entries[24].label.empty(),
@@ -886,7 +884,7 @@ namespace
 
     void TestSkipLauncherPass()
     {
-        using namespace xla::skip_launcher;
+        using namespace xla::launcher;
 
         // Entry 0's signature: a main pass writes one EB at +34.
         const auto signature = BytesOf(SkipLauncherEntries()[0].signature);
@@ -940,7 +938,7 @@ namespace
 
     void TestSkipLauncherCreateFileSlot()
     {
-        using namespace xla::skip_launcher;
+        using namespace xla::launcher;
         using CreateFileAFn = HANDLE(WINAPI*)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES,
                                               DWORD, DWORD, HANDLE);
 
@@ -994,7 +992,7 @@ namespace
     void TestSkipLauncherStub()
     {
         const auto address =
-            xla::skip_launcher::ResolveSkipHook(xla::skip_launcher::SkipHook::rom_set, nullptr);
+            xla::launcher::ResolveSkipHook(xla::launcher::SkipHook::rom_set, nullptr);
         Check(address != 0, "skipLauncher: the RomSet stub resolved");
         if (address == 0)
         {
@@ -1005,22 +1003,23 @@ namespace
         Check(std::memcmp(reinterpret_cast<const void*>(address), expected.data(),
                           expected.size()) == 0,
               "skipLauncher: RomSet is mov ecx,[esi+1C]; mov [esi+20],ecx; mov al,1; ret 8");
-        Check(xla::skip_launcher::ResolveSkipHook(
-                  xla::skip_launcher::SkipHook::dfa_init, nullptr) != 0,
+        Check(xla::launcher::ResolveSkipHook(
+                  xla::launcher::SkipHook::dfa_init, nullptr) != 0,
               "skipLauncher: every DFA body resolves");
     }
 
-    void TestDfaAndRomWindow()
+    void TestLegacyLauncherStage()
     {
-        Check(xla::dfa::DfaInit(1, 2, 3) == 1, "dfa: the init body reports success");
-        Check(xla::rom_window::kMessage == 43858, "rom: WM_ROM is 43858");
-        Check(xla::rom_window::kActionTable[0] == 8 && xla::rom_window::kActionTable[15] == 242,
+        using namespace xla::launcher::legacy;
+
+        Check(dfa::DfaInit(1, 2, 3) == 1, "dfa: the init body reports success");
+        Check(rom::kMessage == 43858, "rom: WM_ROM is 43858");
+        Check(rom::kActionTable[0] == 8 && rom::kActionTable[15] == 242,
               "rom: the 16-entry action table is pinned");
-        Check(xla::rom_window::Payload{}.action == 0 &&
-                  offsetof(xla::rom_window::Payload, setAddress) == 20,
+        Check(rom::Payload{}.action == 0 && offsetof(rom::Payload, setAddress) == 20,
               "rom: the payload offsets are the protocol");
 
-        HWND window = xla::rom_window::CreateServiceWindow();
+        HWND window = rom::CreateServiceWindow();
         Check(window != nullptr, "rom: the service window is created");
         if (window == nullptr)
         {
@@ -1037,7 +1036,7 @@ namespace
         std::uint32_t copied[16]{};
         payload.action = 18;
         payload.arg1 = reinterpret_cast<std::uintptr_t>(copied);
-        ::SendMessageA(window, xla::rom_window::kMessage, 0,
+        ::SendMessageA(window, rom::kMessage, 0,
                        reinterpret_cast<LPARAM>(&payload));
         Check(copied[0] == 8 && copied[15] == 242,
               "rom: action 18 copies the action table");
@@ -1045,14 +1044,14 @@ namespace
         std::uint32_t flag = 0;
         payload.action = 100;
         payload.arg0 = reinterpret_cast<std::uintptr_t>(&flag);
-        ::SendMessageA(window, xla::rom_window::kMessage, 0,
+        ::SendMessageA(window, rom::kMessage, 0,
                        reinterpret_cast<LPARAM>(&payload));
         Check(flag == 1, "rom: action 100 sets the target");
 
         payload.action = 51;
         payload.arg0 = 11;
         payload.arg1 = 31;
-        const LRESULT sum = ::SendMessageA(window, xla::rom_window::kMessage, 0,
+        const LRESULT sum = ::SendMessageA(window, rom::kMessage, 0,
                                            reinterpret_cast<LPARAM>(&payload));
         Check(sum == 42, "rom: action 51 returns the sum");
 
@@ -1069,12 +1068,12 @@ namespace
         WriteBytes(image, 0x300,
                    BytesOf("FF 15 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? "
                            "E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 83 7C 24"));
-        xla::rom_window::Install(xla::Image{image.data(), image.size()});
+        rom::Install(xla::Image{image.data(), image.size()});
         std::uint32_t message = 0;
         std::uint32_t windowSlot = 0;
         std::memcpy(&message, image.data() + 0x100, sizeof(message));
         std::memcpy(&windowSlot, image.data() + 0x104, sizeof(windowSlot));
-        Check(message == xla::rom_window::kMessage, "rom: the message id global is written");
+        Check(message == rom::kMessage, "rom: the message id global is written");
         Check(windowSlot != 0, "rom: the window handle global is written");
         Check(image[0x300] == std::byte{0xE8}, "rom: the SendMessage call is replaced");
     }
@@ -1181,7 +1180,7 @@ int main()
     TestSkipLauncherPass();
     TestSkipLauncherCreateFileSlot();
     TestSkipLauncherStub();
-    TestDfaAndRomWindow();
+    TestLegacyLauncherStage();
     TestWindowed();
     TestWarnings();
     TestProbe();

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.savegames - the save-file CRC32 bypass, descended from XLivelessAddon's
-// getSavefilePath replacement.
+// xla.savegames - [Options] SavegameFix: the save-file CRC32 bypass.
 //
-// The path half moved to xla.profile: [USERPROFILE] CustomUserProfilePath
-// redirects the shell's profile folders, and the game's own savegame resolver
-// (`sub_61E770`, 0x61E770) builds `<profile>\Rockstar Games\GTA IV\savegames\
-// user_<xuid>\<name>` from it. This module keeps the recovered CRC32 branch NOP,
-// which is orthogonal to where the file lives.
+// This is the savegame family: the CRC32 bypass. The save path itself is the
+// user-data family ([USERPROFILE] CustomUserProfilePath, xla.profile): the
+// shell's profile folders are redirected there, and the game's own savegame
+// resolver (`sub_61E770`, 0x61E770) builds `<profile>\Rockstar Games\GTA IV\
+// savegames\user_<xuid>\<name>` from it. The CRC32 branch is orthogonal to where
+// the file lives, so it stays here.
 
 module;
 

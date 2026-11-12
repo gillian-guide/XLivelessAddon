@@ -77,17 +77,15 @@ set(XLA_MODULES
     source/registry.ixx
     source/profile.ixx
     source/core.ixx
-    source/skip_launcher.ixx
-    source/dfa.ixx
-    source/rom_window.ixx
+    source/launcher.ixx
     source/windowed.ixx
     source/startup.ixx)
 
 add_library(xla_modules STATIC
   external/hooking/Hooking.Patterns.cpp
   # A data include, not a compiled TU; listed so the IDE and dependency scan see
-  # it. skip_launcher.ixx includes it inside the module.
-  source/skip_launcher_recovered.inc)
+  # it. launcher.ixx includes it inside the module.
+  source/launcher_recovered.inc)
 set_target_properties(xla_modules PROPERTIES CXX_SCAN_FOR_MODULES ON)
 target_sources(xla_modules PUBLIC
   FILE_SET CXX_MODULES FILES ${XLA_MODULES})

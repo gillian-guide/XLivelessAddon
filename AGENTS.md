@@ -45,10 +45,12 @@ The invariants the tree is built around:
 
 ## Layout
 
-- `source/*.ixx` — one C++23 module interface unit per feature (`common`,
-  `patch`, `build`, `config`, `warnings`, `probe`, `savegames`, `registry`,
-  `profile`, `core`, `skip_launcher`, `dfa`, `rom_window`, `windowed`, `startup`). They
-  are listed in the `CXX_MODULES` file set.
+- `source/*.ixx` — one C++23 module interface unit per feature family, plus the
+  infrastructure units (`common`, `patch`, `build`, `config`, `probe`, `startup`)
+  and the feature families `warnings`, `savegames`, `registry`, `profile`,
+  `core`, `launcher`, `windowed`. They are listed in the `CXX_MODULES` file set.
+  A module is one feature family, not one original handler: `launcher` owns both
+  launcher stages, and `core` owns the five core fixes.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
 - `source/dllmain.cpp` — the entry point and the only plain TU in `source/`.
@@ -60,14 +62,24 @@ The invariants the tree is built around:
   module interface unit.
 - `source/startup.ixx` — `Game` initialisation, the registration order, the
   synchronous pass, `AnyInstallEnabled` and the all-off path.
-- `source/skip_launcher.ixx` — the readable SkipLauncher pass and the ABI-exact
-  DFA/ROM bodies. `source/skip_launcher_recovered.inc` is the recovered main
-  table (data only, not shipped), included inside the module.
-- `source/dfa.ixx` + `source/rom_window.ixx` — the `SkipLauncher=0` legacy DFA
-  file-API stage and WM_ROM message window.
-- `source/core.ixx` — the recovered "core" fixes (VDS/data-integrity, DLC token,
-  first-time-play ask, Internet check, health check), under the five per-fix keys.
-- `source/windowed.ixx` — the FusionFix-shaped borderless/focus-loss hooks.
+- `source/launcher.ixx` — the whole launcher family: the `SkipLauncher=1`
+  recovered DFA + ROM stage (main table, ABI-exact bodies, the CreateFile slot
+  and the ROM message window) and the `SkipLauncher=0` legacy DFA file-API +
+  WM_ROM stage under `legacy::dfa`/`legacy::rom`. `source/launcher_recovered.inc`
+  is the recovered main table (data only, not shipped), included inside the
+  module.
+- `source/savegames.ixx` — `[Options] SavegameFix`: the save-file CRC32 bypass.
+- `source/profile.ixx` — `[USERPROFILE] CustomUserProfilePath`: the shell-folder
+  user-data redirect. The save folder is one of the roots it redirects; the
+  CRC32 bypass is the separate SavegameFix family.
+- `source/core.ixx` — the recovered "core" fixes in one section per key: VDS/
+  data-integrity, DLC token, first-time-play ask, Internet check, health check.
+- `source/registry.ixx` — `RemoveRegistryPathDependency`.
+- `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
+  FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
+  shims.
+- `source/warnings.ixx` — `StartupWarnings`: the ASI loader probe, the
+  single-instance guard and the FusionFix notice.
 - `external/` — committed, pinned vendor trees: injector (classic), Hooking.Patterns,
   IniReader + mINI; licences next to each.
 - `tests/` — the native suite, the ASI image load and the PE checks; also the

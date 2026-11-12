@@ -1,46 +1,55 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.skip_launcher - the SkipLauncher=1 launcher/SecuROM bypass.
+// xla.launcher - the launcher family: both launcher stages the INI selects.
 //
-// The file is laid out in reading order:
+//   SkipLauncher=1  the recovered DFA + ROM stage: the 25-entry main table and
+//                   the two multi-hit collectors (0x10045CE0), the six DFA
+//                   file-API hooks and the two collected jumps (0x10004850), and
+//                   the two ROM message-window hooks (0x10004620) with their
+//                   ABI-exact bodies (0x10004570/0x10004610, service
+//                   0x100041A0..0x10004570).
+//   SkipLauncher=0  the legacy DFA file-API stage and the WM_ROM message window
+//                   (with LegacyLauncher=1), descended from XLivelessAddon's
+//                   dfa.ixx and rom_window.ixx.
 //
-//   1. the small data model (Edit / Entry / Collector / Install);
-//   2. the recovered main table, included from skip_launcher_recovered.inc
+// The module is laid out in reading order:
+//
+//   1. the SkipLauncher=1 data model and API;
+//   2. the legacy stage's API, in its own legacy::dfa / legacy::rom namespaces;
+//   3. the recovered main table, included from launcher_recovered.inc
 //      (data only, not shipped, kept for parity and the native suite);
-//   3. the shipping data: the six DFA hooks, the two ROM hooks and the two
+//   4. the shipping data: the six DFA hooks, the two ROM hooks and the two
 //      collected jumps;
-//   4. the pass that applies the selected stage;
-//   5. the ABI-exact hook bodies and the RomSet stub.
-//
-// Recovered from the original handlers:
-//   0x10045CE0  the 25-entry main table and the two multi-hit collectors
-//   0x10004850  the DFA file-API hooks (6 installs) and the 2 collected jumps
-//   0x10004620  the ROM message-window hooks (2 installs; bodies
-//               0x10004570/0x10004610, service 0x100041A0..0x10004570)
+//   5. the pass that applies the selected stage;
+//   6. the two install steps the startup driver calls;
+//   7. the ABI-exact SkipLauncher=1 hook bodies and the RomSet stub;
+//   8. the legacy stage's bodies.
 //
 // Behaviour and recovered data are ported from
-// openprecepatch/xlivelessaddon/source/skip_launcher.ixx. Row order, bytes,
-// offsets, lengths and fill values are data; the native suite pins the table
-// shape, the shipped stage set, the bounds behaviour and the hook-body contracts.
+// openprecepatch/xlivelessaddon/source/skip_launcher.ixx, dfa.ixx and
+// rom_window.ixx. Row order, bytes, offsets, lengths and fill values are data;
+// the native suite pins the table shape, the shipped stage set, the bounds
+// behaviour and the hook-body contracts.
 //
-// The two live DFA/ROM copies (this file for SkipLauncher=1, xla::dfa +
-// xla::rom_window for SkipLauncher=0) are deliberately not merged: they differ in
-// CreateFile forwarding, the CloseHandle fault answer, the ReadFile hook site and
-// the DfaInit argument shape.
+// The two live DFA/ROM copies (SkipLauncher=1 in the skip stage above,
+// SkipLauncher=0 under legacy::dfa/legacy::rom) are deliberately not merged into
+// each other: they differ in CreateFile forwarding, the CloseHandle fault
+// answer, the ReadFile hook site and the DfaInit argument shape. They do live in
+// this one module because both are selected by the same launcher keys.
 
 module;
 
 #include <common.hxx>
 
-export module skip_launcher;
+export module launcher;
 
 import common;
 import patch;
 
-export namespace xla::skip_launcher
+export namespace xla::launcher
 {
     // ---------------------------------------------------------------------
-    // 1. The data model
+    // 1. The SkipLauncher=1 data model
     // ---------------------------------------------------------------------
     //
     // A launcher row is an in-place instruction edit, not a callable hook: the
@@ -244,9 +253,70 @@ export namespace xla::skip_launcher
     void SetCreateFileSlot(std::uint32_t slotVa) noexcept;
     bool PublishCreateFileSlot(const SkipLauncherReport& report) noexcept;
     std::uintptr_t ResolveSkipHook(SkipHook hook, void* user) noexcept;
-} // namespace xla::skip_launcher
 
-namespace xla::skip_launcher
+    // The SkipLauncher=1 install step: applies the shipped DFA + ROM stage and
+    // logs the recovered report. The startup driver gates it with the
+    // `SkipLauncher` key.
+    void InstallSkipStage(const Image& image);
+
+    // The SkipLauncher=0 install step (with LegacyLauncher=1): the legacy DFA
+    // file-API stage and the WM_ROM window. The original skipped the DFA hooks on
+    // EFLC 1.1.0.0/1.1.1.0: DFA there faulted with an unhandled exception at
+    // 0x00426440 (0xC0000005), so the crash evidence is the reason for the build
+    // test, not a preference.
+    void InstallLegacyStage(const Image& image, GameBuild build);
+} // namespace xla::launcher
+
+// The SkipLauncher=0 stage, in its own namespaces so the two live DFA/ROM copies
+// stay visibly separate from the SkipLauncher=1 stage above.
+export namespace xla::launcher::legacy::dfa
+{
+    // 0x10004780 in the original handler: the DFA init call reports success.
+    // ABI: __cdecl, three integer args per the original call shape; returns 1.
+    int __cdecl DfaInit(int, int, int);
+
+    // Installs the six hooks plus the two collected jump targets. Signatures that
+    // are absent on this build are logged and skipped.
+    void Install(const Image& image);
+} // namespace xla::launcher::legacy::dfa
+
+export namespace xla::launcher::legacy::rom
+{
+    inline constexpr UINT kMessage = 43858; // WM_ROM
+
+    // The table action 18 copies into the game (xmmword_10104050..0x10104080).
+    inline constexpr std::array<std::uint32_t, 16> kActionTable{
+        8, 11, 241, 1, 240, 2, 7, 12, 3, 243, 9, 6, 10, 5, 4, 242,
+    };
+
+    // Message payload, indexed as the original's 32-bit slots: slots 0..3 are
+    // unused, slot 4 (offset 16) is the action, slots 5 and 6 (offsets 20/24) are
+    // its operands. The layout is the protocol, so the offsets are compile-checked.
+    struct Payload
+    {
+        std::array<char, 4 * sizeof(int)> reserved{};
+        int action;
+        char* setAddress;
+        char* copyAddress;
+    };
+    static_assert(offsetof(Payload, action) == 16);
+    static_assert(offsetof(Payload, setAddress) == 20);
+    static_assert(offsetof(Payload, copyAddress) == 24);
+
+    inline constexpr int kActionCopyTable = 18;
+    inline constexpr int kActionAdd = 51;
+    inline constexpr int kActionSet = 100;
+
+    HWND CreateServiceWindow();
+
+    // Passed to the game's SendMessage call site: does nothing (the original's
+    // stub, which stopped the audio-update deadlock).
+    void __stdcall SendMessageStub(int, int, int, int);
+
+    void Install(const Image& image);
+} // namespace xla::launcher::legacy::rom
+
+namespace xla::launcher
 {
     inline constexpr std::int32_t kMaxPatchExtent = 0x200;
 }
@@ -254,18 +324,18 @@ namespace xla::skip_launcher
 // ---------------------------------------------------------------------------
 // 2. The recovered main table (data only; not shipped)
 // ---------------------------------------------------------------------------
-namespace xla::skip_launcher
+namespace xla::launcher
 {
     namespace recovered
     {
-#include "skip_launcher_recovered.inc"
+#include "launcher_recovered.inc"
     } // namespace recovered
-} // namespace xla::skip_launcher
+} // namespace xla::launcher
 
 // ---------------------------------------------------------------------------
-// 3. The shipping data
+// 3. The SkipLauncher=1 shipping data
 // ---------------------------------------------------------------------------
-namespace xla::skip_launcher
+namespace xla::launcher
 {
     namespace
     {
@@ -352,12 +422,12 @@ namespace xla::skip_launcher
     {
         return kDfaCollected;
     }
-} // namespace xla::skip_launcher
+} // namespace xla::launcher
 
 // ---------------------------------------------------------------------------
-// 4. The pass
+// 4. The SkipLauncher=1 pass
 // ---------------------------------------------------------------------------
-namespace xla::skip_launcher
+namespace xla::launcher
 {
     namespace
     {
@@ -738,10 +808,44 @@ namespace xla::skip_launcher
         append(SkipLauncherStage::rom, "rom");
         return text.empty() ? std::string{"none"} : text;
     }
-} // namespace xla::skip_launcher
+} // namespace xla::launcher
 
 // ---------------------------------------------------------------------------
-// 5. The hook bodies
+// 5. The install steps
+// ---------------------------------------------------------------------------
+namespace xla::launcher
+{
+    void InstallSkipStage(const Image& image)
+    {
+        const auto applied = ApplySkipLauncher(image, &ResolveSkipHook, nullptr,
+                                               kShippedStages);
+        if (!applied)
+        {
+            Log::Print("skipLauncher: failed with code {} ({})",
+                       static_cast<int>(applied.error().code), applied.error().detail);
+            return;
+        }
+
+        const auto& report = *applied;
+        Log::Print("skipLauncher: stages={} dfa={}/{} rom={}/{} collected={} "
+                   "createFileSlot={:08X}",
+                   DescribeStages(kShippedStages), report.dfaInstalls, report.dfaMissing,
+                   report.romInstalls, report.romMissing, report.collectedInstalls,
+                   report.createFileSlot);
+    }
+
+    void InstallLegacyStage(const Image& image, GameBuild build)
+    {
+        if (!IsBuild(build, {GameBuild::v1100, GameBuild::v1110}))
+        {
+            legacy::dfa::Install(image);
+        }
+        legacy::rom::Install(image);
+    }
+} // namespace xla::launcher
+
+// ---------------------------------------------------------------------------
+// 6. The SkipLauncher=1 hook bodies
 // ---------------------------------------------------------------------------
 //
 // The ABI is the recovered contract:
@@ -755,7 +859,7 @@ namespace xla::skip_launcher
 // The originals live at 0x10004720..0x1000484E (file API + DFA) and
 // 0x100041A0..0x10004710 (WM_ROM service, RomReset, RomSet).
 
-namespace xla::skip_launcher
+namespace xla::launcher
 {
     namespace
     {
@@ -1055,4 +1159,262 @@ namespace xla::skip_launcher
         }
         return 0;
     }
-} // namespace xla::skip_launcher
+} // namespace xla::launcher
+
+// ---------------------------------------------------------------------------
+// 7. The SkipLauncher=0 legacy stage
+// ---------------------------------------------------------------------------
+//
+// The SkipLauncher=0 copy differs from the SkipLauncher=1 stage above:
+//   CreateFile       direct CreateFileA            | forwards through captured IAT slot
+//   CloseHandle      SEH continue -> TRUE          | SEH execute -> -1
+//   ReadFile site    `55 8B EC 51 51 53 56 8B C5` (+0) | `FF 50 60 ...` (-165)
+//   DfaInit          3 args (original call shape)  | 0 args (body only)
+// Do not merge the two copies into each other without deciding which original
+// path each build follows.
+
+namespace xla::launcher::legacy::dfa
+{
+    namespace
+    {
+        // Hook bodies: the site's caller pops the arguments, so the ABI is __cdecl
+        // with a plain `ret`.
+        HANDLE __cdecl CreateFileHook(LPCSTR fileName, DWORD desiredAccess, DWORD shareMode,
+                                      LPSECURITY_ATTRIBUTES security, DWORD creationDisposition,
+                                      DWORD flags, HANDLE templateFile)
+        {
+            return ::CreateFileA(fileName, desiredAccess, shareMode, security,
+                                 creationDisposition, flags, templateFile);
+        }
+
+        // The original wraps CloseHandle in SEH and keeps going on a fault.
+        BOOL __cdecl CloseHandleHook(HANDLE handle)
+        {
+            __try
+            {
+                return ::CloseHandle(handle);
+            }
+            __except (EXCEPTION_CONTINUE_EXECUTION)
+            {
+            }
+            return TRUE;
+        }
+
+        BOOL __cdecl GetFileSizeExHook(HANDLE handle, PLARGE_INTEGER size)
+        {
+            return ::GetFileSizeEx(handle, size);
+        }
+
+        BOOL __cdecl ReadFileHook(HANDLE handle, LPVOID buffer, DWORD toRead, LPDWORD read,
+                                  LPOVERLAPPED overlapped)
+        {
+            return ::ReadFile(handle, buffer, toRead, read, overlapped);
+        }
+
+        DWORD __cdecl SetFilePointerHook(HANDLE handle, LONG distance, PLONG distanceHigh,
+                                         DWORD moveMethod)
+        {
+            return ::SetFilePointer(handle, distance, distanceHigh, moveMethod);
+        }
+    } // namespace
+
+    int __cdecl DfaInit(int, int, int)
+    {
+        return 1;
+    }
+
+    void Install(const Image& image)
+    {
+        patch::CallFirst("E8 ? ? ? ? 83 C4 0C 83 F8 01 74 11 6A 00 6A 00", 0,
+                         reinterpret_cast<void*>(&DfaInit), "dfa: init");
+        patch::JumpFirst("55 8B EC 6A 00 E8", 0,
+                         reinterpret_cast<const void*>(&CreateFileHook), "dfa: create file");
+        patch::JumpFirst(
+            "6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 "
+            "08 FF 60 0C 33 C0 C3",
+            0, reinterpret_cast<const void*>(&CloseHandleHook), "dfa: close handle");
+        patch::JumpFirst(
+            "6A 00 E8 ? ? ? ? 83 F8 01 59 75 17 FF 15 ? ? ? ? 50 B9 ? ? ? ? E8 ? ? ? ? 8B 40 "
+            "08 FF 60 ? 83 C8 FF C3",
+            0, reinterpret_cast<const void*>(&SetFilePointerHook), "dfa: set file pointer");
+        patch::JumpFirst(
+            "56 8B 74 24 0C 8D 46 04 50 FF 74 24 0C E8 ? ? ? ? 59 59 33 C9 83 F8 FF 0F 95 C1 "
+            "89 06 5E 8B C1 C3",
+            0, reinterpret_cast<const void*>(&GetFileSizeExHook), "dfa: get file size");
+        patch::JumpFirst("55 8B EC 51 51 53 56 8B C5", 0,
+                         reinterpret_cast<const void*>(&ReadFileHook), "dfa: read file");
+
+        // The original rewrites the first two matches of one pattern into jumps to
+        // the first matches of two helper patterns.
+        constexpr std::string_view kCollectedAnchor =
+            "A1 ? ? ? ? B9 A7 FA DC 5C F7 E1 8B 0D ? ? ? ? 33 F6";
+        constexpr std::string_view kCollectedFirst = "80 BC 24 ? ? ? ? ? 6A 00";
+        constexpr std::string_view kCollectedSecond =
+            "6A 00 68 80 00 00 00 6A 03 6A 00 6A 01 68 00 00 00 80 57";
+
+        patch::Pattern anchor = patch::FindIn(image, kCollectedAnchor, 2);
+        if (anchor.size() >= 2)
+        {
+            patch::Pattern first = patch::FindIn(image, kCollectedFirst, 1);
+            patch::Pattern second = patch::FindIn(image, kCollectedSecond, 1);
+            if (!first.empty() && !second.empty())
+            {
+                patch::JumpAt(image, anchor.get<std::uint8_t>(0),
+                              first.get_first<std::uint8_t>(), "dfa: secondary jump 0");
+                patch::JumpAt(image, anchor.get<std::uint8_t>(1),
+                              second.get_first<std::uint8_t>(), "dfa: secondary jump 1");
+                Log::Line("dfa: secondary jump targets installed");
+            }
+            else
+            {
+                Log::Print("dfa: secondary jump targets missing (first={}, second={})",
+                           first.size(), second.size());
+            }
+        }
+        else
+        {
+            Log::Line("dfa: anchor pattern missing; no secondary jumps");
+        }
+    }
+} // namespace xla::launcher::legacy::dfa
+
+namespace xla::launcher::legacy::rom
+{
+    namespace
+    {
+        LRESULT WINAPI WindowProc(HWND /*window*/, UINT message, WPARAM /*wparam*/,
+                                  LPARAM lparam)
+        {
+            if (message != kMessage)
+            {
+                // The original answers 1 for a message it does not handle (the
+                // SkipLauncher=1 copy of this protocol calls DefWindowProcA
+                // instead; these are two independent services).
+                return 1;
+            }
+
+            auto* payload = reinterpret_cast<Payload*>(lparam);
+            switch (payload->action)
+            {
+            case kActionSet:
+                *reinterpret_cast<std::uint32_t*>(payload->setAddress) = 1;
+                return 0;
+            case kActionCopyTable:
+                std::memcpy(payload->copyAddress, kActionTable.data(), sizeof(kActionTable));
+                return 0;
+            case kActionAdd:
+                return static_cast<LRESULT>(
+                    reinterpret_cast<std::uintptr_t>(payload->setAddress) +
+                    reinterpret_cast<std::uintptr_t>(payload->copyAddress));
+            default:
+                return 0;
+            }
+        }
+
+        // The original add-on's window recipe, preserved value for value:
+        // CS_VREDRAW|CS_HREDRAW, class "banana", and a background brush of the
+        // COLOR_WINDOW system-colour index as-is (5, not the documented +1 form),
+        // because that is what the original passed. The window is a hidden message
+        // window (WS_DISABLED|WS_CLIPSIBLINGS|WS_CAPTION). The asserts below pin
+        // the named constants back to the recovered literals (provenance, not
+        // values).
+        constexpr std::uintptr_t kRomBackgroundColor = COLOR_WINDOW;
+        constexpr DWORD kRomWindowStyle = WS_DISABLED | WS_CLIPSIBLINGS | WS_CAPTION;
+        // IDC_ARROW's numeric id (32512, i.e. 0x7F00); the header's macro is the
+        // ANSI resource form and LoadCursorW wants the wide one.
+        constexpr WORD kArrowCursorId = 32512;
+        static_assert(kRomBackgroundColor == 5);       // recovered: COLOR_WINDOW index 5
+        static_assert(kRomWindowStyle == 0x0CC00000); // recovered: disabled|clipsiblings|caption
+        static_assert(kArrowCursorId == 0x7F00);      // recovered: IDC_ARROW id
+    } // namespace
+
+    HWND CreateServiceWindow()
+    {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.style = CS_VREDRAW | CS_HREDRAW;
+        wc.lpfnWndProc = &WindowProc;
+        wc.lpszClassName = L"banana";
+        wc.hInstance = ::GetModuleHandleW(nullptr);
+        wc.hbrBackground =
+            reinterpret_cast<HBRUSH>(static_cast<std::uintptr_t>(kRomBackgroundColor));
+        wc.hCursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(kArrowCursorId));
+
+        ::RegisterClassExW(&wc);
+
+        return ::CreateWindowExW(0, L"banana", L"", kRomWindowStyle, 0, 0, 0, 0, nullptr,
+                                 nullptr, ::GetModuleHandleW(nullptr), nullptr);
+    }
+
+    void __stdcall SendMessageStub(int, int, int, int)
+    {
+    }
+
+    void Install(const Image& image)
+    {
+        // The game's two globals (window handle, message id) are reached through
+        // the operands of `mov eax, [g1]` / `mov ecx, [g2]`; write them only when
+        // they point inside the image.
+        // A1 <rel32> at +0 and 8B 0D <rel32> at +5; the operands are at +1 and +7.
+        constexpr std::ptrdiff_t kMessageOperandOffset = 1;
+        constexpr std::ptrdiff_t kWindowOperandOffset = 7;
+        patch::Pattern pattern =
+            patch::FindIn(image, "A1 ? ? ? ? 8B 0D ? ? ? ? 68 ? ? ? ? 53 50 51 FF 15", 1);
+        if (!pattern.empty())
+        {
+            auto* match = pattern.get_first<std::uint8_t>();
+            const auto messageSlot =
+                *reinterpret_cast<const std::uint32_t*>(match + kMessageOperandOffset);
+            const auto windowSlot =
+                *reinterpret_cast<const std::uint32_t*>(match + kWindowOperandOffset);
+            if (image.contains(reinterpret_cast<const void*>(
+                                   static_cast<std::uintptr_t>(messageSlot)),
+                               4) &&
+                image.contains(reinterpret_cast<const void*>(
+                                   static_cast<std::uintptr_t>(windowSlot)),
+                               4))
+            {
+                patch::Write(
+                    patch::Site{reinterpret_cast<std::uint8_t*>(
+                        static_cast<std::uintptr_t>(messageSlot))},
+                    0, static_cast<std::uint32_t>(kMessage), "rom: message id");
+                patch::Write(
+                    patch::Site{reinterpret_cast<std::uint8_t*>(
+                        static_cast<std::uintptr_t>(windowSlot))},
+                    0,
+                    static_cast<std::uint32_t>(
+                        reinterpret_cast<std::uintptr_t>(CreateServiceWindow())),
+                    "rom: window handle");
+                Log::Print("rom: window slot {:08X}, message id {}", windowSlot, kMessage);
+            }
+            else
+            {
+                Log::Line("rom: message/window globals outside the image; skipped");
+            }
+        }
+        else
+        {
+            Log::Line("rom: window pattern missing");
+        }
+
+        // The SendMessage call freezes the audio update thread; replace it with
+        // the stub (6-byte slot: 5-byte call + one nop).
+        patch::Pattern send = patch::FindIn(
+            image,
+            "FF 15 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? E8 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? B9 "
+            "? ? ? ? E8 ? ? ? ? 83 7C 24",
+            1);
+        if (!send.empty())
+        {
+            auto* site = send.get_first<std::uint8_t>();
+            patch::Nop(patch::Site{site}, 0, 6, "rom: send message nop");
+            patch::Call(patch::Site{site}, 0,
+                        reinterpret_cast<void*>(&SendMessageStub), "rom: send message bypass");
+            Log::Line("rom: SendMessage bypass installed");
+        }
+        else
+        {
+            Log::Line("rom: SendMessage pattern missing");
+        }
+    }
+} // namespace xla::launcher::legacy::rom

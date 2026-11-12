@@ -2,6 +2,10 @@
 //
 // xla.profile - [USERPROFILE] CustomUserProfilePath: the one user-data redirect.
 //
+// This is the user-data family. The SavegameFix CRC32 bypass is the separate
+// xla.savegames family; the save folder is one of the roots this redirect
+// answers, not a second save-game patch.
+//
 // The shell's profile folders (CSIDL_PERSONAL and the roaming/local app-data
 // ones) answer the configured root, so the game's own path builders put
 // everything under it: saves, settings, user music, videos and benchmarks. There

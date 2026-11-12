@@ -75,8 +75,7 @@ set(XLA_MODULES
     source/probe.ixx
     source/savegames.ixx
     source/registry.ixx
-    source/userdata.ixx
-    source/settings_path.ixx
+    source/profile.ixx
     source/skip_launcher.ixx
     source/dfa.ixx
     source/rom_window.ixx

@@ -26,8 +26,7 @@ import warnings;
 import probe;
 import savegames;
 import registry;
-import userdata;
-import settings_path;
+import profile;
 import skip_launcher;
 import dfa;
 import rom_window;
@@ -89,12 +88,10 @@ namespace xla::startup
             Log::Print("ini={} legacy={} fusionfix={}", loaded.iniPath.string(),
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
             Log::Print("options: savegameFix={} launcher={} legacyLauncher={} "
-                       "localSettings={} customSave=\"{}\" customSettings=\"{}\" "
-                       "borderless={} dontPause={} warnings={}",
+                       "profile=\"{}\" borderless={} dontPause={} warnings={}",
                        game.Option("SavegameFix"), game.Option("SkipLauncher"),
-                       game.Option("LegacyLauncher"), game.Option("LocalSettingsPath"),
-                       game.OptionString("CustomSavePath"),
-                       game.OptionString("CustomSettingsPath"),
+                       game.Option("LegacyLauncher"),
+                       game.OptionString("CustomUserProfilePath"),
                        game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
                        game.Option("StartupWarnings"));
         }
@@ -339,7 +336,7 @@ namespace xla::startup
 
             // ---- install handlers (same tier, after the context) --------------
 
-            Record("LocalSettings");
+            Record("Profile");
             FusionFix::onInitEvent() += []
             {
                 const Game& game = Game::Get();
@@ -347,12 +344,12 @@ namespace xla::startup
                 {
                     return;
                 }
-                if (!game.Option("LocalSettingsPath"))
+                if (game.OptionString("CustomUserProfilePath").empty())
                 {
-                    Log::Trace("userdata: option off");
+                    Log::Trace("profile: option off");
                     return;
                 }
-                userdata::InstallLocalSettingsPath(game.View());
+                profile::Install(game.View(), game.OptionString("CustomUserProfilePath"));
             };
 
             Record("Savegames");
@@ -368,7 +365,7 @@ namespace xla::startup
                     Log::Trace("savegames: option off");
                     return;
                 }
-                savegames::Install(game.View(), game.OptionString("CustomSavePath"));
+                savegames::Install(game.View());
             };
 
             Record("SkipLauncher");
@@ -417,18 +414,6 @@ namespace xla::startup
                 }
                 const bool installed = windowed::InstallFocusLossInput(game.View());
                 Log::Print("window: focusLoss={}", installed ? "installed" : "missing");
-            };
-
-            Record("CustomSettingsPath");
-            FusionFix::onInitEvent() += []
-            {
-                const Game& game = Game::Get();
-                if (game.Stopped())
-                {
-                    return;
-                }
-                settings_path::InstallCustomSettingsPath(
-                    game.View(), game.OptionString("CustomSettingsPath"));
             };
 
             Record("LauncherStage");
@@ -525,8 +510,7 @@ namespace xla::startup
         const bool legacyLauncher = !skipLauncher && game.Option("LegacyLauncher");
         return game.Option("SavegameFix") || skipLauncher || legacyLauncher ||
                game.Option("RemoveRegistryPathDependency") ||
-               game.Option("LocalSettingsPath") ||
-               !game.OptionString("CustomSettingsPath").empty() ||
+               !game.OptionString("CustomUserProfilePath").empty() ||
                game.Option("BorderlessWindowed") ||
                game.Option("DoNotPauseOnMinimize");
     }

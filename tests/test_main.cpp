@@ -5,9 +5,9 @@
 //
 // The suite pins the INI grammar/precedence, the build table, the installer
 // primitives and their widths, the recovered SkipLauncher tables and pass, the
-// register contract of the CustomSettingsPath stub, the savegame path, the IAT
-// replacement, the startup order and the deliberate local-path divergence from
-// the old addon.
+// [USERPROFILE] CustomUserProfilePath resolution and shell redirect, the savegame
+// CRC32 bypass, the IAT replacement, the startup order and the deliberate
+// user-data divergence from the old addon.
 
 #include <common.hxx>
 #include <cstdio>
@@ -20,8 +20,7 @@ import warnings;
 import probe;
 import savegames;
 import registry;
-import userdata;
-import settings_path;
+import profile;
 import skip_launcher;
 import dfa;
 import rom_window;
@@ -291,11 +290,12 @@ namespace
         Check(game.Option("SavegameFix"), "config: SavegameFix defaults on");
         Check(game.Option("RemoveRegistryPathDependency"),
               "config: RemoveRegistryPathDependency defaults on");
-        Check(!game.Option("LocalSettingsPath"), "config: LocalSettingsPath defaults off");
         Check(!game.Option("BorderlessWindowed"), "config: BorderlessWindowed code default is off");
         Check(!game.Option("DoNotPauseOnMinimize"),
               "config: DoNotPauseOnMinimize code default is off");
         Check(game.Option("StartupWarnings"), "config: StartupWarnings defaults on");
+        Check(xla::Game::Get().OptionString("CustomUserProfilePath").empty(),
+              "config: CustomUserProfilePath code default is empty (feature off)");
 
         TempDir missing("xla-config-missing");
         (void)xla::config::Load(missing.Path());
@@ -307,15 +307,16 @@ namespace
     {
         TempDir work("xla-config-precedence");
         WriteFile(work / "XLivelessAddon.ini",
-                  "[Options]\nSkipLauncher=0\nSavegameFix=0\nCustomSavePath=D:\\Saves\n"
-                  "CustomSettingsPath=Settings\nBorderlessWindowed=1\nLocalSettingsPath=1\n");
+                  "[Options]\nSkipLauncher=0\nSavegameFix=0\n"
+                  "[USERPROFILE]\nCustomUserProfilePath=D:\\Saves\n"
+                  "BorderlessWindowed=1\n");
         WriteFile(work / "ZolikaPatch.ini", "[MAIN]\nSkipLauncher=1\n");
 
         auto loaded = xla::config::Load(work.Path(), work.Path());
         Check(!loaded.options.skipLauncher, "config: the add-on's own INI wins over the legacy one");
         Check(!loaded.options.savegameFix, "config: a present key is read");
-        Check(loaded.options.customSavePath == "D:\\Saves", "config: a string key is read");
-        Check(loaded.options.localSettingsPath, "config: a local path option is read");
+        Check(loaded.options.customUserProfilePath == "D:\\Saves",
+              "config: the USERPROFILE section is searched");
         Check(loaded.legacyPresent, "config: the legacy INI is found next to the ASI");
 
         // The section list order is the precedence: MAIN is searched before Options.
@@ -348,10 +349,10 @@ namespace
         TempDir work("xla-config-whitespace");
         WriteFile(work / "XLivelessAddon.ini",
                   "; comment\n[Options]\n  SkipLauncher = 0   ; trailing\n"
-                  "CustomSavePath = \"D:\\Saves With Spaces\"\n");
+                  "[USERPROFILE]\nCustomUserProfilePath = \"D:\\Saves With Spaces\"\n");
         const auto loaded = xla::config::Load(work.Path(), work.Path());
         Check(!loaded.options.skipLauncher, "config: whitespace and a trailing comment are ignored");
-        Check(loaded.options.customSavePath == "D:\\Saves With Spaces",
+        Check(loaded.options.customUserProfilePath == "D:\\Saves With Spaces",
               "config: quotes are stripped from a string value");
     }
 
@@ -369,8 +370,8 @@ namespace
     {
         TempDir work("xla-config-divergence");
         WriteFile(work / "XLivelessAddon.ini",
-                  "[Options]\nLocalSettingsPath=1\nCustomSavePath=D:\\Saves\n"
-                  "CustomSettingsPath=Settings\nBorderlessWindowed=1\n"
+                  "[USERPROFILE]\nCustomUserProfilePath=D:\\Saves\n"
+                  "BorderlessWindowed=1\n"
                   "DoNotPauseOnMinimize=1\n");
 
         // No FusionFix in the process or next to the ASI.
@@ -378,22 +379,16 @@ namespace
               "divergence: FusionFix is absent in the temp install");
 
         auto loaded = xla::config::Load(work.Path(), work.Path());
-        Check(loaded.options.localSettingsPath,
-              "divergence: LocalSettingsPath works with FusionFix absent");
-        Check(loaded.options.customSavePath == "D:\\Saves",
-              "divergence: CustomSavePath works with FusionFix absent");
-        Check(loaded.options.customSettingsPath == "Settings",
-              "divergence: CustomSettingsPath works with FusionFix absent");
+        Check(loaded.options.customUserProfilePath == "D:\\Saves",
+              "divergence: CustomUserProfilePath works with FusionFix absent");
         Check(loaded.options.borderlessWindowed,
               "divergence: windowed stays on when FusionFix is absent");
         xla::config::Publish(loaded);
-        Check(xla::Game::Get().Option("LocalSettingsPath") &&
-                  xla::Game::Get().OptionString("CustomSavePath") == "D:\\Saves" &&
-                  xla::Game::Get().OptionString("CustomSettingsPath") == "Settings",
-              "divergence: the Game context carries the local paths with FusionFix absent");
+        Check(xla::Game::Get().OptionString("CustomUserProfilePath") == "D:\\Saves",
+              "divergence: the Game context carries the profile path with FusionFix absent");
 
-        // A FusionFix ASI next to this one is detected; the local paths must still
-        // survive, and only the two windowed options are gated.
+        // A FusionFix ASI next to this one is detected; the profile redirect must
+        // still survive, and only the two windowed options are gated.
         WriteFile(work / "GTAIV.EFLC.FusionFix.asi", "");
         Check(xla::config::FusionFixPresent(work.Path()),
               "divergence: a FusionFix ASI next to the module is detected");
@@ -402,18 +397,13 @@ namespace
         const auto gated = xla::config::ApplyFusionFixGates(loaded.options);
         Check(gated.size() == 2, "divergence: the FusionFix gate covers only the windowed options",
               std::to_string(gated.size()));
-        Check(loaded.options.localSettingsPath,
-              "divergence: LocalSettingsPath survives with FusionFix present");
-        Check(loaded.options.customSavePath == "D:\\Saves",
-              "divergence: CustomSavePath survives with FusionFix present");
-        Check(loaded.options.customSettingsPath == "Settings",
-              "divergence: CustomSettingsPath survives with FusionFix present");
+        Check(loaded.options.customUserProfilePath == "D:\\Saves",
+              "divergence: CustomUserProfilePath survives with FusionFix present");
         Check(!loaded.options.borderlessWindowed && !loaded.options.doNotPauseOnMinimize,
               "divergence: the windowed options are gated when FusionFix is present");
         xla::config::Publish(loaded);
-        Check(xla::Game::Get().Option("LocalSettingsPath") &&
-                  xla::Game::Get().OptionString("CustomSavePath") == "D:\\Saves",
-              "divergence: the local paths are still published after the gate");
+        Check(xla::Game::Get().OptionString("CustomUserProfilePath") == "D:\\Saves",
+              "divergence: the profile path is still published after the gate");
     }
 
     void TestAllOff()
@@ -422,8 +412,8 @@ namespace
         WriteFile(work / "XLivelessAddon.ini",
                   "[Options]\nSavegameFix=0\nSkipLauncher=0\nLegacyLauncher=0\n"
                   "RemoveRegistryPathDependency=0\nDoNotPauseOnMinimize=0\n"
-                  "BorderlessWindowed=0\nLocalSettingsPath=0\nStartupWarnings=0\n"
-                  "CustomSavePath=\nCustomSettingsPath=\n");
+                  "BorderlessWindowed=0\nStartupWarnings=0\n"
+                  "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
         xla::config::Publish(loaded);
         Check(!loaded.options.legacyLauncher && !loaded.options.startupWarnings,
@@ -443,20 +433,15 @@ namespace
         flip("SkipLauncher");
         flip("LegacyLauncher"); // SkipLauncher is 0 here
         flip("RemoveRegistryPathDependency");
-        flip("LocalSettingsPath");
         flip("BorderlessWindowed");
         flip("DoNotPauseOnMinimize");
 
-        game.SetOption("CustomSettingsPath", "Settings");
+        game.SetOption("CustomUserProfilePath", "D:\\Saves");
         Check(xla::startup::AnyInstallEnabled(),
-              "all-off: a non-empty CustomSettingsPath enables its install");
-        game.SetOption("CustomSettingsPath", "");
+              "all-off: a non-empty CustomUserProfilePath enables its install");
+        game.SetOption("CustomUserProfilePath", "");
 
-        // These are values, not installs on their own.
-        game.SetOption("CustomSavePath", "D:\\Saves");
-        Check(!xla::startup::AnyInstallEnabled(),
-              "all-off: CustomSavePath alone is not an install (SavegameFix gates it)");
-        game.SetOption("CustomSavePath", "");
+        // Values, not installs on their own.
         game.SetOption("StartupWarnings", "1");
         Check(!xla::startup::AnyInstallEnabled(),
               "all-off: StartupWarnings alone is not an install");
@@ -626,51 +611,20 @@ namespace
 
     void TestSavegames()
     {
-        Check(xla::savegames::BaseSavePath("C:\\Games\\GTA IV\\", "") ==
-                  "C:\\Games\\GTA IV\\savegames",
-              "savegames: the default path appends savegames");
-        Check(xla::savegames::BaseSavePath("C:\\Games\\GTA IV\\", "D:\\Saves") == "D:\\Saves",
-              "savegames: an absolute custom path replaces the base");
-        Check(xla::savegames::JoinSaveName("C:\\Saves", "SGTA400") == "C:\\Saves\\SGTA400",
-              "savegames: the save name is joined with one separator");
-        Check(xla::savegames::JoinSaveName("C:\\Saves\\", "SGTA400") == "C:\\Saves\\SGTA400",
-              "savegames: a trailing separator is not doubled");
-        Check(xla::savegames::JoinSaveName("C:\\Saves", "") == "C:\\Saves",
-              "savegames: an empty save name keeps the base");
-
-        std::array<char, 16> text{};
-        std::memcpy(text.data(), "savegames", 10);
-        const xla::Image image{reinterpret_cast<std::byte*>(text.data()), text.size()};
-        Check(xla::savegames::ReadCString(image, text.data(), text.size()) == "savegames",
-              "savegames: a NUL-terminated string is read");
-        Check(xla::savegames::ReadCString(image, text.data(), 4) == "save",
-              "savegames: the limit bounds the read");
-        Check(xla::savegames::ReadCString(image, nullptr, 4).empty(),
-              "savegames: a null address is empty");
-        Check(xla::savegames::ReadCString(image, text.data() + text.size(), 4).empty(),
-              "savegames: a read past the image is empty");
-
-        // The anchor/redirect scan and the two install sites on a synthetic image.
+        // The CRC32 bypass is the only install left here: the save path moved to
+        // [USERPROFILE] CustomUserProfilePath.
         std::vector<std::byte> buffer(0x1000, std::byte{0});
-        const auto anchor =
-            BytesOf("8A 10 83 C0 01 84 D2 75 F7 56 57 BF ? ? ? ? 2B C1 8B F1 83 C7 FF 8A 4F 01 "
-                    "83 C7 01");
-        WriteBytes(buffer, 0x100, anchor);
-        WriteBytes(buffer, 0x180, anchor);
-        WriteBytes(buffer, 0x300, anchor);
-        WriteBytes(buffer, 0x290,
-                   BytesOf("8A 88 ? ? ? ? 88 88 ? ? ? ? 83 C0 01"));
-        const auto base = reinterpret_cast<std::uintptr_t>(buffer.data());
-        WriteDword(buffer, 0x290 + 2, static_cast<std::uint32_t>(base + 0x500));
-        WriteDword(buffer, 0x500, static_cast<std::uint32_t>(base + 0x600));
-        std::memcpy(buffer.data() + 0x600, "C:\\Games\\GTA IV\\", 18);
         WriteBytes(buffer, 0x700, BytesOf("75 ? 83 C1 01 83 C0 01 83 F9 04"));
-        WriteBytes(buffer, 0x780, BytesOf("55 8B EC 83 E4 F8 83 EC 4C 56"));
-
-        xla::savegames::Install(xla::Image{buffer.data(), buffer.size()}, "D:\\Saves");
+        xla::savegames::Install(xla::Image{buffer.data(), buffer.size()});
         Check(buffer[0x700] == std::byte{0x90} && buffer[0x701] == std::byte{0x90},
               "savegames: the CRC32 branch is NOPed");
-        Check(buffer[0x780] == std::byte{0xE9}, "savegames: the path builder is tail-jumped");
+        Check(buffer[0x702] == std::byte{0x83},
+              "savegames: only the two branch bytes are replaced");
+
+        // A missing signature is a logged skip, never a fault.
+        std::vector<std::byte> empty(0x100, std::byte{0});
+        xla::savegames::Install(xla::Image{empty.data(), empty.size()});
+        Check(true, "savegames: a missing crc32 signature is a clean skip");
     }
 
     void TestRegistry()
@@ -690,195 +644,70 @@ namespace
               "registry: the install folder answer ends with a separator");
     }
 
-    void TestUserdata()
+    void TestProfile()
     {
-        Check(xla::userdata::ShouldRedirect(CSIDL_APPDATA),
-              "userdata: APPDATA is redirected");
-        Check(xla::userdata::ShouldRedirect(CSIDL_PERSONAL),
-              "userdata: PERSONAL is redirected");
-        Check(xla::userdata::ShouldRedirect(CSIDL_LOCAL_APPDATA),
-              "userdata: LOCAL_APPDATA is redirected");
-        Check(!xla::userdata::ShouldRedirect(CSIDL_WINDOWS),
-              "userdata: WINDOWS is not redirected");
-        Check(xla::userdata::SavesDirectory() ==
-                  xla::Game::Get().ExecutableDirectory() / "saves",
-              "userdata: the saves folder is inside the game folder");
+        // The CSIDL set FusionFix redirects; these are the ones the game asks for.
+        Check(xla::profile::ShouldRedirect(CSIDL_APPDATA), "profile: APPDATA is redirected");
+        Check(xla::profile::ShouldRedirect(CSIDL_PERSONAL), "profile: PERSONAL is redirected");
+        Check(xla::profile::ShouldRedirect(CSIDL_LOCAL_APPDATA),
+              "profile: LOCAL_APPDATA is redirected");
+        Check(!xla::profile::ShouldRedirect(CSIDL_WINDOWS), "profile: WINDOWS is not redirected");
 
+        // Resolution: relative to the game folder, absolute kept, a leading
+        // separator read as "under the game folder" (how the replaced keys were
+        // written).
+        const std::filesystem::path game = "C:\\Games\\GTA IV";
+        Check(xla::profile::ResolveProfilePath(game, "").empty(),
+              "profile: an empty value is off");
+        Check(xla::profile::ResolveProfilePath(game, "./Savefiles") == game / "Savefiles",
+              "profile: ./Savefiles is under the game folder");
+        Check(xla::profile::ResolveProfilePath(game, "Savefiles\\profiles") ==
+                  game / "Savefiles" / "profiles",
+              "profile: a relative path nests under the game folder");
+        Check(xla::profile::ResolveProfilePath(game, "\\Savefiles") == game / "Savefiles",
+              "profile: a leading separator means under the game folder");
+        Check(xla::profile::ResolveProfilePath(game, "/Savefiles") == game / "Savefiles",
+              "profile: a leading forward slash means the same");
+        Check(xla::profile::ResolveProfilePath(game, "D:\\Saves") == "D:\\Saves",
+              "profile: an absolute path is used as-is");
+        Check(xla::profile::ResolveProfilePath(game, "  ./Savefiles  ") == game / "Savefiles",
+              "profile: surrounding spaces are trimmed");
+
+        // The live install refuses a foreign image (a parity dump's copy).
+        const xla::Image foreign{reinterpret_cast<std::byte*>(0x1000), 0x1000};
+        Check(!xla::profile::Install(foreign, "D:\\Saves"),
+              "profile: the live install refuses a foreign image");
+
+        // The redirect itself, with no FusionFix involved: a synthetic module's
+        // shell imports are replaced and the installed body answers the profile
+        // CSIDLs with the configured root.
+        TempDir rootDir("xla-profile-root");
+        const auto root = rootDir.Path() / "Savefiles";
         SyntheticModule module("SHELL32.DLL");
         module.Add("SHGetFolderPathA");
         module.Add("SHGetFolderPathW");
-        static int hookA = 0;
-        static int hookW = 0;
-        Check(xla::userdata::ReplaceShellFolderImports(module.Handle(), &hookA, &hookW) == 2,
-              "userdata: both shell folder imports are replaced");
-        Check(module.Slot(0) == &hookA && module.Slot(1) == &hookW,
-              "userdata: the A/W slots hold the redirects");
+        Check(xla::profile::InstallForModule(module.Handle(), root),
+              "profile: the redirect installs on a synthetic module");
+        Check(std::filesystem::exists(root), "profile: the root folder is created");
 
-        const xla::Image foreign{reinterpret_cast<std::byte*>(0x1000), 0x1000};
-        Check(!xla::userdata::InstallLocalSettingsPath(foreign),
-              "userdata: the live install refuses a foreign image");
-
-        // The actual LocalSettingsPath redirect, with no FusionFix involved: the
-        // mechanism replaces a synthetic module's shell imports and the installed
-        // body answers CSIDL_APPDATA with <game>\saves.
-        SyntheticModule live("SHELL32.DLL");
-        live.Add("SHGetFolderPathA");
-        live.Add("SHGetFolderPathW");
-        const auto saves = xla::userdata::SavesDirectory();
-        Check(xla::userdata::InstallLocalSettingsPathForModule(live.Handle()),
-              "local path: the redirect installs without FusionFix");
         using ShGetFolderPathAFn = HRESULT(WINAPI*)(HWND, int, HANDLE, DWORD, LPSTR);
-        const auto shellA = reinterpret_cast<ShGetFolderPathAFn>(live.Slot(0));
+        const auto shellA = reinterpret_cast<ShGetFolderPathAFn>(module.Slot(0));
         char redirected[MAX_PATH]{};
-        const HRESULT result = shellA(nullptr, CSIDL_APPDATA, nullptr, 0, redirected);
-        Check(result == S_OK && saves.string() == redirected,
-              "local path: CSIDL_APPDATA is answered with <game>\\saves",
+        const HRESULT result = shellA(nullptr, CSIDL_PERSONAL, nullptr, 0, redirected);
+        Check(result == S_OK && std::string{redirected} == root.string(),
+              "profile: CSIDL_PERSONAL is answered with the configured root",
               std::format("result={:#x} path={}", static_cast<unsigned>(result), redirected));
-        std::error_code ignored;
-        std::filesystem::remove_all(saves, ignored);
-    }
 
-    void TestSettingsPath()
-    {
-        using xla::settings_path::ComposeSettingsPath;
-        Check(ComposeSettingsPath("C:\\Games\\GTA IV\\", "Saves", "GTAIV") ==
-                  "C:\\Games\\GTA IV\\Saves\\GTAIV\\",
-              "settings: a relative path is composed in the recovered order");
-        Check(ComposeSettingsPath("C:\\Games\\GTA IV", "Saves", "GTAIV") ==
-                  "C:\\Games\\GTA IV\\Saves\\GTAIV\\",
-              "settings: a missing trailing separator is added");
-        Check(ComposeSettingsPath("C:\\Games\\GTA IV\\", "Saves\\", "GTAIV") ==
-                  "C:\\Games\\GTA IV\\Saves\\GTAIV\\",
-              "settings: a trailing separator is not doubled");
-        Check(ComposeSettingsPath("C:\\Games\\GTA IV\\", "D:\\Saves", "GTAIV") ==
-                  "D:\\Saves\\GTAIV\\",
-              "settings: an absolute path is used as-is");
+        using ShGetFolderPathWFn = HRESULT(WINAPI*)(HWND, int, HANDLE, DWORD, LPWSTR);
+        const auto shellW = reinterpret_cast<ShGetFolderPathWFn>(module.Slot(1));
+        wchar_t redirectedW[MAX_PATH]{};
+        const HRESULT resultW = shellW(nullptr, CSIDL_APPDATA, nullptr, 0, redirectedW);
+        Check(resultW == S_OK && std::wstring{redirectedW} == root.wstring(),
+              "profile: the wide entry answers CSIDL_APPDATA with the same root");
 
-        constexpr std::string_view signature =
-            "68 ? ? ? ? B9 ? ? ? ? E8 ? ? ? ? 8D 4C 24 04 E8 ? ? ? ? 5B 83 C4 08 C3";
-        const auto bytes = BytesOf(signature);
-        std::vector<std::byte> image(0x800, std::byte{0});
-        constexpr std::size_t kStride = 0x100;
-        constexpr std::size_t kBase = 0x100;
-        for (std::size_t index = 0; index < 4; ++index)
-        {
-            const std::size_t offset = kBase + index * kStride;
-            WriteBytes(image, offset, bytes);
-            WriteDword(image, offset + 1, static_cast<std::uint32_t>(0x1000 + index));
-            WriteDword(image, offset + 6, static_cast<std::uint32_t>(0x2000 + index));
-        }
-        xla::settings_path::InstallCustomSettingsPath(
-            xla::Image{image.data(), image.size()}, "Saves");
-        for (std::size_t index = 0; index < 4; ++index)
-        {
-            const std::size_t opcode = kBase + index * kStride + 5;
-            const bool patched = index == 1 || index == 2;
-            Check(image[opcode] == (patched ? std::byte{0xE8} : std::byte{0xB9}),
-                  patched ? "settings: the two middle sites are called"
-                          : "settings: the outer sites stay mov ecx");
-        }
-
-        const std::size_t site = kBase + kStride + 5;
-        std::int32_t displacement = 0;
-        std::memcpy(&displacement, image.data() + site + 1, sizeof(displacement));
-        const auto target = reinterpret_cast<std::uintptr_t>(image.data() + site + 5) +
-                            static_cast<std::uintptr_t>(displacement);
-        const auto* stub = reinterpret_cast<const std::uint8_t*>(target);
-        std::uint32_t buffer = 0;
-        std::memcpy(&buffer, stub + 7, sizeof(buffer));
-        std::uint32_t global = 0;
-        std::memcpy(&global, stub + 23, sizeof(global));
-        Check(stub[0] == 0x9C && stub[1] == 0x60, "settings: the stub saves flags and registers");
-        Check(buffer == 0x1001u, "settings: the stub pushes match 1's buffer");
-        Check(global == 0x2001u, "settings: the stub restores match 1's global");
-        Check(stub[11] == 0xE8 && stub[16] == 0x83 && stub[27] == 0x61 && stub[28] == 0x9D &&
-                  stub[29] == 0xC3,
-              "settings: the stub's fixed opcodes are pinned");
-    }
-
-    char* g_settingsBuffer = nullptr;
-    const char* g_settingsSubfolder = nullptr;
-    std::uintptr_t g_stubEbx = 0;
-    std::uintptr_t g_stubEsi = 0;
-    std::uintptr_t g_stubEcx = 0;
-    std::uintptr_t g_stubEdx = 0;
-    std::uintptr_t g_stubEax = 0;
-    std::uintptr_t g_stubOutEbx = 0;
-    std::uintptr_t g_stubOutEsi = 0;
-    std::uintptr_t g_stubOutEcx = 0;
-    std::uintptr_t g_stubOutEax = 0;
-    std::uintptr_t g_stubOutEdx = 0;
-    std::uint8_t g_stubOutCarry = 0;
-    void* g_stubCode = nullptr;
-
-    void __cdecl RecordSettingsCall(char* buffer, const char* subfolder)
-    {
-        g_settingsBuffer = buffer;
-        g_settingsSubfolder = subfolder;
-    }
-
-    // Executes the exact assembled body with controlled registers: saved EBX must
-    // reach the helper as the profile folder, saved ECX must become the global,
-    // EBX/ESI/EDX/EAX must survive, and the carry flag must be preserved.
-    extern "C" void __declspec(naked) RunSettingsStub()
-    {
-        __asm
-        {
-            pushad
-            mov eax, dword ptr [g_stubEbx]
-            mov ebx, eax
-            mov eax, dword ptr [g_stubEsi]
-            mov esi, eax
-            mov eax, dword ptr [g_stubEcx]
-            mov ecx, eax
-            mov eax, dword ptr [g_stubEdx]
-            mov edx, eax
-            mov eax, dword ptr [g_stubEax]
-            stc
-            call dword ptr [g_stubCode]
-            mov dword ptr [g_stubOutEax], eax
-            mov dword ptr [g_stubOutEbx], ebx
-            mov dword ptr [g_stubOutEsi], esi
-            mov dword ptr [g_stubOutEcx], ecx
-            mov dword ptr [g_stubOutEdx], edx
-            setc al
-            movzx eax, al
-            mov byte ptr [g_stubOutCarry], al
-            popad
-            ret
-        }
-    }
-
-    void TestSettingsStubContract()
-    {
-        char buffer[16]{};
-        const char subfolder[] = "GTAIV";
-        g_stubEbx = reinterpret_cast<std::uintptr_t>(subfolder);
-        g_stubEsi = 0x11111111;
-        g_stubEdx = 0x22222222;
-        g_stubEax = 0x33333333;
-        g_stubEcx = 0x44444444;
-        g_stubCode = xla::settings_path::MakeSettingsStub(
-            0x55555555, 0x66666666,
-            static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&RecordSettingsCall)));
-        Check(g_stubCode != nullptr, "settings: the stub allocates");
-        if (g_stubCode == nullptr)
-        {
-            return;
-        }
-
-        RunSettingsStub();
-        Check(g_settingsBuffer == reinterpret_cast<char*>(0x55555555),
-              "settings: the stub passes the buffer operand");
-        Check(g_settingsSubfolder == subfolder,
-              "settings: the stub passes the saved EBX as the profile folder");
-        Check(g_stubOutEcx == 0x66666666,
-              "settings: the stub restores ECX from the recovered global");
-        Check(g_stubOutEbx == g_stubEbx && g_stubOutEsi == g_stubEsi &&
-                  g_stubOutEdx == g_stubEdx && g_stubOutEax == g_stubEax,
-              "settings: EBX/ESI/EDX/EAX survive the stub");
-        Check(g_stubOutCarry == 1, "settings: the stub preserves the carry flag");
-        (void)buffer;
+        // InstallForModule with no root is a logged no-op.
+        Check(!xla::profile::InstallForModule(module.Handle(), {}),
+              "profile: an empty root is refused");
     }
 
     void TestSkipLauncherTable()
@@ -1199,10 +1028,10 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 23> expected{{
+        const std::array<std::string_view, 22> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
-            "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "LocalSettings",
-            "Savegames", "SkipLauncher", "BorderlessWindow", "FocusLoss", "CustomSettingsPath",
+            "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "Profile",
+            "Savegames", "SkipLauncher", "BorderlessWindow", "FocusLoss",
             "LauncherStage", "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
@@ -1239,9 +1068,7 @@ int main()
     TestIatReplacement();
     TestSavegames();
     TestRegistry();
-    TestUserdata();
-    TestSettingsPath();
-    TestSettingsStubContract();
+    TestProfile();
     TestSkipLauncherTable();
     TestSkipLauncherPass();
     TestSkipLauncherCreateFileSlot();

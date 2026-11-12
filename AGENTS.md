@@ -25,15 +25,18 @@ The invariants the tree is built around:
   re-runs the same pass on one worker after the first pass has returned.
 - **Every install is INI-gated, and all-off is inert.** `SavegameFix`,
   `SkipLauncher`, `LegacyLauncher`, `RemoveRegistryPathDependency`,
-  `BorderlessWindowed`, `DoNotPauseOnMinimize`, `LocalSettingsPath` and a
-  non-empty `CustomSettingsPath` cover the installs; `StartupWarnings` only
-  gates the non-fatal dialogs/notice. With every install key `0` and both paths
+  `BorderlessWindowed`, `DoNotPauseOnMinimize` and a non-empty
+  `[USERPROFILE] CustomUserProfilePath` cover the installs; `StartupWarnings` only
+  gates the non-fatal dialogs/notice. With every install key `0` and the path
   empty, `startup::AnyInstallEnabled()` is false, no install runs and the image
   unprotect is skipped; `TestAllOff` pins it.
-- **The local-path divergence is intentional.** `LocalSettingsPath`,
-  `CustomSavePath` and `CustomSettingsPath` are never switched off because
-  FusionFix is present; only the windowed options are gated. See
-  `docs/parity.md`; do not "restore" the old gate.
+- **The user-data divergence is intentional.** `CustomUserProfilePath` is never
+  switched off because FusionFix is present; only the windowed options are gated.
+  See `docs/parity.md`; do not "restore" the old gate. It replaces the old addon's
+  `LocalSettingsPath`, `CustomSavePath` and `CustomSettingsPath` with one redirect
+  of the shell profile folders, and it installs from `DllMain` because the game
+  caches its roots in `__initalizePaths` (`0x856BF0`) before FusionFix's async
+  hook would run.
 - **Recovered tables are data.** Signature strings, offsets, stored bytes, fill
   values and the stage order are 1:1 with the old addon. Renaming is free;
   changing a number or a scan is a behaviour change.
@@ -42,8 +45,8 @@ The invariants the tree is built around:
 
 - `source/*.ixx` — one C++23 module interface unit per feature (`common`,
   `patch`, `build`, `config`, `warnings`, `probe`, `savegames`, `registry`,
-  `userdata`, `settings_path`, `skip_launcher`, `dfa`, `rom_window`, `windowed`,
-  `startup`). They are listed in the `CXX_MODULES` file set.
+  `profile`, `skip_launcher`, `dfa`, `rom_window`, `windowed`, `startup`). They
+  are listed in the `CXX_MODULES` file set.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
 - `source/dllmain.cpp` — the entry point and the only plain TU in `source/`.
@@ -67,7 +70,7 @@ The invariants the tree is built around:
   recovered SkipLauncher table golden.
 - `tools/` — `check_no_installs.py`, `check_module_layout.py` and
   `check_skip_launcher_tables.py`.
-- `docs/parity.md` — feature provenance, the local-path divergence, the tests
+- `docs/parity.md` — feature provenance, the user-data divergence, the tests
   and the live-game gaps.
 - `README.md` — install, features, all-off and build.
 
@@ -76,17 +79,18 @@ The invariants the tree is built around:
 **Mirrored:**
 
 - the borderless window, centring and focus-loss input (`windowed.ixx`);
-- the `SHGetFolderPath` user-data redirect (`userdata.ixx`);
+- the `SHGetFolderPath` user-data redirect and its `[USERPROFILE]
+  CustomUserProfilePath` key (`profile.ixx`);
 - the `Event<Args...>` tiers, `Log`, `Game` context and `find_pattern` idiom
   (`common.ixx`, `patch.ixx`);
 - the task-dialog/FusionFix-notice shape (`warnings.ixx`).
 
-**Deliberately not FusionFix-gated:** `LocalSettingsPath`, `CustomSavePath`,
-`CustomSettingsPath`. The old addon's gate misbehaves with FusionFix on 1.0.8.0
-and can clear a path the user configured. The windowed options stay gated.
+**Deliberately not FusionFix-gated:** `[USERPROFILE] CustomUserProfilePath`. The
+old addon's gate misbehaves with FusionFix on 1.0.8.0 and can clear a path the
+user configured. The windowed options stay gated.
 
 **No FusionFix counterpart / recovered:** the SkipLauncher main table, the DFA
-and ROM stages, the WM_ROM service, the savegame path/CRC install, the registry
+and ROM stages, the WM_ROM service, the save-file CRC install, the registry
 path and the legacy launcher stage.
 
 ## Build and test

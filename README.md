@@ -14,20 +14,24 @@ as a companion; it also works on its own.
 
 - Skip the launcher/DRM checks (`SkipLauncher`; `LegacyLauncher` selects the
   legacy DFA + WM_ROM stage when `SkipLauncher=0`).
-- Reconstruct the game's savegame folder, or redirect it with `CustomSavePath`,
-  and apply the save-file CRC32 bypass (`SavegameFix`).
+- Put the game's user data — saves, settings, user music, videos and benchmarks —
+  under one folder (`[USERPROFILE] CustomUserProfilePath`, default
+  `./Savefiles`), and apply the save-file CRC32 bypass (`SavegameFix`).
 - Remove the Rockstar Games registry path dependency
   (`RemoveRegistryPathDependency`).
-- Set a custom settings folder (`CustomSettingsPath`), or move the shell
-  user-data folders into a saves folder inside the game folder
-  (`LocalSettingsPath`).
 - Add borderless windowed mode and keep rendering while the borderless window is
   unfocused (`BorderlessWindowed`, `DoNotPauseOnMinimize`).
-- Every install has its own INI toggle. With every feature at `0` and both paths
+- Every install has its own INI toggle. With every feature at `0` and the path
   empty the add-on makes no game changes at all — see
   [Switching everything off](#switching-everything-off).
 - Startup warnings as FusionFix-style task dialogs (`StartupWarnings` gates the
   non-fatal ones).
+
+`CustomUserProfilePath` replaces the old add-on's `LocalSettingsPath`,
+`CustomSavePath` and `CustomSettingsPath`; it is the same one redirect for all of
+them. The key is FusionFix's (same section and name); see
+[docs/parity.md](docs/parity.md) for why FusionFix's own copy of it does not take
+effect on 1.0.8.0 and why this one does.
 
 The port covers the feature set requested for this tree. The old addon's
 `SkipIntro`, `SkipMenu`, `VRAMFix`, `SkipWebConnect` and its unconditional
@@ -67,19 +71,19 @@ version and loaded-twice dialogs are safety checks, not features, and always run
 
 The add-on resolves its own directory, so `XLivelessAddon.ini`, `XLivelessAddon.log` and the
 FusionFix notice are always next to the ASI. Options documented as relative to the game folder
-(`CustomSettingsPath`, the `LocalSettingsPath` `saves` folder, the registry install-folder
-answer) use the executable's folder instead. A legacy `ZolikaPatch.ini` is read from the ASI's
-folder or from the loader folders under the game folder (`plugins`, `scripts`, `update`).
+(`CustomUserProfilePath`, the registry install-folder answer) use the executable's folder
+instead. A legacy `ZolikaPatch.ini` is read from the ASI's folder or from the loader folders
+under the game folder (`plugins`, `scripts`, `update`).
 
 The ASI links the C runtime statically, so no Visual C++ redistributable is needed.
 
 ## Switching everything off
 
-Set every boolean to `0` and leave `CustomSavePath` / `CustomSettingsPath` empty:
+Set every boolean to `0` and leave `[USERPROFILE] CustomUserProfilePath` empty:
 
-- no savegame redirect or CRC bypass (`SavegameFix=0`),
+- no save-file CRC32 bypass (`SavegameFix=0`),
 - no launcher work (`SkipLauncher=0` and `LegacyLauncher=0`),
-- no registry, user-data or settings redirect,
+- no registry or user-data redirect,
 - no borderless/focus-loss hooks,
 - no non-fatal startup dialogs or FusionFix notice.
 

@@ -131,7 +131,8 @@ namespace
         Check(libraries.find("USER32") != std::string::npos,
               "imports: USER32 is imported (windowed hooks and dialogs)", libraries);
         Check(libraries.find("SHELL32") != std::string::npos,
-              "imports: SHELL32 is imported (LocalSettingsPath)", libraries);
+              "imports: SHELL32 is imported (the CustomUserProfilePath redirect uses its IAT walk)",
+              libraries);
         Check(libraries.find("ADVAPI32") != std::string::npos,
               "imports: ADVAPI32 is imported (registry path)", libraries);
         // The loader probe's EnumProcessModules is resolved to the K32 alias in

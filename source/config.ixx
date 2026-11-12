@@ -10,13 +10,15 @@
 // upstream is all-inline and this project's module-probe build shows it compiles
 // in module purview with MSVC 19.51, so no plain-TU boundary is needed.
 //
-// DIVERGENCE FROM THE OLD ADDON: the local-directory options are never switched
-// off because FusionFix is installed. The old addon gated LocalSettingsPath,
+// DIVERGENCE FROM THE OLD ADDON: the user-data redirect is never switched off
+// because FusionFix is installed. The old addon gated LocalSettingsPath,
 // CustomSavePath and CustomSettingsPath on a FusionFix check, which misbehaves
 // with FusionFix on 1.0.8.0 (the two redirects fight over the same shell/import
-// slots and the gate can clear a path the user configured for this add-on). The
-// new tree gates only the windowed options, which are genuinely FusionFix's
-// subsystem. See docs/parity.md.
+// slots and the gate can clear a path the user configured for this add-on). Those
+// three keys are gone; `[USERPROFILE] CustomUserProfilePath` is one redirect of the
+// shell profile folders and works on this add-on's own detection. The new tree
+// gates only the windowed options, which are genuinely FusionFix's subsystem. See
+// docs/parity.md.
 
 module;
 
@@ -34,15 +36,13 @@ export namespace xla::config
     // DoNotPauseOnMinimize and BorderlessWindowed.
     struct Options
     {
-        std::string customSavePath;
-        std::string customSettingsPath;
+        std::string customUserProfilePath;
         bool savegameFix{true};
         bool skipLauncher{true};
         bool legacyLauncher{true};
         bool removeRegistryPathDependency{true};
         bool doNotPauseOnMinimize{false};
         bool borderlessWindowed{false};
-        bool localSettingsPath{false};
         bool startupWarnings{true};
     };
 
@@ -63,12 +63,13 @@ export namespace xla::config
     };
 
     // The sections searched, in order, in both INIs. `Options` is the modern
-    // layout; the rest are the legacy ZolikaPatch groups. The list order is the
-    // precedence, not the file order: the shipped flat ZolikaPatch.ini relies on
-    // it.
-    inline constexpr std::array<std::string_view, 15> kSections{{
+    // layout; `USERPROFILE` is FusionFix's section for the profile redirect; the
+    // rest are the legacy ZolikaPatch groups. The list order is the precedence, not
+    // the file order: the shipped flat ZolikaPatch.ini relies on it.
+    inline constexpr std::array<std::string_view, 16> kSections{{
         "MAIN",
         "Options",
+        "USERPROFILE",
         "COMPATIBILITY",
         "INPUT",
         "LOADING",
@@ -90,11 +91,7 @@ export namespace xla::config
         R"(; XLivelessAddon
 
 [Options]
-; custom savegames folder; leave empty to use the game default
-CustomSavePath=
-; custom settings folder; relative to the game folder unless it has a drive letter
-CustomSettingsPath=
-; install the savegame path redirect and the save-file CRC32 bypass
+; the save-file CRC32 bypass
 SavegameFix=1
 ; skip the launcher/DRM checks (recovered DFA and ROM stages)
 SkipLauncher=1
@@ -106,10 +103,13 @@ RemoveRegistryPathDependency=1
 DoNotPauseOnMinimize=1
 ; borderless window
 BorderlessWindowed=1
-; move savegames and settings to a saves folder inside the game folder (independent of FusionFix)
-LocalSettingsPath=0
 ; non-fatal startup warnings (old ASI loader, FusionFix notice); fatal checks always run
 StartupWarnings=1
+
+[USERPROFILE]
+; where the game keeps its user data: saves, settings, user music, videos and benchmarks.
+; relative paths are relative to the game folder; leave empty to use the Windows profile
+CustomUserProfilePath=./Savefiles
 )";
 
     inline constexpr std::string_view DefaultIniText() noexcept
@@ -133,20 +133,18 @@ StartupWarnings=1
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 8> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 7> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"SkipLauncher", &Options::skipLauncher},
             {"LegacyLauncher", &Options::legacyLauncher},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},
             {"BorderlessWindowed", &Options::borderlessWindowed},
-            {"LocalSettingsPath", &Options::localSettingsPath},
             {"StartupWarnings", &Options::startupWarnings},
         }};
 
-        inline constexpr std::array<StringOption, 2> kStringOptions{{
-            {"CustomSavePath", &Options::customSavePath},
-            {"CustomSettingsPath", &Options::customSettingsPath},
+        inline constexpr std::array<StringOption, 1> kStringOptions{{
+            {"CustomUserProfilePath", &Options::customUserProfilePath},
         }};
 
         // The reader splits on '\n' already, so the CRLF rewrite is inherited

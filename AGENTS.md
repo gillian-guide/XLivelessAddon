@@ -25,8 +25,10 @@ The invariants the tree is built around:
   re-runs the same pass on one worker after the first pass has returned.
 - **Every install is INI-gated, and all-off is inert.** `SavegameFix`,
   `SkipLauncher`, `LegacyLauncher`, `RemoveRegistryPathDependency`,
-  `BorderlessWindowed`, `DoNotPauseOnMinimize` and a non-empty
-  `[USERPROFILE] CustomUserProfilePath` cover the installs; `StartupWarnings` only
+  `RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`,
+  `SkipInternetConnectionCheck`, `SkipHealthCheck`, `BorderlessWindowed`,
+  `DoNotPauseOnMinimize` and a non-empty `[USERPROFILE] CustomUserProfilePath`
+  cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
   empty, `startup::AnyInstallEnabled()` is false, no install runs and the image
   unprotect is skipped; `TestAllOff` pins it.
@@ -45,7 +47,7 @@ The invariants the tree is built around:
 
 - `source/*.ixx` — one C++23 module interface unit per feature (`common`,
   `patch`, `build`, `config`, `warnings`, `probe`, `savegames`, `registry`,
-  `profile`, `skip_launcher`, `dfa`, `rom_window`, `windowed`, `startup`). They
+  `profile`, `core`, `skip_launcher`, `dfa`, `rom_window`, `windowed`, `startup`). They
   are listed in the `CXX_MODULES` file set.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
@@ -63,6 +65,8 @@ The invariants the tree is built around:
   table (data only, not shipped), included inside the module.
 - `source/dfa.ixx` + `source/rom_window.ixx` — the `SkipLauncher=0` legacy DFA
   file-API stage and WM_ROM message window.
+- `source/core.ixx` — the recovered "core" fixes (VDS/data-integrity, DLC token,
+  first-time-play ask, Internet check, health check), under the five per-fix keys.
 - `source/windowed.ixx` — the FusionFix-shaped borderless/focus-loss hooks.
 - `external/` — committed, pinned vendor trees: injector (classic), Hooking.Patterns,
   IniReader + mINI; licences next to each.

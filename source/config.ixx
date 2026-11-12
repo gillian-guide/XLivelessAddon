@@ -38,6 +38,11 @@ export namespace xla::config
     {
         std::string customUserProfilePath;
         bool savegameFix{true};
+        bool removeDataIntegrityChecks{true};
+        bool skipTokenActivation{true};
+        bool skipFirstTimePlayAsk{true};
+        bool skipInternetConnectionCheck{true};
+        bool skipHealthCheck{true};
         bool skipLauncher{true};
         bool legacyLauncher{true};
         bool removeRegistryPathDependency{true};
@@ -93,6 +98,15 @@ export namespace xla::config
 [Options]
 ; the save-file CRC32 bypass
 SavegameFix=1
+; the recovered "core" fixes: the data-integrity (VDS) checks, the DLC token
+; activation, the first-time-play ask, the Internet connection check and the GFWL
+; health check. OpenPreCEPatch's legacy import maps its removed MiscFixes bundle
+; onto these five keys.
+RemoveDataIntegrityChecks=1
+SkipTokenActivation=1
+SkipFirstTimePlayAsk=1
+SkipInternetConnectionCheck=1
+SkipHealthCheck=1
 ; skip the launcher/DRM checks (recovered DFA and ROM stages)
 SkipLauncher=1
 ; legacy DFA + WM_ROM stage, only when SkipLauncher=0; with both at 0 no launcher work
@@ -133,8 +147,13 @@ CustomUserProfilePath=./Savefiles
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 7> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 12> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
+            {"RemoveDataIntegrityChecks", &Options::removeDataIntegrityChecks},
+            {"SkipTokenActivation", &Options::skipTokenActivation},
+            {"SkipFirstTimePlayAsk", &Options::skipFirstTimePlayAsk},
+            {"SkipInternetConnectionCheck", &Options::skipInternetConnectionCheck},
+            {"SkipHealthCheck", &Options::skipHealthCheck},
             {"SkipLauncher", &Options::skipLauncher},
             {"LegacyLauncher", &Options::legacyLauncher},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},

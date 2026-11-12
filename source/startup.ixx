@@ -27,6 +27,7 @@ import probe;
 import savegames;
 import registry;
 import profile;
+import core;
 import skip_launcher;
 import dfa;
 import rom_window;
@@ -416,6 +417,26 @@ namespace xla::startup
                 Log::Print("window: focusLoss={}", installed ? "installed" : "missing");
             };
 
+            Record("CorePatches");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                const core::Options options{
+                    .dataIntegrity = game.Option("RemoveDataIntegrityChecks"),
+                    .tokenActivation = game.Option("SkipTokenActivation"),
+                    .firstTimePlay = game.Option("SkipFirstTimePlayAsk"),
+                    .internetConnection = game.Option("SkipInternetConnectionCheck"),
+                    .healthCheck = game.Option("SkipHealthCheck"),
+                };
+                const core::Report report = core::Install(game.View(), options);
+                Log::Print("core: {} row(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
             Record("LauncherStage");
             FusionFix::onInitEvent() += []
             {
@@ -510,6 +531,11 @@ namespace xla::startup
         const bool legacyLauncher = !skipLauncher && game.Option("LegacyLauncher");
         return game.Option("SavegameFix") || skipLauncher || legacyLauncher ||
                game.Option("RemoveRegistryPathDependency") ||
+               game.Option("RemoveDataIntegrityChecks") ||
+               game.Option("SkipTokenActivation") ||
+               game.Option("SkipFirstTimePlayAsk") ||
+               game.Option("SkipInternetConnectionCheck") ||
+               game.Option("SkipHealthCheck") ||
                !game.OptionString("CustomUserProfilePath").empty() ||
                game.Option("BorderlessWindowed") ||
                game.Option("DoNotPauseOnMinimize");

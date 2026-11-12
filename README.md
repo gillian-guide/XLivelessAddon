@@ -17,6 +17,13 @@ as a companion; it also works on its own.
 - Put the game's user data — saves, settings, user music, videos and benchmarks —
   under one folder (`[USERPROFILE] CustomUserProfilePath`, default
   `./Savefiles`), and apply the save-file CRC32 bypass (`SavegameFix`).
+- The recovered "core" fixes the original distribution kept in this companion:
+  the data-integrity (VDS) checks (`RemoveDataIntegrityChecks`), the DLC token
+  activation and first-time-play ask (`SkipTokenActivation`,
+  `SkipFirstTimePlayAsk`), the Internet connection check
+  (`SkipInternetConnectionCheck`) and the GFWL health check (`SkipHealthCheck`).
+  These are the per-fix keys OpenPreCEPatch's legacy import maps a removed
+  `MiscFixes` value onto.
 - Remove the Rockstar Games registry path dependency
   (`RemoveRegistryPathDependency`).
 - Add borderless windowed mode and keep rendering while the borderless window is

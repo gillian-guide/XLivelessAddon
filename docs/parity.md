@@ -29,6 +29,7 @@ old companion.
 | Unsupported game build exit | `source/build.ixx`, `source/addon.ixx`, `source/warnings.ixx` | — | `source/build.ixx`, `source/startup.ixx`, `source/warnings.ixx` | `TestBuild`, `TestWarnings` (dialog), startup order pins the Build step |
 | Loaded-twice exit | `source/warnings.ixx`, `source/addon.ixx` | — | `source/warnings.ixx`, `source/startup.ixx` | `TestWarnings` (`ClaimSingleInstance` twice) |
 | Save-file CRC32 bypass (`SavegameFix`) | `source/savegames.ixx` (the CRC half) | — | `source/savegames.ixx` | `TestSavegames` (the recovered branch is NOPed, only its two bytes, and a missing signature is a clean skip) |
+| The recovered "core" fixes: data-integrity VDS100/VDS102, DLC token activation, first-time-play ask, InternetGetConnectedState, GFWL health check (`RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipInternetConnectionCheck`, `SkipHealthCheck`) | `source/patches.ixx` (`InstallCore`) | — (the rows are the original ZolikaPatch `MiscFixes` handler's) | `source/core.ixx` | `TestCore` (every recovered row writes its shape on a synthetic image; a missing signature is a skip; all five keys off leaves the image untouched), `TestAllOff` |
 | Rockstar Games registry path dependency | `source/registry.ixx` | — | `source/registry.ixx` | `TestRegistry` (key/value predicates, install-folder answer), `TestIatReplacement` (the shared IAT walker) |
 | `[USERPROFILE] CustomUserProfilePath` (shell user-data redirect; replaces `LocalSettingsPath`, `CustomSavePath`, `CustomSettingsPath`) | `source/userdata.ixx`, `source/savegames.ixx`, `source/patches.ixx` (`InstallCustomSettingsPath`) | `source/userdata.ixx` (the same key and the same SHGetFolderPath A/W redirect) | `source/profile.ixx` | `TestProfile` (`ShouldRedirect`, path resolution, synthetic SHELL32 replacement, end-to-end `CSIDL_PERSONAL`/`CSIDL_APPDATA` answers, foreign-image refusal), `TestFusionFixPresenceAndDivergence` |
 | `SkipLauncher=1`: recovered DFA + ROM stages | `source/skip_launcher.ixx` | — (ZolikaPatch recovered data) | `source/skip_launcher.ixx`, `source/skip_launcher_recovered.inc` | `xla_skip_tables` (71 records), `TestSkipLauncherTable`, `TestSkipLauncherPass`, `TestSkipLauncherCreateFileSlot`, `TestSkipLauncherStub` |
@@ -122,6 +123,7 @@ all defaulting to the old behaviour:
 | Key | Default | Gates |
 | --- | --- | --- |
 | `SavegameFix` | `1` | the save-file CRC32 bypass (old addon: always installed) |
+| `RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipInternetConnectionCheck`, `SkipHealthCheck` | `1` | the old addon's unconditional `InstallCore` rows, split into the five keys OpenPreCEPatch's legacy import names (the removed `MiscFixes` bundle) |
 | `LegacyLauncher` | `1` | the legacy DFA + WM_ROM stage, only consulted when `SkipLauncher=0` (old addon: always installed on that path) |
 | `StartupWarnings` | `1` | the non-fatal old-loader dialog and the FusionFix compatibility notice |
 

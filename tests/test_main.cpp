@@ -21,6 +21,7 @@ import probe;
 import savegames;
 import registry;
 import profile;
+import core;
 import skip_launcher;
 import dfa;
 import rom_window;
@@ -296,6 +297,10 @@ namespace
         Check(game.Option("StartupWarnings"), "config: StartupWarnings defaults on");
         Check(xla::Game::Get().OptionString("CustomUserProfilePath").empty(),
               "config: CustomUserProfilePath code default is empty (feature off)");
+        Check(game.Option("RemoveDataIntegrityChecks") && game.Option("SkipTokenActivation") &&
+                  game.Option("SkipFirstTimePlayAsk") &&
+                  game.Option("SkipInternetConnectionCheck") && game.Option("SkipHealthCheck"),
+              "config: the five core fixes default on");
 
         TempDir missing("xla-config-missing");
         (void)xla::config::Load(missing.Path());
@@ -413,6 +418,9 @@ namespace
                   "[Options]\nSavegameFix=0\nSkipLauncher=0\nLegacyLauncher=0\n"
                   "RemoveRegistryPathDependency=0\nDoNotPauseOnMinimize=0\n"
                   "BorderlessWindowed=0\nStartupWarnings=0\n"
+                  "RemoveDataIntegrityChecks=0\nSkipTokenActivation=0\n"
+                  "SkipFirstTimePlayAsk=0\nSkipInternetConnectionCheck=0\n"
+                  "SkipHealthCheck=0\n"
                   "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
         xla::config::Publish(loaded);
@@ -433,6 +441,11 @@ namespace
         flip("SkipLauncher");
         flip("LegacyLauncher"); // SkipLauncher is 0 here
         flip("RemoveRegistryPathDependency");
+        flip("RemoveDataIntegrityChecks");
+        flip("SkipTokenActivation");
+        flip("SkipFirstTimePlayAsk");
+        flip("SkipInternetConnectionCheck");
+        flip("SkipHealthCheck");
         flip("BorderlessWindowed");
         flip("DoNotPauseOnMinimize");
 
@@ -625,6 +638,100 @@ namespace
         std::vector<std::byte> empty(0x100, std::byte{0});
         xla::savegames::Install(xla::Image{empty.data(), empty.size()});
         Check(true, "savegames: a missing crc32 signature is a clean skip");
+    }
+
+    void TestCore()
+    {
+        // Every recovered row writes its shape at its offset. One synthetic image
+        // holds a copy of each signature, far enough apart that the writes cannot
+        // collide; `BytesOf` fills the wildcards with NOPs, which the scanner's
+        // mask ignores.
+        constexpr std::size_t kStride = 0x100;
+        const std::array<std::span<const xla::core::Row>, 5> tables{
+            xla::core::DataIntegrityRows(),
+            xla::core::TokenActivationRows(),
+            xla::core::FirstTimePlayRows(),
+            xla::core::InternetConnectionRows(),
+            xla::core::HealthCheckRows(),
+        };
+        std::size_t total = 0;
+        for (const auto& table : tables)
+        {
+            total += table.size();
+        }
+
+        std::vector<std::byte> image(0x100 * (total + 4), std::byte{0});
+        std::vector<std::size_t> offsets;
+        std::size_t cursor = 0x100;
+        for (const auto& table : tables)
+        {
+            for (const auto& row : table)
+            {
+                WriteBytes(image, cursor, BytesOf(row.signature));
+                offsets.push_back(cursor);
+                cursor += kStride;
+            }
+        }
+
+        const xla::Image view{image.data(), image.size()};
+        const xla::core::Options all{};
+        const auto report = xla::core::Install(view, all);
+        Check(report.applied == total && report.missing == 0,
+              "core: every recovered row applies",
+              std::format("{}/{}", report.applied, total));
+
+        std::size_t index = 0;
+        for (const auto& table : tables)
+        {
+            for (const auto& row : table)
+            {
+                const std::byte* site = image.data() + offsets[index];
+                const auto byte = [&](std::ptrdiff_t at)
+                { return std::to_integer<std::uint8_t>(site[at]); };
+                bool ok = false;
+                switch (row.shape)
+                {
+                case xla::core::Shape::branchToJump:
+                    ok = byte(row.offset) == 0xEB;
+                    break;
+                case xla::core::Shape::shortJump:
+                    ok = byte(row.offset) == 0xEB && byte(row.offset + 1) == row.value;
+                    break;
+                case xla::core::Shape::nop2:
+                    ok = byte(row.offset) == 0x90 && byte(row.offset + 1) == 0x90;
+                    break;
+                case xla::core::Shape::ret:
+                    ok = byte(row.offset) == 0xC3;
+                    break;
+                case xla::core::Shape::movEaxOne:
+                    ok = byte(row.offset) == 0xB8 && byte(row.offset + 1) == 0x01 &&
+                         byte(row.offset + 2) == 0x00 && byte(row.offset + 3) == 0x00 &&
+                         byte(row.offset + 4) == 0x00;
+                    break;
+                }
+                Check(ok, std::format("core: row {} writes its shape", index));
+                ++index;
+            }
+        }
+
+        // An absent signature is a logged skip, never a fault.
+        std::vector<std::byte> empty(0x100, std::byte{0});
+        const auto skipped = xla::core::Install(xla::Image{empty.data(), empty.size()}, all);
+        Check(skipped.applied == 0 && skipped.missing == total,
+              "core: a missing signature is a skip");
+
+        // Every key off applies nothing.
+        std::vector<std::byte> untouched(image);
+        xla::core::Options none{};
+        none.dataIntegrity = false;
+        none.tokenActivation = false;
+        none.firstTimePlay = false;
+        none.internetConnection = false;
+        none.healthCheck = false;
+        const auto off =
+            xla::core::Install(xla::Image{untouched.data(), untouched.size()}, none);
+        Check(off.applied == 0 && off.missing == 0 && untouched == image,
+              "core: all five keys off leaves the image untouched");
     }
 
     void TestRegistry()
@@ -1028,10 +1135,10 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 22> expected{{
+        const std::array<std::string_view, 23> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
             "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "Profile",
-            "Savegames", "SkipLauncher", "BorderlessWindow", "FocusLoss",
+            "Savegames", "SkipLauncher", "BorderlessWindow", "FocusLoss", "CorePatches",
             "LauncherStage", "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
@@ -1067,6 +1174,7 @@ int main()
     TestPatchScan();
     TestIatReplacement();
     TestSavegames();
+    TestCore();
     TestRegistry();
     TestProfile();
     TestSkipLauncherTable();

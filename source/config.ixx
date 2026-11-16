@@ -44,6 +44,7 @@ export namespace xla::config
         bool skipHealthCheck{true};
         bool skipLauncher{true};
         bool legacyLauncher{true};
+        bool launchWithPlayGTAIV{true};
         bool removeRegistryPathDependency{true};
         bool doNotPauseOnMinimize{false};
         bool borderlessWindowed{false};
@@ -110,6 +111,10 @@ SkipHealthCheck=1
 SkipLauncher=1
 ; legacy DFA + WM_ROM stage, only when SkipLauncher=0; with both at 0 no launcher work
 LegacyLauncher=1
+; rewrite the game's LaunchGTAIV.exe name slots to PlayGTAIV.exe while a live
+; PlayGTAIV.exe is present, so a PlayGTAIV-launched game passes the DRM's launcher
+; check; standalone, it does not need OpenPreCEPatch
+LaunchWithPlayGTAIV=1
 ; remove the Rockstar Games registry path dependency
 RemoveRegistryPathDependency=1
 ; keep rendering while the borderless window is unfocused
@@ -146,7 +151,7 @@ CustomUserProfilePath=./Savefiles
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 12> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 13> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"RemoveDataIntegrityChecks", &Options::removeDataIntegrityChecks},
             {"SkipTokenActivation", &Options::skipTokenActivation},
@@ -155,6 +160,7 @@ CustomUserProfilePath=./Savefiles
             {"SkipHealthCheck", &Options::skipHealthCheck},
             {"SkipLauncher", &Options::skipLauncher},
             {"LegacyLauncher", &Options::legacyLauncher},
+            {"LaunchWithPlayGTAIV", &Options::launchWithPlayGTAIV},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},
             {"BorderlessWindowed", &Options::borderlessWindowed},

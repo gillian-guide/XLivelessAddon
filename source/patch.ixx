@@ -263,6 +263,14 @@ export namespace xla::patch
         return previous;
     }
 
+    // The same call writer without the offset argument: a feature that retargets a
+    // site it has already resolved names the site directly. `E8` plus the rel32 are
+    // written through the injected CALL, the same discipline as `Jump`/`Write`.
+    inline void* Call(Site site, void* destination, std::string_view label)
+    {
+        return Call(site, 0, destination, label);
+    }
+
     // The find-and-apply conveniences the recovered rows use: one line per row,
     // with the signature and the offset visible at the call site.
     inline bool WriteByte(std::string_view signature, std::ptrdiff_t offset,

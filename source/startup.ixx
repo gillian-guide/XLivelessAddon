@@ -87,9 +87,11 @@ namespace xla::startup
             Log::Print("ini={} legacy={} fusionfix={}", loaded.iniPath.string(),
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
             Log::Print("options: savegameFix={} launcher={} legacyLauncher={} "
-                       "profile=\"{}\" borderless={} dontPause={} warnings={}",
+                       "launchWithPlayGTAIV={} profile=\"{}\" borderless={} dontPause={} "
+                       "warnings={}",
                        game.Option("SavegameFix"), game.Option("SkipLauncher"),
                        game.Option("LegacyLauncher"),
+                       game.Option("LaunchWithPlayGTAIV"),
                        game.OptionString("CustomUserProfilePath"),
                        game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
                        game.Option("StartupWarnings"));
@@ -363,6 +365,22 @@ namespace xla::startup
                 launcher::InstallSkipStage(game.View());
             };
 
+            Record("LaunchWithPlayGTAIV");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("LaunchWithPlayGTAIV"))
+                {
+                    Log::Trace("launchWithPlayGTAIV: option off");
+                    return;
+                }
+                launcher::InstallLaunchWithPlayGTAIV(game.View(), game.Build());
+            };
+
             Record("BorderlessWindow");
             FusionFix::onInitEvent() += []
             {
@@ -500,6 +518,7 @@ namespace xla::startup
         const bool skipLauncher = game.Option("SkipLauncher");
         const bool legacyLauncher = !skipLauncher && game.Option("LegacyLauncher");
         return game.Option("SavegameFix") || skipLauncher || legacyLauncher ||
+               game.Option("LaunchWithPlayGTAIV") ||
                game.Option("RemoveRegistryPathDependency") ||
                game.Option("RemoveDataIntegrityChecks") ||
                game.Option("SkipTokenActivation") ||

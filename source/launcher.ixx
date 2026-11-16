@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.launcher - the launcher family: both launcher stages the INI selects.
+// xla.launcher - the launcher family: every launcher stage the INI selects.
 //
 //   SkipLauncher=1  the recovered DFA + ROM stage: the 25-entry main table and
 //                   the two multi-hit collectors (0x10045CE0), the six DFA
@@ -11,10 +11,30 @@
 //   SkipLauncher=0  the legacy DFA file-API stage and the WM_ROM message window
 //                   (with LegacyLauncher=1), descended from XLivelessAddon's
 //                   dfa.ixx and rom_window.ixx.
+//   LaunchWithPlayGTAIV
+//                   the recovered launcher-name rewrite (ZolikaPatch handler
+//                   0x100441B0). GTA IV's SecuROM initialisation (sub_48FC30 on
+//                   1.0.8.0) lowercases its parent process's module path and
+//                   searches it for the text of a `.rdata` literal that reads
+//                   `LaunchGTAIV.exe\0`; a game started through `PlayGTAIV.exe`
+//                   fails that search and leaves through lmsgboxExit("SRLC10")
+//                   (the "Game needs to be launched using LaunchGTAIV.exe"
+//                   dialog). The arm rewrites the recovered `.rdata` slot(s) to
+//                   `PlayGTAIV.exe\0e\0`, but only while a live PlayGTAIV.exe is
+//                   in the process list (the handler's own sub_10003A10 gate), so
+//                   a GTAIV.exe started directly is left alone.
+//
+// The LaunchWithPlayGTAIV key is ZolikaPatch's (OpenPreCEPatch's
+// [COMPATIBILITY] surface), not the old add-on's. The companion owns it on
+// purpose: it is what makes a PlayGTAIV.exe-launched 1.0.8.0 start, and a
+// standalone companion must not need OpenPreCEPatch to start the game. That
+// ownership is a deliberate companion-side divergence, recorded in AGENTS.md and
+// the README; the slot table, the build switch, the process gate, the payload
+// and the refusal rules are the recovered handler's.
 //
 // The module is laid out in reading order:
 //
-//   1. the SkipLauncher=1 data model and API;
+//   1. the SkipLauncher=1 data model and API, and the LaunchWithPlayGTAIV API;
 //   2. the legacy stage's API, in its own legacy::dfa / legacy::rom namespaces;
 //   3. the recovered main table, included from launcher_recovered.inc
 //      (data only, not shipped, kept for parity and the native suite);
@@ -22,14 +42,18 @@
 //      collected jumps;
 //   5. the pass that applies the selected stage;
 //   6. the two install steps the startup driver calls;
-//   7. the ABI-exact SkipLauncher=1 hook bodies and the RomSet stub;
-//   8. the legacy stage's bodies.
+//   7. the LaunchWithPlayGTAIV arm: the recovered slot table, the whole-image
+//      rewrite, the process walk and its install step;
+//   8. the ABI-exact SkipLauncher=1 hook bodies and the RomSet stub;
+//   9. the legacy stage's bodies.
 //
 // Behaviour and recovered data are ported from
 // openprecepatch/xlivelessaddon/source/skip_launcher.ixx, dfa.ixx and
-// rom_window.ixx. Row order, bytes, offsets, lengths and fill values are data;
-// the native suite pins the table shape, the shipped stage set, the bounds
-// behaviour and the hook-body contracts.
+// rom_window.ixx, and the LaunchWithPlayGTAIV arm from
+// readable-fusion-opcep/source/launcher.ixx (the recovered handler 0x100441B0).
+// Row order, bytes, offsets, lengths and fill values are data; the native suite
+// pins the table shape, the shipped stage set, the bounds behaviour, the slot
+// write set and the hook-body contracts.
 //
 // The two live DFA/ROM copies (SkipLauncher=1 in the skip stage above,
 // SkipLauncher=0 under legacy::dfa/legacy::rom) are deliberately not merged into
@@ -40,6 +64,10 @@
 module;
 
 #include <common.hxx>
+
+// PROCESSENTRY32 / Process32First: the launcher arm's sub_10003A10 walk looks for
+// a live `PlayGTAIV.exe` before it writes anything.
+#include <tlhelp32.h>
 
 export module launcher;
 
@@ -265,6 +293,66 @@ export namespace xla::launcher
     // 0x00426440 (0xC0000005), so the crash evidence is the reason for the build
     // test, not a preference.
     void InstallLegacyStage(const Image& image, GameBuild build);
+
+    // ---------------------------------------------------------------------
+    // The LaunchWithPlayGTAIV arm (the recovered handler 0x100441B0)
+    // ---------------------------------------------------------------------
+
+    // The text both slots hold before the write: `LaunchGTAIV.exe\0`.
+    inline constexpr std::string_view kSlotSignature =
+        "4C 61 75 6E 63 68 47 54 41 49 56 2E 65 78 65 00";
+
+    // The payload: `PlayGTAIV.exe\0` plus the `e\0` of the old, longer name that
+    // survives the shorter copy. The original builds it in two 8-byte `mov dword
+    // ptr [..], imm32` pairs (dwords 2036427856, 1229018183, 2019896918, 6619237);
+    // the capital `P` is the original's, and the game lowercases both sides before
+    // it compares, so the case never decides the match.
+    inline constexpr std::array<std::uint8_t, 16> kName{
+        'P', 'l', 'a', 'y', 'G', 'T', 'A', 'I', 'V', '.', 'e', 'x', 'e', 0, 'e', 0,
+    };
+
+    // One case of the recovered switch. The five cases 0x100441B0 carries are the
+    // builds the original rewrote; every other classified build takes the switch's
+    // `default: return`, which this table keeps as an empty site set (the
+    // classifier's own builds, not just the builds the key's mask consults).
+    struct SlotSet
+    {
+        GameBuild build;
+        std::span<const std::uint32_t> sites;
+    };
+
+    // Every classified build, in the classifier's order. The recovered cases hold
+    // two RVAs each; an empty set is the switch's default case.
+    std::span<const SlotSet> LaunchSlots() noexcept;
+
+    // The two RVAs of `build`, or an empty span for a build the switch has no case
+    // for (1.0.0.4 and every EFLC build).
+    std::span<const std::uint32_t> SlotsFor(GameBuild build) noexcept;
+
+    // sub_10003A10: the process list holds a live `PlayGTAIV.exe`. The tree builds
+    // UNICODE, so the record is the W form of the same entry and the name
+    // comparison is `std::wcscmp`, as the original's ANSI `strcmp` compares the
+    // same eight characters.
+    bool LauncherRunning() noexcept;
+
+    // The offline harness has no launcher process to find, so it pins the walk's
+    // answer: -1 asks the process list, 0 and 1 force the answer. Only the native
+    // suite calls this; the shipped ASI never does.
+    void SetProbeOverride(std::int32_t forced) noexcept;
+    std::int32_t ProbeOverride() noexcept;
+
+    // The write set of one image: both slots of `sites`, and only when the image
+    // holds exactly that many occurrences of the old text, each at the recovered
+    // offset. A shorter or longer view refuses the whole arm -- a subset install
+    // would rewrite a slot the original never touches. Answers the number of
+    // stores (0 or sites.size()).
+    std::size_t RewriteSlots(const Image& image,
+                             std::span<const std::uint32_t> sites) noexcept;
+
+    // The LaunchWithPlayGTAIV install step. The startup driver gates it with the
+    // key; the arm keeps the recovered process gate itself, so a GTAIV.exe started
+    // directly is never rewritten even when the key is on.
+    void InstallLaunchWithPlayGTAIV(const Image& image, GameBuild build);
 } // namespace xla::launcher
 
 // The SkipLauncher=0 stage, in its own namespaces so the two live DFA/ROM copies
@@ -845,7 +933,201 @@ namespace xla::launcher
 } // namespace xla::launcher
 
 // ---------------------------------------------------------------------------
-// 6. The SkipLauncher=1 hook bodies
+// 7. The LaunchWithPlayGTAIV arm
+// ---------------------------------------------------------------------------
+//
+// The recovered handler 0x100441B0 has three gates, in its own order: the key
+// (the caller's gate), the sub_10003A10 process walk for a live `PlayGTAIV.exe`,
+// then the build switch (cases 1, 5, 7, 8 and 9 = 1.0.0.0, 1.0.4.0, 1.0.6.0,
+// 1.0.7.0 and 1.0.8.0). Its write per case is two 16-byte stores at the RVAs
+// below. Every other classified build takes the switch's `default: return`:
+// 1.0.0.4 still carries the two slots and each EFLC image one, and the original
+// rewrites none of them, so this table gives those builds no sites and the arm
+// refuses them without scanning.
+//
+// The slots are in `.rdata`, outside the executable range `find_pattern` covers,
+// so the scan is over the whole image and wildcard-free. It must resolve exactly
+// the recovered count, at exactly the recovered RVAs; anything else (a modded
+// image with a third copy, a build whose slots moved, a shorter view) refuses the
+// whole arm instead of writing a subset.
+//
+// The key is ZolikaPatch's, owned here on purpose (see the module header): it is
+// the one arm that makes a PlayGTAIV.exe-launched 1.0.8.0 start without
+// OpenPreCEPatch.
+
+namespace xla::launcher
+{
+    namespace
+    {
+        // The recovered cases of the switch, in its order, at the builds of this
+        // tree's classifier (case 1: 0x9F043C/0x98FA0C, case 5: 0x9EA184/0x9DD8A0,
+        // case 7: 0x9F8F40/0xA9D0D8, case 8: 0x9F9F70/0xA9E118, case 9:
+        // 0xA508F8/0xA5A5E4).
+        inline constexpr std::uint32_t kSlots1000[]{0x9F043Cu, 0x98FA0Cu};
+        inline constexpr std::uint32_t kSlots1040[]{0x9EA184u, 0x9DD8A0u};
+        inline constexpr std::uint32_t kSlots1060[]{0x9F8F40u, 0xA9D0D8u};
+        inline constexpr std::uint32_t kSlots1070[]{0x9F9F70u, 0xA9E118u};
+        inline constexpr std::uint32_t kSlots1080[]{0xA508F8u, 0xA5A5E4u};
+
+        // One row per build the classifier can return. The empty rows are the
+        // switch's `default: return`, not an omission: the original has no case
+        // for 1.0.0.4 or EFLC, and its handler does nothing there.
+        inline constexpr SlotSet kSlotSets[]{
+            {GameBuild::v1000, kSlots1000},
+            {GameBuild::v1010, {}},
+            {GameBuild::v1020, {}},
+            {GameBuild::v1030, {}},
+            {GameBuild::v1040, kSlots1040},
+            {GameBuild::v1050, {}}, // 1.0.0.4: two slots on the image, no case
+            {GameBuild::v1060, kSlots1060},
+            {GameBuild::v1070, kSlots1070},
+            {GameBuild::v1080, kSlots1080},
+            {GameBuild::v1100, {}}, // the EFLC images carry one slot, no case
+            {GameBuild::v1110, {}},
+            {GameBuild::v1120, {}},
+            {GameBuild::v1130, {}},
+        };
+        static_assert(std::size(kSlotSets) == 13,
+                      "one LaunchWithPlayGTAIV case per classified build");
+
+        std::atomic<std::int32_t> gProbeOverride{-1};
+    } // namespace
+
+    std::span<const SlotSet> LaunchSlots() noexcept
+    {
+        return kSlotSets;
+    }
+
+    std::span<const std::uint32_t> SlotsFor(GameBuild build) noexcept
+    {
+        for (const SlotSet& set : kSlotSets)
+        {
+            if (set.build == build)
+            {
+                return set.sites;
+            }
+        }
+        return {};
+    }
+
+    bool LauncherRunning() noexcept
+    {
+        const HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+
+        PROCESSENTRY32 entry{};
+        entry.dwSize = sizeof(entry);
+        bool found = false;
+        if (::Process32First(snapshot, &entry) != FALSE)
+        {
+            do
+            {
+                if (std::wcscmp(entry.szExeFile, L"PlayGTAIV.exe") == 0)
+                {
+                    found = true;
+                    break;
+                }
+            } while (::Process32Next(snapshot, &entry) != FALSE);
+        }
+        ::CloseHandle(snapshot);
+        return found;
+    }
+
+    void SetProbeOverride(std::int32_t forced) noexcept
+    {
+        gProbeOverride.store(forced);
+    }
+
+    std::int32_t ProbeOverride() noexcept
+    {
+        return gProbeOverride.load();
+    }
+
+    std::size_t RewriteSlots(const Image& image,
+                             std::span<const std::uint32_t> sites) noexcept
+    {
+        if (image.empty() || sites.empty())
+        {
+            return 0;
+        }
+
+        patch::Pattern pattern = patch::FindIn(image, kSlotSignature, 0);
+        if (pattern.size() != sites.size())
+        {
+            Log::Print("launchWithPlayGTAIV: {} name slot(s), expected {}: skipped",
+                       pattern.size(), sites.size());
+            return 0;
+        }
+
+        // The scan reports its hits in RVA order; the recovered table keeps the
+        // handler's case order (1.0.0.0 and 1.0.4.0 store the higher RVA first),
+        // so the two are compared as sets: with the count already matching, every
+        // hit being a recovered site means each site is hit exactly once.
+        for (std::size_t index = 0; index < sites.size(); ++index)
+        {
+            const auto offset = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(pattern.get<std::uint8_t>(index)) -
+                reinterpret_cast<std::uintptr_t>(image.base));
+            bool recovered = false;
+            for (const std::uint32_t site : sites)
+            {
+                recovered = recovered || offset == site;
+            }
+            if (!recovered)
+            {
+                Log::Print("launchWithPlayGTAIV: a name slot is at {:#x}, not one of the "
+                           "recovered sites: skipped",
+                           offset);
+                return 0;
+            }
+        }
+
+        for (const std::uint32_t site : sites)
+        {
+            if (!patch::WriteRawAt(image,
+                                   reinterpret_cast<std::uint8_t*>(image.base) + site,
+                                   kName, "launchWithPlayGTAIV: name slot"))
+            {
+                Log::Line("launchWithPlayGTAIV: a recovered site is outside the image: skipped");
+                return 0;
+            }
+        }
+        return sites.size();
+    }
+
+    void InstallLaunchWithPlayGTAIV(const Image& image, GameBuild build)
+    {
+        // The handler's own gate first (0x100441C3): sub_10003A10, a live
+        // PlayGTAIV.exe. A game started directly keeps its `LaunchGTAIV.exe`
+        // slots, which is what the original does even with the key on.
+        const std::int32_t forced = ProbeOverride();
+        if (forced >= 0 ? forced == 0 : !LauncherRunning())
+        {
+            Log::Trace("launchWithPlayGTAIV: no live PlayGTAIV.exe; skipped");
+            return;
+        }
+
+        const std::span<const std::uint32_t> sites = SlotsFor(build);
+        if (sites.empty())
+        {
+            Log::Trace("launchWithPlayGTAIV: build {} has no switch case; skipped",
+                       BuildLabel(build));
+            return;
+        }
+
+        const std::size_t written = RewriteSlots(image, sites);
+        if (written != 0)
+        {
+            Log::Print("launchWithPlayGTAIV: {} PlayGTAIV.exe name slot(s) patched", written);
+        }
+    }
+} // namespace xla::launcher
+
+// ---------------------------------------------------------------------------
+// 8. The SkipLauncher=1 hook bodies
 // ---------------------------------------------------------------------------
 //
 // The ABI is the recovered contract:
@@ -1162,7 +1444,7 @@ namespace xla::launcher
 } // namespace xla::launcher
 
 // ---------------------------------------------------------------------------
-// 7. The SkipLauncher=0 legacy stage
+// 9. The SkipLauncher=0 legacy stage
 // ---------------------------------------------------------------------------
 //
 // The SkipLauncher=0 copy differs from the SkipLauncher=1 stage above:

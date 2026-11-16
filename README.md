@@ -14,7 +14,12 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 
 - `SkipLauncher`/`LegacyLauncher` — skip the launcher/DRM checks with the recovered DFA and
   ROM stages, and run the legacy DFA file-API + WM_ROM stage when the launcher skip is off.
-- `SavegameFix` — apply the save-file CRC32 bypass.
+- `LaunchWithPlayGTAIV` — rewrite the game's `LaunchGTAIV.exe` name slots to `PlayGTAIV.exe`
+  while a live `PlayGTAIV.exe` is present, so a game started through the launcher passes the
+  DRM's launcher check. The companion owns this key itself, so it starts a
+  `PlayGTAIV.exe`-launched game without OpenPreCEPatch.
+- `SavegameFix` — bypass the save-file CRC32 check and harden the save-path close, copy, mutex
+  and "no savegame" call sites with the recovered helpers.
 - `[USERPROFILE] CustomUserProfilePath` — ported from FusionFix with some improvements for
   1.0.8.0.
 - `RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`,
@@ -47,8 +52,8 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite, the ASI image load, the PE checks, the no-install guard, the
-module-layout guard and the recovered SkipLauncher table parity check.
+INI. `ctest` runs the native suite (353 checks), the ASI image load, the PE checks, the
+no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit
 only.

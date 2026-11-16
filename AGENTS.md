@@ -24,9 +24,10 @@ The invariants the tree is built around:
   probe retry (the DRM may not have rewritten the image at attach time), which
   re-runs the same pass on one worker after the first pass has returned.
 - **Every install is INI-gated, and all-off is inert.** `SavegameFix`,
-  `SkipLauncher`, `LegacyLauncher`, `RemoveRegistryPathDependency`,
-  `RemoveDataIntegrityChecks`, `SkipTokenActivation`, `SkipFirstTimePlayAsk`,
-  `SkipInternetConnectionCheck`, `SkipHealthCheck`, `BorderlessWindowed`,
+  `SkipLauncher`, `LaunchWithPlayGTAIV`, `LegacyLauncher`,
+  `RemoveRegistryPathDependency`, `RemoveDataIntegrityChecks`,
+  `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipInternetConnectionCheck`,
+  `SkipHealthCheck`, `BorderlessWindowed`,
   `DoNotPauseOnMinimize` and a non-empty `[USERPROFILE] CustomUserProfilePath`
   cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
@@ -39,6 +40,16 @@ The invariants the tree is built around:
   of the shell profile folders, and it installs from `DllMain` because the game
   caches its roots in `__initalizePaths` (`0x856BF0`) before FusionFix's async
   hook would run.
+- **`LaunchWithPlayGTAIV` is a deliberate companion-side divergence.** The key is
+  ZolikaPatch's `[COMPATIBILITY]` surface (and OpenPreCEPatch's), not the old
+  add-on's. The companion owns it because a standalone companion must start a
+  `PlayGTAIV.exe`-launched 1.0.8.0 without OpenPreCEPatch: GTA IV's SecuROM
+  initialisation lowercases its parent process's module path and searches it for
+  `LaunchGTAIV.exe\0`, fails for `PlayGTAIV.exe`, and leaves through
+  `lmsgboxExit("SRLC10")` (the "Game needs to be launched using LaunchGTAIV.exe"
+  dialog). Without this arm `SkipLauncher` looks inert. Do not fold the rewrite
+  back into `SkipLauncher`: it is its own key and its own install step, and the
+  recovered process gate (a live `PlayGTAIV.exe`) stays its own.
 - **Recovered tables are data.** Signature strings, offsets, stored bytes, fill
   values and the stage order are 1:1 with the old addon. Renaming is free;
   changing a number or a scan is a behaviour change.
@@ -49,8 +60,9 @@ The invariants the tree is built around:
   infrastructure units (`common`, `patch`, `build`, `config`, `probe`, `startup`)
   and the feature families `warnings`, `savegames`, `registry`, `profile`,
   `core`, `launcher`, `windowed`. They are listed in the `CXX_MODULES` file set.
-  A module is one feature family, not one original handler: `launcher` owns both
-  launcher stages, and `core` owns the five core fixes.
+  A module is one feature family, not one original handler: `launcher` owns every
+  launcher stage (both SkipLauncher stages and the `LaunchWithPlayGTAIV` arm), and
+  `core` owns the five core fixes.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
 - `source/dllmain.cpp` — the entry point and the only plain TU in `source/`.
@@ -64,11 +76,18 @@ The invariants the tree is built around:
   synchronous pass, `AnyInstallEnabled` and the all-off path.
 - `source/launcher.ixx` — the whole launcher family: the `SkipLauncher=1`
   recovered DFA + ROM stage (main table, ABI-exact bodies, the CreateFile slot
-  and the ROM message window) and the `SkipLauncher=0` legacy DFA file-API +
-  WM_ROM stage under `legacy::dfa`/`legacy::rom`. `source/launcher_recovered.inc`
-  is the recovered main table (data only, not shipped), included inside the
-  module.
-- `source/savegames.ixx` — `[Options] SavegameFix`: the save-file CRC32 bypass.
+  and the ROM message window), the `SkipLauncher=0` legacy DFA file-API +
+  WM_ROM stage under `legacy::dfa`/`legacy::rom`, and the `LaunchWithPlayGTAIV`
+  arm (the recovered `.rdata` name-slot rewrite: handler `0x100441B0`, the
+  per-build slot table, the `PlayGTAIV.exe` process walk and its own install
+  step). `source/launcher_recovered.inc` is the recovered main table (data only,
+  not shipped), included inside the module.
+- `source/savegames.ixx` — `[Options] SavegameFix`: the save-file CRC32 bypass
+  **and** the hardened save-path call sites. The ported OpenPreCEPatch arm (chosen
+  because it is the more robust of the two implementations) retargets the ten
+  recovered close/copy/mutex/null call sites at the four ABI-exact bodies
+  (`0x10038570`, `0x10045580`, `0x100455A0`, `0x100455E0`) and NOPs the two-byte
+  CRC32 branch, in the original handler's write order.
 - `source/profile.ixx` — `[USERPROFILE] CustomUserProfilePath`: the shell-folder
   user-data redirect. The save folder is one of the roots it redirects; the
   CRC32 bypass is the separate SavegameFix family.
@@ -104,7 +123,8 @@ old addon's gate misbehaves with FusionFix on 1.0.8.0 and can clear a path the
 user configured. The windowed options stay gated.
 
 **No FusionFix counterpart / recovered:** the SkipLauncher main table, the DFA
-and ROM stages, the WM_ROM service, the save-file CRC install, the registry
+and ROM stages, the WM_ROM service, the `LaunchWithPlayGTAIV` name-slot rewrite,
+the SavegameFix CRC bypass and its hardened save-path call sites, the registry
 path and the legacy launcher stage.
 
 ## Build and test
@@ -120,11 +140,18 @@ ctest --preset trace
 
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
-`build/win-x86/Release/XLivelessAddon.asi`.
+`build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
+**353 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
-SkipLauncher table against the old addon's golden).
+SkipLauncher table against the old addon's golden). The native suite now also
+pins the launcher arm (`TestLaunchWithPlayGTAIV`: the two recovered slots on a
+synthetic image of the right shape, the 16-byte payload, the short/long/off-RVA
+refusals, the one-row-per-classified-build switch and the probe override) and the
+savegame arm (`TestSavegames`: the four recovered body VAs, the ten call
+retargets with their destinations and order, the two-byte NOP, and the
+missing-anchor and short-view skips).
 
 ## Rules learned the hard way
 

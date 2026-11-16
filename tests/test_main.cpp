@@ -5,9 +5,10 @@
 //
 // The suite pins the INI grammar/precedence, the build table, the installer
 // primitives and their widths, the recovered SkipLauncher tables and pass, the
-// [USERPROFILE] CustomUserProfilePath resolution and shell redirect, the savegame
-// CRC32 bypass, the IAT replacement, the startup order and the deliberate
-// user-data divergence from the old addon.
+// LaunchWithPlayGTAIV slot table and its write/refusal/gate rules, the
+// SavegameFix call retargets and bodies, the [USERPROFILE] CustomUserProfilePath
+// resolution and shell redirect, the savegame CRC32 bypass, the IAT replacement,
+// the startup order and the deliberate user-data divergence from the old addon.
 
 #include <common.hxx>
 #include <cstdio>
@@ -159,6 +160,15 @@ namespace
         std::memcpy(image.data() + offset, &value, sizeof(value));
     }
 
+    // The destination a 5-byte `E8 rel32` at `site` encodes.
+    std::uintptr_t CallTarget(const std::vector<std::byte>& image, std::size_t site)
+    {
+        std::int32_t displacement = 0;
+        std::memcpy(&displacement, image.data() + site + 1, sizeof(displacement));
+        return reinterpret_cast<std::uintptr_t>(image.data()) + site + 5 +
+               static_cast<std::uintptr_t>(static_cast<std::intptr_t>(displacement));
+    }
+
     // A minimal PE32 image with an import table: enough for patch::ReplaceImports
     // (and therefore the registry/userdata/windowed hooks) to walk.
     struct SyntheticModule
@@ -286,6 +296,8 @@ namespace
         const auto& game = xla::Game::Get();
         Check(game.Option("SkipLauncher"), "config: SkipLauncher defaults on");
         Check(game.Option("LegacyLauncher"), "config: LegacyLauncher defaults on");
+        Check(game.Option("LaunchWithPlayGTAIV"),
+              "config: LaunchWithPlayGTAIV defaults on");
         Check(game.Option("SavegameFix"), "config: SavegameFix defaults on");
         Check(game.Option("RemoveRegistryPathDependency"),
               "config: RemoveRegistryPathDependency defaults on");
@@ -414,6 +426,7 @@ namespace
         TempDir work("xla-all-off");
         WriteFile(work / "XLivelessAddon.ini",
                   "[Options]\nSavegameFix=0\nSkipLauncher=0\nLegacyLauncher=0\n"
+                  "LaunchWithPlayGTAIV=0\n"
                   "RemoveRegistryPathDependency=0\nDoNotPauseOnMinimize=0\n"
                   "BorderlessWindowed=0\nStartupWarnings=0\n"
                   "RemoveDataIntegrityChecks=0\nSkipTokenActivation=0\n"
@@ -438,6 +451,7 @@ namespace
         flip("SavegameFix");
         flip("SkipLauncher");
         flip("LegacyLauncher"); // SkipLauncher is 0 here
+        flip("LaunchWithPlayGTAIV");
         flip("RemoveRegistryPathDependency");
         flip("RemoveDataIntegrityChecks");
         flip("SkipTokenActivation");
@@ -622,20 +636,158 @@ namespace
 
     void TestSavegames()
     {
-        // The CRC32 bypass is the only install left here: the save path moved to
-        // [USERPROFILE] CustomUserProfilePath.
-        std::vector<std::byte> buffer(0x1000, std::byte{0});
-        WriteBytes(buffer, 0x700, BytesOf("75 ? 83 C1 01 83 C0 01 83 F9 04"));
-        xla::savegames::Install(xla::Image{buffer.data(), buffer.size()});
-        Check(buffer[0x700] == std::byte{0x90} && buffer[0x701] == std::byte{0x90},
+        using namespace xla::savegames;
+
+        // The four transcribed bodies keep their recovered VAs and shapes.
+        Check(kNullBodyVa == 0x10038570 && kCloseBodyVa == 0x10045580 &&
+                  kCopyBodyVa == 0x100455A0 && kMutexBodyVa == 0x100455E0,
+              "savegames: the four body VAs are the recovered ones");
+        const auto* nullBody =
+            reinterpret_cast<const std::uint8_t*>(ResolveBody(Body::null_path));
+        Check(nullBody != nullptr && nullBody[0] == 0x33 && nullBody[1] == 0xC0 &&
+                  nullBody[2] == 0xC2 && nullBody[3] == 0x08 && nullBody[4] == 0x00,
+              "savegames: the null-path body is xor eax,eax; ret 8");
+        for (const Body body : {Body::close_file, Body::copy, Body::mutex})
+        {
+            const auto* frame = reinterpret_cast<const std::uint8_t*>(ResolveBody(body));
+            Check(frame != nullptr && frame[0] == 0x55 && frame[1] == 0x8B && frame[2] == 0xEC,
+                  std::format("savegames: body {} opens with push ebp; mov ebp,esp",
+                              static_cast<int>(body)));
+        }
+
+        // One image holding both anchors: the whole write set must land at the
+        // recovered offsets and nowhere else.
+        constexpr std::size_t kCrcAnchorAt = 0x400;
+        constexpr std::size_t kCopyAnchorAt = 0x800;
+        constexpr char kCrcPattern[] = "75 ? 83 C1 01 83 C0 01 83 F9 04";
+        constexpr char kCopyPattern[] = "8D 4C 24 18 51 6A 00 6A 0C 57";
+
+        struct ExpectedCall
+        {
+            bool crcAnchor;
+            std::ptrdiff_t offset;
+            Body body;
+            std::string_view label;
+        };
+        constexpr std::array<ExpectedCall, 10> expected{{
+            {true, -73, Body::close_file, "savegames: crc anchor -73 is the close body"},
+            {true, -143, Body::copy, "savegames: crc anchor -143 is the copy body"},
+            {true, -176, Body::copy, "savegames: crc anchor -176 is the copy body"},
+            {true, -280, Body::mutex, "savegames: crc anchor -280 is the mutex body"},
+            {true, -240, Body::null_path, "savegames: crc anchor -240 is the null body"},
+            {false, -86, Body::mutex, "savegames: save-path anchor -86 is the mutex body"},
+            {false, -47, Body::null_path, "savegames: save-path anchor -47 is the null body"},
+            {false, 10, Body::copy, "savegames: save-path anchor +10 is the copy body"},
+            {false, 90, Body::copy, "savegames: save-path anchor +90 is the copy body"},
+            {false, 128, Body::close_file, "savegames: save-path anchor +128 is the close body"},
+        }};
+
+        const auto siteOf = [](const ExpectedCall& call)
+        {
+            const std::ptrdiff_t base = call.crcAnchor
+                                            ? static_cast<std::ptrdiff_t>(kCrcAnchorAt)
+                                            : static_cast<std::ptrdiff_t>(kCopyAnchorAt);
+            return static_cast<std::size_t>(base + call.offset);
+        };
+
+        std::vector<std::byte> image(0x1000, std::byte{0});
+        WriteBytes(image, kCrcAnchorAt, BytesOf(kCrcPattern));
+        WriteBytes(image, kCopyAnchorAt, BytesOf(kCopyPattern));
+        const std::vector<std::byte> pristine = image;
+        Install(xla::Image{image.data(), image.size()});
+
+        for (const ExpectedCall& call : expected)
+        {
+            const std::size_t site = siteOf(call);
+            Check(image[site] == std::byte{0xE8} &&
+                      CallTarget(image, site) == ResolveBody(call.body),
+                  call.label, std::format("E8={} site={:#x}",
+                                          image[site] == std::byte{0xE8}, site));
+        }
+
+        Check(image[kCrcAnchorAt] == std::byte{0x90} &&
+                  image[kCrcAnchorAt + 1] == std::byte{0x90},
               "savegames: the CRC32 branch is NOPed");
-        Check(buffer[0x702] == std::byte{0x83},
+        Check(image[kCrcAnchorAt + 2] == std::byte{0x83},
               "savegames: only the two branch bytes are replaced");
+
+        // Every changed byte is inside one of the recovered call spans or the NOP.
+        bool onlyRecovered = true;
+        for (std::size_t index = 0; index < image.size(); ++index)
+        {
+            if (image[index] == pristine[index])
+            {
+                continue;
+            }
+            bool allowed = index >= kCrcAnchorAt && index < kCrcAnchorAt + 2;
+            for (const ExpectedCall& call : expected)
+            {
+                const std::size_t site = siteOf(call);
+                allowed = allowed || (index >= site && index < site + 5);
+            }
+            onlyRecovered = onlyRecovered && allowed;
+        }
+        Check(onlyRecovered,
+              "savegames: the arm writes only the recovered call sites and the NOP");
+
+        // The CRC anchor alone: its five calls and the NOP, and nothing around the
+        // missing save-path anchor. The sites are checked one by one rather than by
+        // counting `E8` bytes: a call displacement may itself contain 0xE8, so a raw
+        // byte count is address-dependent.
+        std::vector<std::byte> crcOnly(0x1000, std::byte{0});
+        WriteBytes(crcOnly, kCrcAnchorAt, BytesOf(kCrcPattern));
+        Install(xla::Image{crcOnly.data(), crcOnly.size()});
+        bool crcAnchorApplied = crcOnly[kCrcAnchorAt] == std::byte{0x90} &&
+                                crcOnly[kCrcAnchorAt + 1] == std::byte{0x90};
+        for (const ExpectedCall& call : expected)
+        {
+            if (!call.crcAnchor)
+            {
+                continue;
+            }
+            const std::size_t site = siteOf(call);
+            crcAnchorApplied = crcAnchorApplied && crcOnly[site] == std::byte{0xE8} &&
+                               CallTarget(crcOnly, site) == ResolveBody(call.body);
+        }
+        Check(crcAnchorApplied,
+              "savegames: the CRC anchor alone writes its five calls and the NOP");
+        Check(crcOnly[kCopyAnchorAt] == std::byte{0},
+              "savegames: a missing save-path anchor is left untouched");
+
+        // The save-path anchor alone: its five calls, no NOP at the missing CRC
+        // anchor's match.
+        std::vector<std::byte> copyOnly(0x1000, std::byte{0});
+        WriteBytes(copyOnly, kCopyAnchorAt, BytesOf(kCopyPattern));
+        Install(xla::Image{copyOnly.data(), copyOnly.size()});
+        bool copyAnchorApplied = copyOnly[kCrcAnchorAt] == std::byte{0};
+        for (const ExpectedCall& call : expected)
+        {
+            if (call.crcAnchor)
+            {
+                continue;
+            }
+            const std::size_t site = siteOf(call);
+            copyAnchorApplied = copyAnchorApplied && copyOnly[site] == std::byte{0xE8} &&
+                                CallTarget(copyOnly, site) == ResolveBody(call.body);
+        }
+        Check(copyAnchorApplied,
+              "savegames: the save-path anchor alone writes its five calls and no NOP");
+
+        // An anchor whose recovered span leaves the image is refused whole: no
+        // partial call set, no NOP.
+        std::vector<std::byte> shortImage(0x100, std::byte{0});
+        WriteBytes(shortImage, 0x10, BytesOf(kCrcPattern));
+        const std::vector<std::byte> shortPristine = shortImage;
+        Install(xla::Image{shortImage.data(), shortImage.size()});
+        Check(shortImage == shortPristine,
+              "savegames: a view too short for the recovered offsets is skipped whole");
 
         // A missing signature is a logged skip, never a fault.
         std::vector<std::byte> empty(0x100, std::byte{0});
-        xla::savegames::Install(xla::Image{empty.data(), empty.size()});
-        Check(true, "savegames: a missing crc32 signature is a clean skip");
+        Install(xla::Image{empty.data(), empty.size()});
+        Check(std::all_of(empty.begin(), empty.end(), [](std::byte value)
+                          { return value == std::byte{0}; }),
+              "savegames: a missing crc32 signature is a clean skip");
     }
 
     void TestCore()
@@ -1078,6 +1230,212 @@ namespace
         Check(image[0x300] == std::byte{0xE8}, "rom: the SendMessage call is replaced");
     }
 
+    void TestLaunchWithPlayGTAIV()
+    {
+        using namespace xla::launcher;
+
+        // The recovered scan text and payload.
+        Check(kSlotSignature == "4C 61 75 6E 63 68 47 54 41 49 56 2E 65 78 65 00",
+              "launchWithPlayGTAIV: the scan text is LaunchGTAIV.exe\\0");
+        Check(kName.size() == 16 && kName[0] == 'P' && kName[12] == 'e' && kName[13] == 0 &&
+                  kName[14] == 'e' && kName[15] == 0,
+              "launchWithPlayGTAIV: the payload is PlayGTAIV.exe\\0e\\0");
+        std::array<std::uint32_t, 4> payloadDwords{};
+        std::memcpy(payloadDwords.data(), kName.data(), sizeof(payloadDwords));
+        Check(payloadDwords[0] == 2036427856u && payloadDwords[1] == 1229018183u &&
+                  payloadDwords[2] == 2019896918u && payloadDwords[3] == 6619237u,
+              "launchWithPlayGTAIV: the payload is the oracle's four recovered dwords");
+
+        // The switch's five recovered cases, at the recovered RVAs.
+        const auto sites1000 = SlotsFor(xla::GameBuild::v1000);
+        Check(sites1000.size() == 2 && sites1000[0] == 0x9F043C && sites1000[1] == 0x98FA0C,
+              "launchWithPlayGTAIV: 1.0.0.0's slots are the recovered RVAs");
+        const auto sites1040 = SlotsFor(xla::GameBuild::v1040);
+        Check(sites1040.size() == 2 && sites1040[0] == 0x9EA184 && sites1040[1] == 0x9DD8A0,
+              "launchWithPlayGTAIV: 1.0.4.0's slots are the recovered RVAs");
+        const auto sites1060 = SlotsFor(xla::GameBuild::v1060);
+        Check(sites1060.size() == 2 && sites1060[0] == 0x9F8F40 && sites1060[1] == 0xA9D0D8,
+              "launchWithPlayGTAIV: 1.0.6.0's slots are the recovered RVAs");
+        const auto sites1070 = SlotsFor(xla::GameBuild::v1070);
+        Check(sites1070.size() == 2 && sites1070[0] == 0x9F9F70 && sites1070[1] == 0xA9E118,
+              "launchWithPlayGTAIV: 1.0.7.0's slots are the recovered RVAs");
+        const auto sites1080 = SlotsFor(xla::GameBuild::v1080);
+        Check(sites1080.size() == 2 && sites1080[0] == 0xA508F8 && sites1080[1] == 0xA5A5E4,
+              "launchWithPlayGTAIV: 1.0.8.0's slots are the recovered RVAs");
+
+        // Every build the classifier can return has exactly one switch case; the
+        // ones outside the recovered switch carry no sites. 1.0.0.4 also carries
+        // the two slots and each EFLC image one, and the original rewrites neither.
+        bool covered = true;
+        for (const xla::build::Signature& signature : xla::build::kSignatures)
+        {
+            std::size_t rows = 0;
+            for (const SlotSet& set : LaunchSlots())
+            {
+                rows += set.build == signature.build ? 1u : 0u;
+            }
+            covered = covered && rows == 1;
+        }
+        Check(covered,
+              "launchWithPlayGTAIV: every classified build has exactly one switch case");
+        Check(LaunchSlots().size() == xla::build::kSignatures.size(),
+              "launchWithPlayGTAIV: the switch has one row per classified build");
+        Check(SlotsFor(xla::GameBuild::v1010).empty() &&
+                  SlotsFor(xla::GameBuild::v1020).empty() &&
+                  SlotsFor(xla::GameBuild::v1030).empty() &&
+                  SlotsFor(xla::GameBuild::v1050).empty(),
+              "launchWithPlayGTAIV: the pre-1.0.4 builds outside the switch have no sites");
+        Check(SlotsFor(xla::GameBuild::v1100).empty() &&
+                  SlotsFor(xla::GameBuild::v1110).empty() &&
+                  SlotsFor(xla::GameBuild::v1120).empty() &&
+                  SlotsFor(xla::GameBuild::v1130).empty(),
+              "launchWithPlayGTAIV: the EFLC builds outside the switch have no sites");
+
+        const auto writeSlot = [](std::vector<std::byte>& buffer, std::uint32_t site)
+        {
+            WriteBytes(buffer, site, BytesOf(xla::launcher::kSlotSignature));
+        };
+        const auto carriesPayload = [](const std::vector<std::byte>& buffer,
+                                       std::uint32_t site)
+        {
+            for (std::size_t index = 0; index < xla::launcher::kName.size(); ++index)
+            {
+                if (std::to_integer<std::uint8_t>(buffer[site + index]) !=
+                    xla::launcher::kName[index])
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // The two 1.0.8.0 slots on an image of the right shape: two stores of the
+        // recovered 16 bytes, and nothing else changed.
+        std::vector<std::byte> image(0xA60000, std::byte{0});
+        writeSlot(image, 0xA508F8);
+        writeSlot(image, 0xA5A5E4);
+        const std::vector<std::byte> pristine = image;
+        Check(RewriteSlots(xla::Image{image.data(), image.size()}, sites1080) == 2,
+              "launchWithPlayGTAIV: both 1.0.8.0 slots are two stores");
+        Check(carriesPayload(image, 0xA508F8) && carriesPayload(image, 0xA5A5E4),
+              "launchWithPlayGTAIV: the write is the 16 recovered bytes");
+
+        const auto oldName = BytesOf(kSlotSignature);
+        std::size_t differing = 0;
+        for (std::size_t index = 0; index < kName.size(); ++index)
+        {
+            differing += oldName[index] != kName[index] ? 1u : 0u;
+        }
+        std::size_t changed = 0;
+        for (std::size_t index = 0; index < image.size(); ++index)
+        {
+            changed += image[index] != pristine[index] ? 1u : 0u;
+        }
+        Check(changed == differing * 2,
+              "launchWithPlayGTAIV: every differing payload byte is stored, in both slots",
+              std::format("changed={} differing={}", changed, differing));
+
+        // A shorter view cannot see the second slot: the count check refuses the
+        // whole arm.
+        {
+            std::vector<std::byte> shortView(0xA50908, std::byte{0});
+            writeSlot(shortView, 0xA508F8);
+            const std::vector<std::byte> shortPristine = shortView;
+            Check(RewriteSlots(xla::Image{shortView.data(), shortView.size()}, sites1080) == 0,
+                  "launchWithPlayGTAIV: a short view refuses the arm");
+            Check(shortView == shortPristine,
+                  "launchWithPlayGTAIV: ... and leaves the short view untouched");
+        }
+
+        // A longer view (a modded image with a third copy) refuses it too.
+        {
+            std::vector<std::byte> longView(0xA60000, std::byte{0});
+            writeSlot(longView, 0xA508F8);
+            writeSlot(longView, 0xA5A5E4);
+            writeSlot(longView, 0xA5A800);
+            const std::vector<std::byte> longPristine = longView;
+            Check(RewriteSlots(xla::Image{longView.data(), longView.size()}, sites1080) == 0,
+                  "launchWithPlayGTAIV: a longer view refuses the arm");
+            Check(longView == longPristine,
+                  "launchWithPlayGTAIV: ... and leaves the longer view untouched");
+        }
+
+        // A hit that is not at a recovered RVA is not a slot the original writes.
+        {
+            std::vector<std::byte> moved(0xA60000, std::byte{0});
+            writeSlot(moved, 0xA508F8);
+            writeSlot(moved, 0xA5A5E4 + 0x10);
+            const std::vector<std::byte> movedPristine = moved;
+            Check(RewriteSlots(xla::Image{moved.data(), moved.size()}, sites1080) == 0,
+                  "launchWithPlayGTAIV: a slot off its recovered RVA refuses the arm");
+            Check(moved == movedPristine,
+                  "launchWithPlayGTAIV: ... and leaves the image untouched");
+        }
+
+        // The one-slot shape (what each EFLC image carries) writes one store when
+        // one site is asked for.
+        {
+            std::vector<std::byte> one(0x1000, std::byte{0});
+            writeSlot(one, 0x40);
+            const std::uint32_t site[]{0x40};
+            Check(RewriteSlots(xla::Image{one.data(), one.size()}, site) == 1 &&
+                      carriesPayload(one, 0x40),
+                  "launchWithPlayGTAIV: a one-slot image is written when one site is asked for");
+        }
+
+        // No image, no sites: no store, no fault.
+        Check(RewriteSlots(xla::Image{}, sites1080) == 0,
+              "launchWithPlayGTAIV: a null image is refused");
+        Check(RewriteSlots(xla::Image{image.data(), image.size()},
+                           std::span<const std::uint32_t>{}) == 0,
+              "launchWithPlayGTAIV: an empty site set is refused");
+
+        // The test seam pins the process walk's answer.
+        Check(ProbeOverride() == -1,
+              "launchWithPlayGTAIV: the probe defaults to the process walk");
+        SetProbeOverride(1);
+        Check(ProbeOverride() == 1, "launchWithPlayGTAIV: the seam forces the walk on");
+        SetProbeOverride(0);
+        Check(ProbeOverride() == 0, "launchWithPlayGTAIV: ... and off");
+        SetProbeOverride(-1);
+        Check(ProbeOverride() == -1, "launchWithPlayGTAIV: ... and back to the process walk");
+
+        // The install step's process gate: forced off, the recovered slots stay
+        // alone; forced on, they are rewritten.
+        {
+            std::vector<std::byte> gated(0xA60000, std::byte{0});
+            writeSlot(gated, 0xA508F8);
+            writeSlot(gated, 0xA5A5E4);
+            const std::vector<std::byte> gatedPristine = gated;
+
+            SetProbeOverride(0);
+            InstallLaunchWithPlayGTAIV(xla::Image{gated.data(), gated.size()},
+                                       xla::GameBuild::v1080);
+            Check(gated == gatedPristine,
+                  "launchWithPlayGTAIV: no live PlayGTAIV.exe means no write");
+
+            SetProbeOverride(1);
+            InstallLaunchWithPlayGTAIV(xla::Image{gated.data(), gated.size()},
+                                       xla::GameBuild::v1080);
+            Check(carriesPayload(gated, 0xA508F8) && carriesPayload(gated, 0xA5A5E4),
+                  "launchWithPlayGTAIV: the process gate's answer lets the two stores run");
+            SetProbeOverride(-1);
+        }
+
+        // A build outside the switch stays inert even with the process gate on.
+        {
+            std::vector<std::byte> eflc(0x1000, std::byte{0});
+            writeSlot(eflc, 0x40);
+            const std::vector<std::byte> eflcPristine = eflc;
+            SetProbeOverride(1);
+            InstallLaunchWithPlayGTAIV(xla::Image{eflc.data(), eflc.size()},
+                                       xla::GameBuild::v1110);
+            SetProbeOverride(-1);
+            Check(eflc == eflcPristine,
+                  "launchWithPlayGTAIV: a build with no switch case is never rewritten");
+        }
+    }
+
     void TestWindowed()
     {
         const xla::Image foreign{reinterpret_cast<std::byte*>(0x1000), 0x1000};
@@ -1134,11 +1492,12 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 23> expected{{
+        const std::array<std::string_view, 24> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
             "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "Profile",
-            "Savegames", "SkipLauncher", "BorderlessWindow", "FocusLoss", "CorePatches",
-            "LauncherStage", "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "Complete",
+            "Savegames", "SkipLauncher", "LaunchWithPlayGTAIV", "BorderlessWindow", "FocusLoss",
+            "CorePatches", "LauncherStage", "DoNotPauseOnMinimize", "DefWindowProcShims",
+            "Registry", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
               std::to_string(order.size()));
@@ -1180,6 +1539,7 @@ int main()
     TestSkipLauncherPass();
     TestSkipLauncherCreateFileSlot();
     TestSkipLauncherStub();
+    TestLaunchWithPlayGTAIV();
     TestLegacyLauncherStage();
     TestWindowed();
     TestWarnings();

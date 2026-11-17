@@ -996,48 +996,11 @@ namespace
 
     // ---- SkipIntro / SkipMenu ------------------------------------------------
     //
-    // The intro stub is executed for real. The test TU is a plain translation unit,
-    // so a naked thunk can build the frame the hook expects, call the stub, and let
-    // the stub's resume pointer land on a probe that captures the registers the
-    // stub left behind and returns to the thunk.
-    std::uint32_t g_introProbeValue = 0;
-    std::uint32_t g_introProbeEdx = 0;
-    std::uint32_t g_introProbeEcx = 0;
-
-    __declspec(naked) void IntroResumeProbe()
-    {
-        __asm
-        {
-            mov dword ptr [g_introProbeValue], eax
-            mov dword ptr [g_introProbeEdx], edx
-            mov dword ptr [g_introProbeEcx], ecx
-            ret
-        }
-    }
-
-    // `stub` is the intro stub; the frame's game slots are [esp+0x18] (the EAX
-    // variant) and [esp+0x1C] (the EDX variant), both filled with `milliseconds`.
-    // The stub returns through IntroResumeProbe's `ret`, which lands after the
-    // call.
-    __declspec(naked) void RunIntroStub(const void*, int)
-    {
-        __asm
-        {
-            push ebp
-            mov ebp, esp
-            sub esp, 0x40
-            mov eax, dword ptr [ebp + 12]
-            mov dword ptr [esp + 0x14], eax
-            mov dword ptr [esp + 0x18], eax
-            call dword ptr [ebp + 8]
-            mov esp, ebp
-            pop ebp
-            ret
-        }
-    }
-
-    // What the menu hook's original call records: the value the body passed
-    // through after its rewrite.
+    // FusionFix's Loadsc functor is driven directly: the injector's inline stub
+    // saves the register file, calls the functor with `esp` corrected to the game's
+    // stack pointer and restores the registers, so a register pack whose `esp`
+    // points at a frame with the game's two candidate slots is the functor's whole
+    // contract.
     int g_menuRecorderValue = -1;
     int g_menuRecorderCalls = 0;
     void __cdecl MenuRecorder(int value)
@@ -1051,7 +1014,7 @@ namespace
         using namespace xla::menu;
 
         // The patterns are FusionFix's skipintro.ixx, unchanged, and so are the
-        // window, its offsets and the literals the stub reproduces.
+        // window, its offsets and the literals the hooks use.
         Check(kIntroPatternV1 ==
                   "8B 0D ? ? ? ? 8B 44 24 18 83 C4 0C 69 C9 ? ? ? ? 89 81 ? ? ? ? 8D 44 24 60 "
                   "68 ? ? ? ? 50 E8 ? ? ? ? 83 C4 08 85 C0 0F 85",
@@ -1069,141 +1032,105 @@ namespace
         Check(kIntroHookLength == 10 && kScreenIdGlobalOperand == 2 &&
                   kIntroArgumentModRmOffset == 7 && kEdxVariantModRm == 0x54,
               "menu: the Loadsc window and its operand offsets are pinned");
-        Check(kIntroMillisecondsThreshold == 8000 && kMenuStateSkip == 6 &&
-                  kIntroStubBytes == 51,
+        Check(kIntroMillisecondsThreshold == 8000 && kMenuStateSkip == 6,
               "menu: FusionFix's 8000 ms threshold and its a1 = 6 are pinned");
 
-        // ---- the intro stub's register contract ------------------------------
-        static bool skipIntro = true;
-        static bool introNotNeeded = false;
-        static std::uint32_t screenId = 0x00ABCDEF;
-        static std::uint32_t resume = 0;
-
-        const IntroStubInputs eaxInputs{
-            .screenIdGlobal = static_cast<std::uint32_t>(
-                reinterpret_cast<std::uintptr_t>(&screenId)),
-            .resumeSlot = static_cast<std::uint32_t>(
-                reinterpret_cast<std::uintptr_t>(&resume)),
-            .skipIntroFlag = static_cast<std::uint32_t>(
-                reinterpret_cast<std::uintptr_t>(&skipIntro)),
-            .skipIntroNotNeededFlag = static_cast<std::uint32_t>(
-                reinterpret_cast<std::uintptr_t>(&introNotNeeded)),
-            .edxVariant = false,
-        };
-        const auto code = BuildIntroStub(eaxInputs);
-        Check(code[0] == 0x9C && code[1] == 0x60, "menu: the stub opens pushfd; pushad");
-        Check(code[2] == 0x8B && code[3] == 0x44 && code[4] == 0x24 && code[5] == 0x3C,
-              "menu: the eax variant reads the game's [esp+0x18]");
-        Check(code[6] == 0x3D && DwordAt(code.data(), 7) == 8000,
-              "menu: the stub compares against 8000 ms");
-        Check(code[11] == 0x7D && code[12] == 0x14,
-              "menu: the keep branch lands on the store");
-        Check(code[13] == 0x80 && code[14] == 0x3D &&
-                  DwordAt(code.data(), 15) == eaxInputs.skipIntroFlag && code[19] == 0,
-              "menu: the stub tests the SkipIntro flag byte");
-        Check(code[20] == 0x74 && code[21] == 0x0B,
-              "menu: SkipIntro off lands on the store");
-        Check(code[22] == 0x80 && code[23] == 0x3D &&
-                  DwordAt(code.data(), 24) == eaxInputs.skipIntroNotNeededFlag && code[28] == 0,
-              "menu: the stub tests the intro-not-needed flag byte");
-        Check(code[29] == 0x75 && code[30] == 0x02,
-              "menu: a not-needed intro lands on the store");
-        Check(code[31] == 0x33 && code[32] == 0xC0, "menu: the shortened screen time is zeroed");
-        Check(code[33] == 0x89 && code[34] == 0x44 && code[35] == 0x24 && code[36] == 0x1C,
-              "menu: the eax variant stores into its saved register");
-        Check(code[37] == 0x61 && code[38] == 0x9D, "menu: the stub closes popad; popfd");
-        Check(code[39] == 0x8B && code[40] == 0x0D &&
-                  DwordAt(code.data(), 41) == eaxInputs.screenIdGlobal,
-              "menu: the stub reloads ECX from the screen id global");
-        Check(code[45] == 0xFF && code[46] == 0x25 &&
-                  DwordAt(code.data(), 47) == eaxInputs.resumeSlot,
-              "menu: the stub jumps through the published resume");
-
-        void* stub = xla::patch::MakeStub(code, "test: intro stub");
-        Check(stub != nullptr, "menu: the stub body is executable memory");
-        resume = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&IntroResumeProbe));
-
-        skipIntro = true;
-        introNotNeeded = false;
-        RunIntroStub(stub, 4000);
-        Check(g_introProbeValue == 0, "menu: a screen under 8000 ms is zeroed",
-              std::to_string(g_introProbeValue));
-        Check(g_introProbeEcx == screenId, "menu: the stub reloads ECX from the screen id",
-              std::to_string(g_introProbeEcx));
-
-        RunIntroStub(stub, 8000);
-        Check(g_introProbeValue == 8000, "menu: 8000 ms is kept (the test is strictly below)",
-              std::to_string(g_introProbeValue));
-
-        skipIntro = false;
-        RunIntroStub(stub, 4000);
-        Check(g_introProbeValue == 4000, "menu: SkipIntro off keeps the screen time",
-              std::to_string(g_introProbeValue));
-
-        skipIntro = true;
-        introNotNeeded = true;
-        RunIntroStub(stub, 4000);
-        Check(g_introProbeValue == 4000,
-              "menu: after the first menu the intro screens are kept",
-              std::to_string(g_introProbeValue));
-
-        // The EDX variant does the same for its own slot and leaves EAX alone.
-        introNotNeeded = false;
-        IntroStubInputs edxInputs = eaxInputs;
-        edxInputs.edxVariant = true;
-        const auto edxCode = BuildIntroStub(edxInputs);
-        Check(DwordAt(edxCode.data(), 2) == 0x4024448B &&
-                  DwordAt(edxCode.data(), 33) == 0x14244489,
-              "menu: the edx variant reads the [esp+0x1C] slot and stores into EDX's save");
-        void* edxStub = xla::patch::MakeStub(edxCode, "test: intro stub (edx)");
-        RunIntroStub(edxStub, 4000);
-        Check(g_introProbeEdx == 0 && g_introProbeValue == 4000,
-              "menu: the edx variant zeroes edx and restores eax",
-              std::format("edx={} eax={}", g_introProbeEdx, g_introProbeValue));
-
-        // ---- the installers on a synthetic image -----------------------------
         constexpr std::size_t kIntroAt = 0x200;
+        constexpr std::size_t kScreenIdAt = 0x300;
         constexpr std::size_t kMenuAt = 0x400;
         constexpr std::size_t kMenuStride = 0x40;
         constexpr std::uint32_t kImageScreenId = 0x01234567;
+        constexpr std::uint32_t kInitialEax = 0x1111;
+        constexpr std::uint32_t kInitialEdx = 0x2222;
 
+        // ---- the intro hook and its functor ---------------------------------
         std::vector<std::byte> image(0x1000, std::byte{0});
         WriteBytes(image, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
-        WriteDword(image, kIntroAt + 2, kImageScreenId);
+        WriteDword(image, kIntroAt + 2,
+                   static_cast<std::uint32_t>(
+                       reinterpret_cast<std::uintptr_t>(image.data()) + kScreenIdAt));
+        WriteDword(image, kScreenIdAt, kImageScreenId);
         const std::vector<std::byte> introPristine = image;
 
         Check(InstallIntro(xla::Image{image.data(), image.size()}, true),
               "menu: the intro hook installs on a 1.0.8.0-shaped window");
-        Check(image[kIntroAt] == std::byte{0xE9},
-              "menu: the intro window becomes a jump");
-        Check(std::all_of(image.begin() + kIntroAt + 5, image.begin() + kIntroAt + 10,
+        Check(image[kIntroAt] == std::byte{0xE8},
+              "menu: the window becomes a call into the register stub");
+        Check(CallTarget(image, kIntroAt) != 0,
+              "menu: ... whose destination is the injector's stub");
+        Check(std::all_of(image.begin() + kIntroAt + 5,
+                          image.begin() + kIntroAt + kIntroHookLength,
                           [](std::byte value) { return value == std::byte{0x90}; }),
               "menu: the rest of the window is NOPed");
-        const auto* installedStub =
-            reinterpret_cast<const std::uint8_t*>(JumpTarget(image, kIntroAt));
-        Check(installedStub[0] == 0x9C && installedStub[1] == 0x60 &&
-                  DwordAt(installedStub, 2) == 0x4024448B,
-              "menu: the installed stub opens with the edx variant's pushfd; pushad; mov eax,..");
-        Check(DwordAt(installedStub, 41) == kImageScreenId,
-              "menu: the installed stub reloads the image's screen id");
-        Check(IntroResume() ==
-                  static_cast<std::uint32_t>(
-                      reinterpret_cast<std::uintptr_t>(&image[kIntroAt]) + kIntroHookLength),
-              "menu: the published resume is the instruction after the window");
+        Check(image[kIntroAt + kIntroHookLength] ==
+                      introPristine[kIntroAt + kIntroHookLength] &&
+                  image[kIntroAt + kIntroHookLength + 1] ==
+                      introPristine[kIntroAt + kIntroHookLength + 1],
+              "menu: the instruction after the window is the resume, untouched");
         const std::array introSpans{
             std::pair<std::size_t, std::size_t>{kIntroAt, kIntroHookLength}};
         Check(OnlyChangedWithin(image, introPristine, introSpans),
               "menu: the intro arm writes only its window");
 
+        // The functor: `regs.esp` is the game's stack pointer, so the frame's
+        // [esp+0x18]/[esp+0x1C] are the two candidate slots.
+        std::array<std::int32_t, 16> frame{};
+        xla::patch::Registers regs{};
+        regs.esp = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(frame.data()));
+        const auto runFunctor = [&](int milliseconds)
+        {
+            frame[0x18 / 4] = milliseconds;
+            frame[0x1C / 4] = milliseconds;
+            regs.ecx = 0;
+            regs.eax = kInitialEax;
+            regs.edx = kInitialEdx;
+            Loadsc{}(regs);
+        };
+
+        runFunctor(4000);
+        Check(regs.ecx == kImageScreenId,
+              "menu: the functor reloads ecx from the screen-id global",
+              std::to_string(regs.ecx));
+        Check(regs.edx == 0 && regs.eax == kInitialEax,
+              "menu: a screen under 8000 ms is zeroed in edx (the 1.0.8.0 variant) and "
+              "eax is untouched",
+              std::format("edx={:#x} eax={:#x}", regs.edx, regs.eax));
+
+        runFunctor(8000);
+        Check(regs.edx == 8000 && regs.eax == kInitialEax,
+              "menu: 8000 ms is kept (the test is strictly below)",
+              std::to_string(regs.edx));
+
         // The v1 window is the eax variant.
         std::vector<std::byte> v1Image(0x1000, std::byte{0});
         WriteBytes(v1Image, kIntroAt, BytesOf(kIntroPatternV1));
-        WriteDword(v1Image, kIntroAt + 2, kImageScreenId);
+        WriteDword(v1Image, kIntroAt + 2,
+                   static_cast<std::uint32_t>(
+                       reinterpret_cast<std::uintptr_t>(v1Image.data()) + kScreenIdAt));
+        WriteDword(v1Image, kScreenIdAt, kImageScreenId);
         Check(InstallIntro(xla::Image{v1Image.data(), v1Image.size()}, true),
               "menu: the pre-1.0.8.0 intro pattern installs");
-        Check(DwordAt(reinterpret_cast<const void*>(JumpTarget(v1Image, kIntroAt)), 2) ==
-                  0x3C24448B,
-              "menu: the v1 window uses the eax variant");
+        runFunctor(4000);
+        Check(regs.eax == 0 && regs.edx == kInitialEdx,
+              "menu: the v1 variant zeroes eax and leaves edx alone",
+              std::format("eax={:#x} edx={:#x}", regs.eax, regs.edx));
+
+        // SkipIntro off keeps the screen time. The window is patched, so a fresh copy
+        // of the image is the one that still carries the pattern.
+        std::vector<std::byte> offImage(introPristine);
+        Check(InstallIntro(xla::Image{offImage.data(), offImage.size()}, false),
+              "menu: the intro hook installs with the key off");
+        runFunctor(4000);
+        Check(regs.edx == 4000,
+              "menu: SkipIntro off keeps the screen time", std::to_string(regs.edx));
+
+        // Put the intro state back on for the latch check at the end of the test.
+        std::vector<std::byte> latchedImage(introPristine);
+        Check(InstallIntro(xla::Image{latchedImage.data(), latchedImage.size()}, true),
+              "menu: the intro hook installs again on a fresh image");
+        runFunctor(4000);
+        Check(regs.edx == 0,
+              "menu: the reinstalled hook still shortens the screen", std::to_string(regs.edx));
 
         // A missing pattern is a clean skip, never a write.
         std::vector<std::byte> emptyImage(0x400, std::byte{0});
@@ -1243,7 +1170,6 @@ namespace
         // latch means only that call is (FusionFix's bOnce/bSkipIntroNotNeeded).
         const bool shiftHeld = (::GetAsyncKeyState(VK_SHIFT) & static_cast<SHORT>(0xF000)) != 0;
         ResetMenuState();
-        introNotNeeded = false;
         g_menuRecorderValue = -1;
         g_menuRecorderCalls = 0;
         MenuBody(0);
@@ -1269,7 +1195,6 @@ namespace
         Check(CallTarget(fallbackImage, 0x100) != hookRecorder,
               "menu: the fallback's call is retargeted");
         ResetMenuState();
-        introNotNeeded = false;
         g_menuRecorderCalls = 0;
         g_menuRecorderValue = -1;
         MenuBody(0);
@@ -1277,6 +1202,15 @@ namespace
               "menu: SkipMenu off passes the first-boot state through");
         Check(IntroNotNeeded(),
               "menu: ... and the intro latch is still set for SkipIntro");
+
+        // With the latched intro the functor keeps the screen time again.
+        frame[0x18 / 4] = 4000;
+        frame[0x1C / 4] = 4000;
+        regs.eax = kInitialEax;
+        regs.edx = kInitialEdx;
+        Loadsc{}(regs);
+        Check(regs.edx == 4000,
+              "menu: after the first menu the intro screens are kept", std::to_string(regs.edx));
     }
 
     // ---- VRAMFix -------------------------------------------------------------

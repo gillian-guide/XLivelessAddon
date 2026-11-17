@@ -21,6 +21,8 @@ module;
 
 #include <common.hxx>
 #include <injector/injector.hpp>
+#include <injector/assembly.hpp>
+#include <injector/utility.hpp>
 #include <Hooking.Patterns.h>
 
 export module patch;
@@ -211,11 +213,10 @@ export namespace xla::patch
     // Writes `ret`/`ret N` at the instruction's exact width: one byte (C3) for
     // `ret`, three (C2 imm16) for `ret N`.
     //
-    // The pinned classic injector's `MakeRET` writes `pop ? 0xC2 : 0xC3` through
-    // a deduced `int`, i.e. four bytes for both forms; the maintained fork fixed
-    // it, but this tree is pinned to the classic revision. The width is therefore
-    // written here instead of calling the vendor helper, and the native suite
-    // pins both widths plus the untouched byte after them.
+    // The vendored injector's `MakeRET` writes `pop ? 0xC2 : 0xC3` through a
+    // deduced `int`, i.e. four bytes for both forms. The width is therefore written
+    // here instead of calling the vendor helper, and the native suite pins both
+    // widths plus the untouched byte after them.
     inline bool Ret(Site site, std::ptrdiff_t offset, std::size_t popBytes,
                     std::string_view label)
     {
@@ -409,55 +410,57 @@ export namespace xla::patch
         return previous;
     }
 
-    // Replaces the whole `length`-byte instruction window at `site` with a jump to
-    // `destination` (five bytes) and NOP-fills the rest, so the destination owns
-    // the instructions the window held and continues at `site + length`. The pinned
-    // injector's classic revision has no `MakeInline`/`reg_pack`, so a window hook
-    // is this jump plus a body; FusionFix writes the same window through
-    // `injector::MakeInline`.
-    inline bool InlineJumpAt(const Image& image, std::uint8_t* site, std::size_t length,
-                             const void* destination, std::string_view label)
+    // FusionFix's `injector::reg_pack`: the register file an inline functor gets.
+    // A feature module names this alias instead of the vendored type, so the
+    // no-installs guard still holds.
+    using Registers = injector::reg_pack;
+
+    // FusionFix's `injector::hook_back<T>`: the holder for the destination a
+    // retargeted call had before the hook.
+    template <typename FuncT>
+    using HookBack = injector::hook_back<FuncT>;
+
+    // FusionFix's `injector::MakeInline<Functor>(at, end)`: the window [at, end) is
+    // NOPed and `at` becomes a call into a stub that saves the register file, runs
+    // `Functor(registers)`, restores it and returns to `end`. The functor therefore
+    // reproduces the instructions the window held.
+    template <typename Functor>
+    bool InlineHookAt(const Image& image, std::uint8_t* at, std::uint8_t* end,
+                      std::string_view label)
     {
-        if (site == nullptr || destination == nullptr || length < 5 ||
-            !image.contains(site, length))
+        if (at == nullptr || end == nullptr || end <= at || !image.contains(at, end - at))
         {
             return false;
         }
-        injector::MakeJMP(injector::raw_ptr(site),
-                          injector::raw_ptr(const_cast<void*>(destination)), true);
-        if (length > 5)
-        {
-            injector::MemoryFill(injector::raw_ptr(site + 5), 0x90, length - 5, true);
-        }
-        Log::Print("{}: window jmp to {:08X} at {:08X} ({} byte(s), resume {:08X})", label,
-                   reinterpret_cast<std::uintptr_t>(destination),
-                   reinterpret_cast<std::uintptr_t>(site), length,
-                   reinterpret_cast<std::uintptr_t>(site + length));
+        injector::MakeInline<Functor>(injector::raw_ptr(at), injector::raw_ptr(end));
+        Log::Print("{}: inline hook at {:08X} ({} byte(s), resume {:08X})", label,
+                   reinterpret_cast<std::uintptr_t>(at),
+                   static_cast<std::size_t>(end - at),
+                   reinterpret_cast<std::uintptr_t>(end));
         return true;
     }
 
-    // Copies a caller-assembled body into fresh executable memory and flushes the
-    // instruction cache. The bytes are the caller's data (a recovered stub or the
-    // register contract a window hook has to reproduce); a failed allocation is a
-    // logged skip, so the caller can leave the site alone.
-    inline void* MakeStub(std::span<const std::uint8_t> code, std::string_view label)
+    // FusionFix's `injector::MakeCALL(at, body).get()`: the call at `site` becomes a
+    // call to `replacement` and the destination it had before is stored in
+    // `original` (the `hook_back` holder the replacement calls).
+    template <typename FuncT>
+    bool HookCallAt(const Image& image, std::uint8_t* site, FuncT replacement,
+                    FuncT& original, std::string_view label)
     {
-        if (code.empty())
+        static_assert(std::is_pointer_v<FuncT>, "a hook body is a function pointer");
+        if (site == nullptr || replacement == nullptr || !image.contains(site, 5))
         {
-            return nullptr;
+            return false;
         }
-        void* memory = ::VirtualAlloc(nullptr, code.size(), MEM_COMMIT | MEM_RESERVE,
-                                      PAGE_EXECUTE_READWRITE);
-        if (memory == nullptr)
-        {
-            Log::Print("{}: cannot allocate a {} byte stub", label, code.size());
-            return nullptr;
-        }
-        std::memcpy(memory, code.data(), code.size());
-        ::FlushInstructionCache(::GetCurrentProcess(), memory, code.size());
-        Log::Print("{}: {} byte stub at {:08X}", label, code.size(),
-                   reinterpret_cast<std::uintptr_t>(memory));
-        return memory;
+        const auto previous = injector::MakeCALL(
+            injector::raw_ptr(site),
+            injector::raw_ptr(injector::force_ptr(replacement)), true);
+        original = reinterpret_cast<FuncT>(previous.template get<void*>());
+        Log::Print("{}: call to {:08X} at {:08X} (was {:08X})", label,
+                   reinterpret_cast<std::uintptr_t>(injector::force_ptr(replacement)),
+                   reinterpret_cast<std::uintptr_t>(site),
+                   reinterpret_cast<std::uintptr_t>(injector::force_ptr(original)));
+        return true;
     }
 
     // A callable copy of the whole instruction in the `length` bytes at `entry`:

@@ -73,7 +73,7 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite (470 checks), the ASI image load, the PE checks, the
+INI. `ctest` runs the native suite (456 checks), the ASI image load, the PE checks, the
 no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit

@@ -106,12 +106,14 @@ The invariants the tree is built around:
   `SkipWebConnect`, the old add-on's single key for the web-connect and health
   check pair (`SkipInternetConnectionCheck`/`SkipHealthCheck` refine it).
 - `source/menu.ixx` — `SkipIntro`/`SkipMenu`: FusionFix's `skipintro.ixx`
-  mechanism (the Loadsc window that zeroes the screens under 8000 ms, and the
-  `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch, the SHIFT
-  escape and `a1 = 6`). The pinned injector is the classic revision with no
-  `MakeInline`, so the Loadsc window jumps into an assembled stub whose bytes the
-  suite pins (`BuildIntroStub`) and executes; the menu call keeps the reference
-  add-on's `E8` retarget with the captured original called from the body.
+  mechanism, ported as-is (the Loadsc window that zeroes the screens under
+  8000 ms, and the `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch,
+  the SHIFT escape and `a1 = 6`). The installs are FusionFix's two idioms behind
+  the only-installer boundary: `patch::InlineHookAt<Loadsc>` is the vendored
+  injector's `MakeInline(at, end)` (a call to the register stub plus a NOP fill of
+  the window), and `patch::HookBack`/`patch::HookCallAt` are its `hook_back` holder
+  and call retarget (the previous destination is returned and called from the
+  body). The suite drives the functor's register contract directly.
 - `source/vram.ixx` — `VRAMFix`, the two build generations of the same fix under one
   key: the old add-on's recovered `InstallVramFix` (three call sites retargeted at
   a body that clamps a non-positive answer to INT_MAX, including the reference's
@@ -128,8 +130,9 @@ The invariants the tree is built around:
   shims.
 - `source/warnings.ixx` — `StartupWarnings`: the ASI loader probe, the
   single-instance guard and the FusionFix notice.
-- `external/` — committed, pinned vendor trees: injector (classic), Hooking.Patterns,
-  IniReader + mINI; licences next to each.
+- `external/` — committed, pinned vendor trees: injector (ThirteenAG's,
+  including `assembly.hpp`/`utility.hpp`), Hooking.Patterns, IniReader + mINI;
+  licences next to each.
 - `tests/` — the native suite, the ASI image load and the PE checks; also the
   recovered SkipLauncher table golden.
 - `tools/` — `check_no_installs.py`, `check_module_layout.py` and
@@ -179,7 +182,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**470 checks**.
+**456 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -190,13 +193,14 @@ refusals, the one-row-per-classified-build switch and the probe override), the
 savegame arm (`TestSavegames`: the four recovered body VAs, the ten call
 retargets with their destinations and order, the two-byte NOP, and the
 missing-anchor and short-view skips), the frontend pair (`TestMenu`: FusionFix's
-pattern strings, the intro stub's bytes and its executed register contract, the
-five-hit and fallback menu installs, the body's latch/SHIFT/a1 = 6 behaviour and
-the missing-pattern skips), the VRAM fix (`TestVram`: the reference generation's
-three call retargets, its clamp answers and overwrite quirk, FusionFix's entry
-hook and trampoline on a synthetic image, its value contract, the generation
-split and the no-path skip) and the web-connect family (`TestWebConnect`: the
-two recovered sections, their exact writes and the fine-grained keys).
+pattern strings, the inline window and NOP fill, the Loadsc functor's register
+contract on a synthetic frame, the five-hit and fallback menu installs, the
+body's latch/SHIFT/a1 = 6 behaviour and the missing-pattern skips), the VRAM fix
+(`TestVram`: the reference generation's three call retargets, its clamp answers
+and overwrite quirk, FusionFix's entry hook and trampoline on a synthetic image,
+its value contract, the generation split and the no-path skip) and the
+web-connect family (`TestWebConnect`: the two recovered sections, their exact
+writes and the fine-grained keys).
 
 ## Rules learned the hard way
 
@@ -213,7 +217,7 @@ two recovered sections, their exact writes and the fine-grained keys).
    scanner caches hits per signature string, so one string cannot be scanned
    twice with different counts; a multi-hit row asks for its count up front
    (`0` asks for all).
-5. **The classic injector's `MakeRET` writes four bytes for both forms.**
+5. **The vendored injector's `MakeRET` writes four bytes for both forms.**
    `patch::Ret` writes the one-/three-byte form itself; the suite pins both
    widths and the untouched byte after them.
 6. **Every install logs its applied/missing state.** A missing signature is a
@@ -241,7 +245,7 @@ two recovered sections, their exact writes and the fine-grained keys).
 ## Dependency policy
 
 `external/` is committed, pinned and unmodified. A vendored defect is adapted to
-in `source/` (the classic `MakeRET` width and the all-inline `IniReader` are the
+in `source/` (the vendored `MakeRET` width and the all-inline `IniReader` are the
 two examples) or upstreamed; never commit inside the vendor tree. Do not copy a
 vendor's code into `source/` without attribution and licence compatibility.
 

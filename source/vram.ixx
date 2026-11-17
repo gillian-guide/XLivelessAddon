@@ -35,7 +35,7 @@
 // `[0x18CAD50]`/`[0x18CAD54]`.
 //
 // The entry hook is FusionFix's install semantics (their safetyhook `create_inline`
-// at the pattern's first byte) through this tree's classic injector: FusionFix's
+// at the pattern's first byte) through the vendored injector: FusionFix's
 // settings bodies read their keys at run time, and so does the replacement below -
 // the pattern is resolved at install, the values at call.
 

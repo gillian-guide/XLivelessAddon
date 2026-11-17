@@ -29,6 +29,8 @@ import registry;
 import profile;
 import core;
 import launcher;
+import menu;
+import vram;
 import windowed;
 
 export namespace xla::startup
@@ -87,12 +89,14 @@ namespace xla::startup
             Log::Print("ini={} legacy={} fusionfix={}", loaded.iniPath.string(),
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
             Log::Print("options: savegameFix={} launcher={} legacyLauncher={} "
-                       "launchWithPlayGTAIV={} profile=\"{}\" borderless={} dontPause={} "
-                       "warnings={}",
+                       "launchWithPlayGTAIV={} profile=\"{}\" skipIntro={} skipMenu={} "
+                       "vramFix={} webConnect={} borderless={} dontPause={} warnings={}",
                        game.Option("SavegameFix"), game.Option("SkipLauncher"),
                        game.Option("LegacyLauncher"),
                        game.Option("LaunchWithPlayGTAIV"),
                        game.OptionString("CustomUserProfilePath"),
+                       game.Option("SkipIntro"), game.Option("SkipMenu"),
+                       game.Option("VRAMFix"), game.Option("SkipWebConnect"),
                        game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
                        game.Option("StartupWarnings"));
         }
@@ -425,8 +429,6 @@ namespace xla::startup
                     .dataIntegrity = game.Option("RemoveDataIntegrityChecks"),
                     .tokenActivation = game.Option("SkipTokenActivation"),
                     .firstTimePlay = game.Option("SkipFirstTimePlayAsk"),
-                    .internetConnection = game.Option("SkipInternetConnectionCheck"),
-                    .healthCheck = game.Option("SkipHealthCheck"),
                 };
                 const core::Report report = core::Install(game.View(), options);
                 Log::Print("core: {} row(s) applied, {} missing", report.applied,
@@ -452,6 +454,74 @@ namespace xla::startup
                 }
 
                 launcher::InstallLegacyStage(game.View(), game.Build());
+            };
+
+            // The old add-on's `WebConnect` step: its single key covers both
+            // recovered sections, so SkipWebConnect is the master switch and the
+            // two fine-grained keys refine it.
+            Record("WebConnect");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("SkipWebConnect"))
+                {
+                    Log::Trace("webConnect: option off");
+                    return;
+                }
+                const core::WebConnectOptions options{
+                    .internetConnection = game.Option("SkipInternetConnectionCheck"),
+                    .healthCheck = game.Option("SkipHealthCheck"),
+                };
+                const core::Report report = core::InstallWebConnectChecks(game.View(), options);
+                Log::Print("webConnect: {} row(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
+            Record("SkipIntro");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("SkipIntro"))
+                {
+                    Log::Trace("skipIntro: option off");
+                    return;
+                }
+                if (!menu::InstallIntro(game.View(), true))
+                {
+                    Log::Line("skipIntro: not installed");
+                }
+            };
+
+            // FusionFix installs the menu hook even with the menu skip off, because
+            // its first call is what marks the intro no longer needed; the step
+            // therefore runs when either frontend option is on (and stays inert
+            // when both are off, which is this tree's all-off state).
+            Record("SkipMenu");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                const bool skipMenu = game.Option("SkipMenu");
+                if (!skipMenu && !game.Option("SkipIntro"))
+                {
+                    Log::Trace("skipMenu: options off");
+                    return;
+                }
+                if (!menu::InstallMenu(game.View(), skipMenu))
+                {
+                    Log::Line("skipMenu: not installed");
+                }
             };
 
             Record("DoNotPauseOnMinimize");
@@ -500,6 +570,22 @@ namespace xla::startup
                 registry::Install(game.View());
             };
 
+            Record("VramFix");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("VRAMFix"))
+                {
+                    Log::Trace("vramFix: option off");
+                    return;
+                }
+                vram::Install(game.View());
+            };
+
             Record("Complete");
             FusionFix::onInitEvent() += []
             {
@@ -517,14 +603,20 @@ namespace xla::startup
         const Game& game = Game::Get();
         const bool skipLauncher = game.Option("SkipLauncher");
         const bool legacyLauncher = !skipLauncher && game.Option("LegacyLauncher");
+        // SkipWebConnect is the master switch of the GFWL-check family: with it off
+        // the two fine-grained keys install nothing.
+        const bool webConnect = game.Option("SkipWebConnect") &&
+                                (game.Option("SkipInternetConnectionCheck") ||
+                                 game.Option("SkipHealthCheck"));
         return game.Option("SavegameFix") || skipLauncher || legacyLauncher ||
                game.Option("LaunchWithPlayGTAIV") ||
                game.Option("RemoveRegistryPathDependency") ||
                game.Option("RemoveDataIntegrityChecks") ||
                game.Option("SkipTokenActivation") ||
                game.Option("SkipFirstTimePlayAsk") ||
-               game.Option("SkipInternetConnectionCheck") ||
-               game.Option("SkipHealthCheck") ||
+               webConnect ||
+               game.Option("SkipIntro") || game.Option("SkipMenu") ||
+               game.Option("VRAMFix") ||
                !game.OptionString("CustomUserProfilePath").empty() ||
                game.Option("BorderlessWindowed") ||
                game.Option("DoNotPauseOnMinimize");

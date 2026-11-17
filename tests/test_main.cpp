@@ -6,9 +6,12 @@
 // The suite pins the INI grammar/precedence, the build table, the installer
 // primitives and their widths, the recovered SkipLauncher tables and pass, the
 // LaunchWithPlayGTAIV slot table and its write/refusal/gate rules, the
-// SavegameFix call retargets and bodies, the [USERPROFILE] CustomUserProfilePath
-// resolution and shell redirect, the savegame CRC32 bypass, the IAT replacement,
-// the startup order and the deliberate user-data divergence from the old addon.
+// SavegameFix call retargets and bodies, the frontend pair's FusionFix mechanism
+// (the intro stub's register contract and the menu body), the VRAMFix call
+// retargets and clamp, the SkipWebConnect section, the
+// [USERPROFILE] CustomUserProfilePath resolution and shell redirect, the savegame
+// CRC32 bypass, the IAT replacement, the startup order and the deliberate
+// user-data divergence from the old addon.
 
 #include <common.hxx>
 #include <cstdio>
@@ -24,6 +27,8 @@ import registry;
 import profile;
 import core;
 import launcher;
+import menu;
+import vram;
 import windowed;
 import startup;
 
@@ -169,6 +174,61 @@ namespace
                static_cast<std::uintptr_t>(static_cast<std::intptr_t>(displacement));
     }
 
+    // The destination a 5-byte `E9 rel32` at `site` encodes.
+    std::uintptr_t JumpTarget(const std::vector<std::byte>& image, std::size_t site)
+    {
+        std::int32_t displacement = 0;
+        std::memcpy(&displacement, image.data() + site + 1, sizeof(displacement));
+        return reinterpret_cast<std::uintptr_t>(image.data()) + site + 5 +
+               static_cast<std::uintptr_t>(static_cast<std::intptr_t>(displacement));
+    }
+
+    // Points the `E8 rel32` at `site` at `destination`, so a synthetic image can
+    // name the function its call had before the arm retargets it.
+    void SetCallTarget(std::vector<std::byte>& image, std::size_t site,
+                       std::uintptr_t destination)
+    {
+        const auto displacement = static_cast<std::int32_t>(
+            destination - (reinterpret_cast<std::uintptr_t>(image.data()) + site + 5));
+        std::memcpy(image.data() + site + 1, &displacement, sizeof(displacement));
+    }
+
+    std::uint32_t DwordAt(const void* bytes, std::size_t at)
+    {
+        std::uint32_t value = 0;
+        std::memcpy(&value, static_cast<const std::uint8_t*>(bytes) + at, sizeof(value));
+        return value;
+    }
+
+    // True when every byte that differs between `after` and `before` lies inside
+    // one of the `[offset, offset + length)` spans: the "exact write set" check.
+    bool OnlyChangedWithin(const std::vector<std::byte>& after,
+                           const std::vector<std::byte>& before,
+                           std::span<const std::pair<std::size_t, std::size_t>> spans)
+    {
+        if (after.size() != before.size())
+        {
+            return false;
+        }
+        for (std::size_t index = 0; index < after.size(); ++index)
+        {
+            if (after[index] == before[index])
+            {
+                continue;
+            }
+            bool allowed = false;
+            for (const auto& [offset, length] : spans)
+            {
+                allowed = allowed || (index >= offset && index < offset + length);
+            }
+            if (!allowed)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // A minimal PE32 image with an import table: enough for patch::ReplaceImports
     // (and therefore the registry/userdata/windowed hooks) to walk.
     struct SyntheticModule
@@ -311,6 +371,10 @@ namespace
                   game.Option("SkipFirstTimePlayAsk") &&
                   game.Option("SkipInternetConnectionCheck") && game.Option("SkipHealthCheck"),
               "config: the five core fixes default on");
+        Check(game.Option("SkipWebConnect"), "config: SkipWebConnect defaults on");
+        Check(game.Option("SkipIntro"), "config: SkipIntro defaults on");
+        Check(!game.Option("SkipMenu"), "config: SkipMenu defaults off");
+        Check(game.Option("VRAMFix"), "config: VRAMFix defaults on");
 
         TempDir missing("xla-config-missing");
         (void)xla::config::Load(missing.Path());
@@ -387,7 +451,10 @@ namespace
         WriteFile(work / "XLivelessAddon.ini",
                   "[USERPROFILE]\nCustomUserProfilePath=D:\\Saves\n"
                   "BorderlessWindowed=1\n"
-                  "DoNotPauseOnMinimize=1\n");
+                  "DoNotPauseOnMinimize=1\n"
+                  "SkipMenu=1\n"
+                  "VRAMFix=1\n"
+                  "SkipWebConnect=1\n");
 
         // No FusionFix in the process or next to the ASI.
         Check(!xla::config::FusionFixPresent(work.Path()),
@@ -403,19 +470,35 @@ namespace
               "divergence: the Game context carries the profile path with FusionFix absent");
 
         // A FusionFix ASI next to this one is detected; the profile redirect must
-        // still survive, and only the two windowed options are gated.
+        // still survive, and only the frontend pair and the windowed options are
+        // gated.
         WriteFile(work / "GTAIV.EFLC.FusionFix.asi", "");
         Check(xla::config::FusionFixPresent(work.Path()),
               "divergence: a FusionFix ASI next to the module is detected");
 
         loaded = xla::config::Load(work.Path(), work.Path());
         const auto gated = xla::config::ApplyFusionFixGates(loaded.options);
-        Check(gated.size() == 2, "divergence: the FusionFix gate covers only the windowed options",
+        Check(gated.size() == 4,
+              "divergence: the FusionFix gate covers the frontend pair and the windowed options",
               std::to_string(gated.size()));
+        bool frontendGated = false;
+        bool ownershipLabelled = true;
+        for (const auto& gate : gated)
+        {
+            if (gate.option == "SkipIntro" || gate.option == "SkipMenu")
+            {
+                frontendGated = true;
+                ownershipLabelled = ownershipLabelled && gate.fusionFixModule == "skipintro.ixx";
+            }
+        }
+        Check(frontendGated && ownershipLabelled,
+              "divergence: SkipIntro/SkipMenu are gated for FusionFix's skipintro.ixx");
         Check(loaded.options.customUserProfilePath == "D:\\Saves",
               "divergence: CustomUserProfilePath survives with FusionFix present");
         Check(!loaded.options.borderlessWindowed && !loaded.options.doNotPauseOnMinimize,
               "divergence: the windowed options are gated when FusionFix is present");
+        Check(loaded.options.vramFix && loaded.options.skipWebConnect,
+              "divergence: VRAMFix and SkipWebConnect are never FusionFix-gated");
         xla::config::Publish(loaded);
         Check(xla::Game::Get().OptionString("CustomUserProfilePath") == "D:\\Saves",
               "divergence: the profile path is still published after the gate");
@@ -431,12 +514,16 @@ namespace
                   "BorderlessWindowed=0\nStartupWarnings=0\n"
                   "RemoveDataIntegrityChecks=0\nSkipTokenActivation=0\n"
                   "SkipFirstTimePlayAsk=0\nSkipInternetConnectionCheck=0\n"
-                  "SkipHealthCheck=0\n"
+                  "SkipHealthCheck=0\nSkipWebConnect=0\n"
+                  "SkipIntro=0\nSkipMenu=0\nVRAMFix=0\n"
                   "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
         xla::config::Publish(loaded);
         Check(!loaded.options.legacyLauncher && !loaded.options.startupWarnings,
               "all-off: the new toggles are read");
+        Check(!loaded.options.skipWebConnect && !loaded.options.skipIntro &&
+                  !loaded.options.skipMenu && !loaded.options.vramFix,
+              "all-off: the four restored keys are read");
         Check(!xla::startup::AnyInstallEnabled(),
               "all-off: no install is enabled");
 
@@ -456,10 +543,25 @@ namespace
         flip("RemoveDataIntegrityChecks");
         flip("SkipTokenActivation");
         flip("SkipFirstTimePlayAsk");
-        flip("SkipInternetConnectionCheck");
-        flip("SkipHealthCheck");
+        // The family's master switch: it installs through one of the two
+        // fine-grained keys, which this all-off file turns off too.
+        game.SetOption("SkipInternetConnectionCheck", "1");
+        flip("SkipWebConnect");
+        game.SetOption("SkipInternetConnectionCheck", "0");
+        flip("SkipIntro");
+        flip("SkipMenu");
+        flip("VRAMFix");
         flip("BorderlessWindowed");
         flip("DoNotPauseOnMinimize");
+
+        // The two fine-grained GFWL keys install through SkipWebConnect; with the
+        // master off they are inert, with it on each one enables the family.
+        game.SetOption("SkipWebConnect", "1");
+        flip("SkipInternetConnectionCheck");
+        flip("SkipHealthCheck");
+        game.SetOption("SkipWebConnect", "0");
+        Check(!xla::startup::AnyInstallEnabled(),
+              "all-off: the fine-grained GFWL keys are inert without SkipWebConnect");
 
         game.SetOption("CustomUserProfilePath", "D:\\Saves");
         Check(xla::startup::AnyInstallEnabled(),
@@ -795,14 +897,13 @@ namespace
         // Every recovered row writes its shape at its offset. One synthetic image
         // holds a copy of each signature, far enough apart that the writes cannot
         // collide; `BytesOf` fills the wildcards with NOPs, which the scanner's
-        // mask ignores.
+        // mask ignores. The web-connect/health-check pair is SkipWebConnect's
+        // section and is covered by TestWebConnect.
         constexpr std::size_t kStride = 0x100;
-        const std::array<std::span<const xla::core::Row>, 5> tables{
+        const std::array<std::span<const xla::core::Row>, 3> tables{
             xla::core::DataIntegrityRows(),
             xla::core::TokenActivationRows(),
             xla::core::FirstTimePlayRows(),
-            xla::core::InternetConnectionRows(),
-            xla::core::HealthCheckRows(),
         };
         std::size_t total = 0;
         for (const auto& table : tables)
@@ -876,12 +977,504 @@ namespace
         none.dataIntegrity = false;
         none.tokenActivation = false;
         none.firstTimePlay = false;
-        none.internetConnection = false;
-        none.healthCheck = false;
         const auto off =
             xla::core::Install(xla::Image{untouched.data(), untouched.size()}, none);
         Check(off.applied == 0 && off.missing == 0 && untouched == image,
-              "core: all five keys off leaves the image untouched");
+              "core: all three keys off leaves the image untouched");
+    }
+
+    // ---- SkipIntro / SkipMenu ------------------------------------------------
+    //
+    // The intro stub is executed for real. The test TU is a plain translation unit,
+    // so a naked thunk can build the frame the hook expects, call the stub, and let
+    // the stub's resume pointer land on a probe that captures the registers the
+    // stub left behind and returns to the thunk.
+    std::uint32_t g_introProbeValue = 0;
+    std::uint32_t g_introProbeEdx = 0;
+    std::uint32_t g_introProbeEcx = 0;
+
+    __declspec(naked) void IntroResumeProbe()
+    {
+        __asm
+        {
+            mov dword ptr [g_introProbeValue], eax
+            mov dword ptr [g_introProbeEdx], edx
+            mov dword ptr [g_introProbeEcx], ecx
+            ret
+        }
+    }
+
+    // `stub` is the intro stub; the frame's game slots are [esp+0x18] (the EAX
+    // variant) and [esp+0x1C] (the EDX variant), both filled with `milliseconds`.
+    // The stub returns through IntroResumeProbe's `ret`, which lands after the
+    // call.
+    __declspec(naked) void RunIntroStub(const void*, int)
+    {
+        __asm
+        {
+            push ebp
+            mov ebp, esp
+            sub esp, 0x40
+            mov eax, dword ptr [ebp + 12]
+            mov dword ptr [esp + 0x14], eax
+            mov dword ptr [esp + 0x18], eax
+            call dword ptr [ebp + 8]
+            mov esp, ebp
+            pop ebp
+            ret
+        }
+    }
+
+    // What the menu hook's original call records: the value the body passed
+    // through after its rewrite.
+    int g_menuRecorderValue = -1;
+    int g_menuRecorderCalls = 0;
+    void __cdecl MenuRecorder(int value)
+    {
+        g_menuRecorderValue = value;
+        ++g_menuRecorderCalls;
+    }
+
+    void TestMenu()
+    {
+        using namespace xla::menu;
+
+        // The patterns are FusionFix's skipintro.ixx, unchanged, and so are the
+        // window, its offsets and the literals the stub reproduces.
+        Check(kIntroPatternV1 ==
+                  "8B 0D ? ? ? ? 8B 44 24 18 83 C4 0C 69 C9 ? ? ? ? 89 81 ? ? ? ? 8D 44 24 60 "
+                  "68 ? ? ? ? 50 E8 ? ? ? ? 83 C4 08 85 C0 0F 85",
+              "menu: the pre-1.0.8.0 intro pattern is FusionFix's v1");
+        Check(kIntroPatternV2 == "8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C",
+              "menu: the 1.0.8.0 intro pattern is FusionFix's v2");
+        Check(kMenuCallPattern ==
+                  "E8 ? ? ? ? 83 C4 04 8B 8C 24 ? ? ? ? 5F 5E 5D 5B 33 CC E8 ? ? ? ? 81 C4 ? ? ? "
+                  "? C3",
+              "menu: the five-hit menu pattern is FusionFix's");
+        Check(kMenuFallbackPattern ==
+                  "E8 ? ? ? ? 83 C4 04 5F 5E 5B 8B 8C 24 ? ? ? ? 33 CC E8 ? ? ? ? 8B E5 5D C3 83 "
+                  "F8 30",
+              "menu: the single-hit menu fallback is FusionFix's");
+        Check(kIntroHookLength == 10 && kScreenIdGlobalOperand == 2 &&
+                  kIntroArgumentModRmOffset == 7 && kEdxVariantModRm == 0x54,
+              "menu: the Loadsc window and its operand offsets are pinned");
+        Check(kIntroMillisecondsThreshold == 8000 && kMenuStateSkip == 6 &&
+                  kIntroStubBytes == 51,
+              "menu: FusionFix's 8000 ms threshold and its a1 = 6 are pinned");
+
+        // ---- the intro stub's register contract ------------------------------
+        static bool skipIntro = true;
+        static bool introNotNeeded = false;
+        static std::uint32_t screenId = 0x00ABCDEF;
+        static std::uint32_t resume = 0;
+
+        const IntroStubInputs eaxInputs{
+            .screenIdGlobal = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(&screenId)),
+            .resumeSlot = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(&resume)),
+            .skipIntroFlag = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(&skipIntro)),
+            .skipIntroNotNeededFlag = static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(&introNotNeeded)),
+            .edxVariant = false,
+        };
+        const auto code = BuildIntroStub(eaxInputs);
+        Check(code[0] == 0x9C && code[1] == 0x60, "menu: the stub opens pushfd; pushad");
+        Check(code[2] == 0x8B && code[3] == 0x44 && code[4] == 0x24 && code[5] == 0x3C,
+              "menu: the eax variant reads the game's [esp+0x18]");
+        Check(code[6] == 0x3D && DwordAt(code.data(), 7) == 8000,
+              "menu: the stub compares against 8000 ms");
+        Check(code[11] == 0x7D && code[12] == 0x14,
+              "menu: the keep branch lands on the store");
+        Check(code[13] == 0x80 && code[14] == 0x3D &&
+                  DwordAt(code.data(), 15) == eaxInputs.skipIntroFlag && code[19] == 0,
+              "menu: the stub tests the SkipIntro flag byte");
+        Check(code[20] == 0x74 && code[21] == 0x0B,
+              "menu: SkipIntro off lands on the store");
+        Check(code[22] == 0x80 && code[23] == 0x3D &&
+                  DwordAt(code.data(), 24) == eaxInputs.skipIntroNotNeededFlag && code[28] == 0,
+              "menu: the stub tests the intro-not-needed flag byte");
+        Check(code[29] == 0x75 && code[30] == 0x02,
+              "menu: a not-needed intro lands on the store");
+        Check(code[31] == 0x33 && code[32] == 0xC0, "menu: the shortened screen time is zeroed");
+        Check(code[33] == 0x89 && code[34] == 0x44 && code[35] == 0x24 && code[36] == 0x1C,
+              "menu: the eax variant stores into its saved register");
+        Check(code[37] == 0x61 && code[38] == 0x9D, "menu: the stub closes popad; popfd");
+        Check(code[39] == 0x8B && code[40] == 0x0D &&
+                  DwordAt(code.data(), 41) == eaxInputs.screenIdGlobal,
+              "menu: the stub reloads ECX from the screen id global");
+        Check(code[45] == 0xFF && code[46] == 0x25 &&
+                  DwordAt(code.data(), 47) == eaxInputs.resumeSlot,
+              "menu: the stub jumps through the published resume");
+
+        void* stub = xla::patch::MakeStub(code, "test: intro stub");
+        Check(stub != nullptr, "menu: the stub body is executable memory");
+        resume = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&IntroResumeProbe));
+
+        skipIntro = true;
+        introNotNeeded = false;
+        RunIntroStub(stub, 4000);
+        Check(g_introProbeValue == 0, "menu: a screen under 8000 ms is zeroed",
+              std::to_string(g_introProbeValue));
+        Check(g_introProbeEcx == screenId, "menu: the stub reloads ECX from the screen id",
+              std::to_string(g_introProbeEcx));
+
+        RunIntroStub(stub, 8000);
+        Check(g_introProbeValue == 8000, "menu: 8000 ms is kept (the test is strictly below)",
+              std::to_string(g_introProbeValue));
+
+        skipIntro = false;
+        RunIntroStub(stub, 4000);
+        Check(g_introProbeValue == 4000, "menu: SkipIntro off keeps the screen time",
+              std::to_string(g_introProbeValue));
+
+        skipIntro = true;
+        introNotNeeded = true;
+        RunIntroStub(stub, 4000);
+        Check(g_introProbeValue == 4000,
+              "menu: after the first menu the intro screens are kept",
+              std::to_string(g_introProbeValue));
+
+        // The EDX variant does the same for its own slot and leaves EAX alone.
+        introNotNeeded = false;
+        IntroStubInputs edxInputs = eaxInputs;
+        edxInputs.edxVariant = true;
+        const auto edxCode = BuildIntroStub(edxInputs);
+        Check(DwordAt(edxCode.data(), 2) == 0x4024448B &&
+                  DwordAt(edxCode.data(), 33) == 0x14244489,
+              "menu: the edx variant reads the [esp+0x1C] slot and stores into EDX's save");
+        void* edxStub = xla::patch::MakeStub(edxCode, "test: intro stub (edx)");
+        RunIntroStub(edxStub, 4000);
+        Check(g_introProbeEdx == 0 && g_introProbeValue == 4000,
+              "menu: the edx variant zeroes edx and restores eax",
+              std::format("edx={} eax={}", g_introProbeEdx, g_introProbeValue));
+
+        // ---- the installers on a synthetic image -----------------------------
+        constexpr std::size_t kIntroAt = 0x200;
+        constexpr std::size_t kMenuAt = 0x400;
+        constexpr std::size_t kMenuStride = 0x40;
+        constexpr std::uint32_t kImageScreenId = 0x01234567;
+
+        std::vector<std::byte> image(0x1000, std::byte{0});
+        WriteBytes(image, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
+        WriteDword(image, kIntroAt + 2, kImageScreenId);
+        const std::vector<std::byte> introPristine = image;
+
+        Check(InstallIntro(xla::Image{image.data(), image.size()}, true),
+              "menu: the intro hook installs on a 1.0.8.0-shaped window");
+        Check(image[kIntroAt] == std::byte{0xE9},
+              "menu: the intro window becomes a jump");
+        Check(std::all_of(image.begin() + kIntroAt + 5, image.begin() + kIntroAt + 10,
+                          [](std::byte value) { return value == std::byte{0x90}; }),
+              "menu: the rest of the window is NOPed");
+        const auto* installedStub =
+            reinterpret_cast<const std::uint8_t*>(JumpTarget(image, kIntroAt));
+        Check(installedStub[0] == 0x9C && installedStub[1] == 0x60 &&
+                  DwordAt(installedStub, 2) == 0x4024448B,
+              "menu: the installed stub opens with the edx variant's pushfd; pushad; mov eax,..");
+        Check(DwordAt(installedStub, 41) == kImageScreenId,
+              "menu: the installed stub reloads the image's screen id");
+        Check(IntroResume() ==
+                  static_cast<std::uint32_t>(
+                      reinterpret_cast<std::uintptr_t>(&image[kIntroAt]) + kIntroHookLength),
+              "menu: the published resume is the instruction after the window");
+        const std::array introSpans{
+            std::pair<std::size_t, std::size_t>{kIntroAt, kIntroHookLength}};
+        Check(OnlyChangedWithin(image, introPristine, introSpans),
+              "menu: the intro arm writes only its window");
+
+        // The v1 window is the eax variant.
+        std::vector<std::byte> v1Image(0x1000, std::byte{0});
+        WriteBytes(v1Image, kIntroAt, BytesOf(kIntroPatternV1));
+        WriteDword(v1Image, kIntroAt + 2, kImageScreenId);
+        Check(InstallIntro(xla::Image{v1Image.data(), v1Image.size()}, true),
+              "menu: the pre-1.0.8.0 intro pattern installs");
+        Check(DwordAt(reinterpret_cast<const void*>(JumpTarget(v1Image, kIntroAt)), 2) ==
+                  0x3C24448B,
+              "menu: the v1 window uses the eax variant");
+
+        // A missing pattern is a clean skip, never a write.
+        std::vector<std::byte> emptyImage(0x400, std::byte{0});
+        const std::vector<std::byte> emptyPristine = emptyImage;
+        Check(!InstallIntro(xla::Image{emptyImage.data(), emptyImage.size()}, true),
+              "menu: a missing intro pattern is a logged skip");
+        Check(!InstallMenu(xla::Image{emptyImage.data(), emptyImage.size()}, true),
+              "menu: a missing menu pattern is a logged skip");
+        Check(emptyImage == emptyPristine, "menu: neither missing pattern writes anything");
+
+        // The five-hit shape: FusionFix hooks the second hit.
+        std::vector<std::byte> menuImage(0x1000, std::byte{0});
+        for (std::size_t index = 0; index < 5; ++index)
+        {
+            const std::size_t at = kMenuAt + index * kMenuStride;
+            WriteBytes(menuImage, at, BytesOf(kMenuCallPattern));
+            SetCallTarget(menuImage, at,
+                          reinterpret_cast<std::uintptr_t>(&MenuRecorder));
+        }
+        const std::vector<std::byte> menuPristine = menuImage;
+        Check(InstallMenu(xla::Image{menuImage.data(), menuImage.size()}, true),
+              "menu: the five-hit menu shape installs");
+        const auto hookRecorder = reinterpret_cast<std::uintptr_t>(&MenuRecorder);
+        for (std::size_t index = 0; index < 5; ++index)
+        {
+            const std::size_t at = kMenuAt + index * kMenuStride;
+            const bool hooked = CallTarget(menuImage, at) != hookRecorder;
+            Check(hooked == (index == 1),
+                  std::format("menu: hit {} is {}", index, index == 1 ? "hooked" : "left alone"));
+        }
+        const std::array menuSpans{
+            std::pair<std::size_t, std::size_t>{kMenuAt + kMenuStride, 5}};
+        Check(OnlyChangedWithin(menuImage, menuPristine, menuSpans),
+              "menu: the menu arm writes only the hooked call");
+
+        // The body: the first first-boot call is rewritten to the skip state, the
+        // latch means only that call is (FusionFix's bOnce/bSkipIntroNotNeeded).
+        const bool shiftHeld = (::GetAsyncKeyState(VK_SHIFT) & static_cast<SHORT>(0xF000)) != 0;
+        ResetMenuState();
+        introNotNeeded = false;
+        g_menuRecorderValue = -1;
+        g_menuRecorderCalls = 0;
+        MenuBody(0);
+        Check(g_menuRecorderCalls == 1 &&
+                  g_menuRecorderValue == (shiftHeld ? 0 : kMenuStateSkip),
+              "menu: a first-boot call is rewritten to the skip state unless SHIFT is held",
+              std::to_string(g_menuRecorderValue));
+        Check(IntroNotNeeded(), "menu: the body marks the intro no longer needed");
+        MenuBody(0);
+        Check(g_menuRecorderCalls == 2 && g_menuRecorderValue == 0,
+              "menu: the rewrite happens once, not on every call");
+        MenuBody(3);
+        Check(g_menuRecorderCalls == 3 && g_menuRecorderValue == 3,
+              "menu: a non-first-boot call is passed through");
+
+        // The single-hit fallback, with the menu skip off: the hook still installs
+        // (for the intro latch) but the state is never rewritten.
+        std::vector<std::byte> fallbackImage(0x400, std::byte{0});
+        WriteBytes(fallbackImage, 0x100, BytesOf(kMenuFallbackPattern));
+        SetCallTarget(fallbackImage, 0x100, hookRecorder);
+        Check(InstallMenu(xla::Image{fallbackImage.data(), fallbackImage.size()}, false),
+              "menu: the single-hit fallback installs");
+        Check(CallTarget(fallbackImage, 0x100) != hookRecorder,
+              "menu: the fallback's call is retargeted");
+        ResetMenuState();
+        introNotNeeded = false;
+        g_menuRecorderCalls = 0;
+        g_menuRecorderValue = -1;
+        MenuBody(0);
+        Check(g_menuRecorderCalls == 1 && g_menuRecorderValue == 0,
+              "menu: SkipMenu off passes the first-boot state through");
+        Check(IntroNotNeeded(),
+              "menu: ... and the intro latch is still set for SkipIntro");
+    }
+
+    // ---- VRAMFix -------------------------------------------------------------
+    std::int32_t __cdecl VidMemZero()
+    {
+        return 0;
+    }
+    std::int32_t __cdecl VidMemNegative()
+    {
+        return -4096;
+    }
+    std::int32_t __cdecl VidMemSmall()
+    {
+        return 1234;
+    }
+    std::int32_t __cdecl VidMemLast()
+    {
+        return 5678;
+    }
+
+    void TestVram()
+    {
+        using namespace xla::vram;
+
+        Check(Rows().size() == 3, "vram: the three recovered call sites are pinned");
+        Check(Rows()[0].signature == "E8 ? ? ? ? D9 E8 85 C0" &&
+                  Rows()[1].signature ==
+                      "E8 ? ? ? ? F3 0F 10 0D ? ? ? ? F3 0F 5C 0D" &&
+                  Rows()[2].signature ==
+                      "E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24",
+              "vram: the recovered signatures are unchanged");
+
+        // The body clamps a non-positive answer to INT_MAX and passes the rest.
+        SetVidMemOriginal(nullptr);
+        Check(GetVidMemBody() == INT_MAX, "vram: a missing original answers INT_MAX");
+        SetVidMemOriginal(&VidMemZero);
+        Check(GetVidMemBody() == INT_MAX, "vram: a zero answer becomes INT_MAX");
+        SetVidMemOriginal(&VidMemNegative);
+        Check(GetVidMemBody() == INT_MAX, "vram: a negative answer becomes INT_MAX");
+        SetVidMemOriginal(&VidMemSmall);
+        Check(GetVidMemBody() == 1234, "vram: a positive answer passes through");
+        SetVidMemOriginal(nullptr);
+        constexpr std::size_t kStride = 0x80;
+        const std::array<std::int32_t(__cdecl*)(), 3> originals{&VidMemZero, &VidMemNegative,
+                                                               &VidMemLast};
+
+        std::vector<std::byte> image(0x400, std::byte{0});
+        std::vector<std::size_t> sites;
+        for (std::size_t index = 0; index < Rows().size(); ++index)
+        {
+            const std::size_t at = 0x80 + index * kStride;
+            WriteBytes(image, at, BytesOf(Rows()[index].signature));
+            SetCallTarget(image, at, reinterpret_cast<std::uintptr_t>(originals[index]));
+            sites.push_back(at);
+        }
+        const std::vector<std::byte> pristine = image;
+        Check(Install(xla::Image{image.data(), image.size()}) == 3,
+              "vram: all three call sites are retargeted");
+        for (const std::size_t at : sites)
+        {
+            Check(CallTarget(image, at) ==
+                      reinterpret_cast<std::uintptr_t>(&GetVidMemBody),
+                  std::format("vram: the call at {:#x} runs the clamp body", at));
+        }
+        const std::array spans{
+            std::pair<std::size_t, std::size_t>{sites[0], 5},
+            std::pair<std::size_t, std::size_t>{sites[1], 5},
+            std::pair<std::size_t, std::size_t>{sites[2], 5},
+        };
+        Check(OnlyChangedWithin(image, pristine, spans),
+              "vram: the arm writes only the three call displacements");
+        Check(HasVidMemOriginal() && GetVidMemBody() == 5678,
+              "vram: every body forwards through the last row's original");
+
+        // The recovered overwrite: a later missing row clears the original, so the
+        // bodies already installed answer INT_MAX.
+        std::vector<std::byte> partial(0x400, std::byte{0});
+        WriteBytes(partial, 0x80, BytesOf(Rows()[0].signature));
+        SetCallTarget(partial, 0x80, reinterpret_cast<std::uintptr_t>(&VidMemZero));
+        WriteBytes(partial, 0x100, BytesOf(Rows()[1].signature));
+        SetCallTarget(partial, 0x100, reinterpret_cast<std::uintptr_t>(&VidMemNegative));
+        Check(Install(xla::Image{partial.data(), partial.size()}) == 2,
+              "vram: two present rows install, the third is a skip");
+        Check(CallTarget(partial, 0x80) == reinterpret_cast<std::uintptr_t>(&GetVidMemBody) &&
+                  CallTarget(partial, 0x100) == reinterpret_cast<std::uintptr_t>(&GetVidMemBody),
+              "vram: ... and both installed calls run the clamp body");
+        Check(!HasVidMemOriginal(),
+              "vram: a missing row clears the published original (the recovered overwrite)");
+        Check(GetVidMemBody() == INT_MAX,
+              "vram: ... so the installed bodies then answer INT_MAX");
+
+        // No row at all: a clean skip, no writes.
+        std::vector<std::byte> empty(0x100, std::byte{0});
+        const std::vector<std::byte> emptyPristine = empty;
+        Check(Install(xla::Image{empty.data(), empty.size()}) == 0,
+              "vram: a missing signature is a logged skip");
+        Check(empty == emptyPristine, "vram: the skip writes nothing");
+        Check(!HasVidMemOriginal(), "vram: ... and leaves no original published");
+    }
+
+    // ---- SkipWebConnect ------------------------------------------------------
+    void TestWebConnect()
+    {
+        const auto internet = xla::core::InternetConnectionRows();
+        const auto health = xla::core::HealthCheckRows();
+        Check(internet.size() == 3 && health.size() == 1,
+              "webConnect: the recovered sections are the three branches and one health entry",
+              std::format("{} + {}", internet.size(), health.size()));
+        Check(internet[0].signature == "FF 15 ? ? ? ? 85 C0 75 18" &&
+                  internet[1].signature == "FF 15 ? ? ? ? 85 C0 75 04 32" &&
+                  internet[2].signature == "FF 15 ? ? ? ? 85 C0 75 07 A0",
+              "webConnect: the three InternetGetConnectedState variants are unchanged");
+        Check(health[0].signature ==
+                  "81 EC ? ? ? ? A1 ? ? ? ? 33 C4 89 84 24 ? ? ? ? 53 ? 6A 3C 33 DB 8D 44 24 "
+                  "? 53 50 E8",
+              "webConnect: the health-check signature is unchanged");
+
+        constexpr std::size_t kStride = 0x80;
+        std::vector<std::size_t> sites;
+        std::vector<std::byte> image(0x400, std::byte{0});
+        std::size_t at = kStride;
+        for (const auto& row : internet)
+        {
+            WriteBytes(image, at, BytesOf(row.signature));
+            sites.push_back(at);
+            at += kStride;
+        }
+        for (const auto& row : health)
+        {
+            WriteBytes(image, at, BytesOf(row.signature));
+            sites.push_back(at);
+            at += kStride;
+        }
+
+        // Each signature is found exactly once on this image.
+        bool foundOnce = true;
+        for (const auto& row : internet)
+        {
+            foundOnce = foundOnce &&
+                        xla::patch::FindIn(xla::Image{image.data(), image.size()}, row.signature, 1)
+                                .size() == 1;
+        }
+        for (const auto& row : health)
+        {
+            foundOnce = foundOnce &&
+                        xla::patch::FindIn(xla::Image{image.data(), image.size()}, row.signature, 1)
+                                .size() == 1;
+        }
+        Check(foundOnce, "webConnect: every recovered signature is found exactly once");
+
+        const std::vector<std::byte> pristine = image;
+        const auto report = xla::core::InstallWebConnectChecks(
+            xla::Image{image.data(), image.size()}, {.internetConnection = true,
+                                                     .healthCheck = true});
+        Check(report.applied == 4 && report.missing == 0,
+              "webConnect: both sections apply",
+              std::format("{}/{}", report.applied, report.applied + report.missing));
+        for (std::size_t index = 0; index < internet.size(); ++index)
+        {
+            Check(image[sites[index] + 8] == std::byte{0x90} &&
+                      image[sites[index] + 9] == std::byte{0x90},
+                  std::format("webConnect: branch {} is NOPed", index));
+        }
+        Check(image[sites[3]] == std::byte{0xC3},
+              "webConnect: the health check's entry becomes ret");
+        const std::array<std::pair<std::size_t, std::size_t>, 4> spans{{
+            {sites[0] + 8, 2},
+            {sites[1] + 8, 2},
+            {sites[2] + 8, 2},
+            {sites[3], 1},
+        }};
+        Check(OnlyChangedWithin(image, pristine, spans),
+              "webConnect: the section writes only the three branches and the ret");
+
+        // The master switch off: nothing is installed, which is the old add-on's
+        // `SkipWebConnect=0` outcome (the two fine-grained keys are refinements).
+        std::vector<std::byte> untouched(pristine);
+        const auto off = xla::core::InstallWebConnectChecks(
+            xla::Image{untouched.data(), untouched.size()},
+            {.internetConnection = false, .healthCheck = false});
+        Check(off.applied == 0 && off.missing == 0 && untouched == pristine,
+              "webConnect: both sections off leaves the image untouched");
+
+        // The fine-grained keys refine the family.
+        std::vector<std::byte> healthOnly(pristine);
+        Check(xla::core::InstallWebConnectChecks(
+                  xla::Image{healthOnly.data(), healthOnly.size()},
+                  {.internetConnection = false, .healthCheck = true})
+                      .applied == 1 &&
+                  healthOnly[sites[3]] == std::byte{0xC3} &&
+                  healthOnly[sites[0] + 8] != std::byte{0x90},
+              "webConnect: SkipInternetConnectionCheck=0 leaves the branches alone");
+        std::vector<std::byte> internetOnly(pristine);
+        Check(xla::core::InstallWebConnectChecks(
+                  xla::Image{internetOnly.data(), internetOnly.size()},
+                  {.internetConnection = true, .healthCheck = false})
+                      .applied == 3 &&
+                  internetOnly[sites[3]] != std::byte{0xC3} &&
+                  internetOnly[sites[2] + 8] == std::byte{0x90},
+              "webConnect: SkipHealthCheck=0 leaves the health entry alone");
+
+        // Missing signatures are a clean skip.
+        std::vector<std::byte> empty(0x100, std::byte{0});
+        const std::vector<std::byte> emptyPristine = empty;
+        const auto skipped = xla::core::InstallWebConnectChecks(
+            xla::Image{empty.data(), empty.size()},
+            {.internetConnection = true, .healthCheck = true});
+        Check(skipped.applied == 0 && skipped.missing == 4 && empty == emptyPristine,
+              "webConnect: a missing signature is a logged skip");
     }
 
     void TestRegistry()
@@ -1492,12 +2085,12 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 24> expected{{
+        const std::array<std::string_view, 28> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
             "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "Profile",
             "Savegames", "SkipLauncher", "LaunchWithPlayGTAIV", "BorderlessWindow", "FocusLoss",
-            "CorePatches", "LauncherStage", "DoNotPauseOnMinimize", "DefWindowProcShims",
-            "Registry", "Complete",
+            "CorePatches", "LauncherStage", "WebConnect", "SkipIntro", "SkipMenu",
+            "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "VramFix", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
               std::to_string(order.size()));
@@ -1533,6 +2126,9 @@ int main()
     TestIatReplacement();
     TestSavegames();
     TestCore();
+    TestWebConnect();
+    TestMenu();
+    TestVram();
     TestRegistry();
     TestProfile();
     TestSkipLauncherTable();

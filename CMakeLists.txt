@@ -78,6 +78,8 @@ set(XLA_MODULES
     source/profile.ixx
     source/core.ixx
     source/launcher.ixx
+    source/menu.ixx
+    source/vram.ixx
     source/windowed.ixx
     source/startup.ixx)
 

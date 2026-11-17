@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// xla.core - the five "core fixes" families, one section per INI key:
-// RemoveDataIntegrityChecks, SkipTokenActivation, SkipFirstTimePlayAsk,
-// SkipInternetConnectionCheck and SkipHealthCheck.
+// xla.core - the recovered GFWL/check fixes, one section per INI key:
+// RemoveDataIntegrityChecks, SkipTokenActivation, SkipFirstTimePlayAsk (the "core"
+// group) and SkipWebConnect, which owns the web-connect and health-check pair.
 //
-// The old XLivelessAddon ran these unconditionally; this tree carries them under
-// the five per-fix keys OpenPreCEPatch's legacy import maps an old `MiscFixes`
-// value onto. Recovered rows, same bytes and offsets as the original ZolikaPatch
-// 7.65 `MiscFixes` handler (`sub_10023DD0`) and the old addon's `InstallCore`: a
-// branch turned into an unconditional jump, `jmp rel8` pairs, two-byte NOPs, a
-// `ret` on the health check and the token `mov eax,1`. The rows are applied one
-// signature at a time and a miss is a logged skip, exactly like the old addon.
+// The old XLivelessAddon ran the data-integrity/token/first-play rows
+// unconditionally; this tree carries them under the three per-fix keys
+// OpenPreCEPatch's legacy import maps an old `MiscFixes` value onto. Recovered rows,
+// same bytes and offsets as the original ZolikaPatch 7.65 `MiscFixes` handler
+// (`sub_10023DD0`) and the old addon's `InstallCore`: a branch turned into an
+// unconditional jump, `jmp rel8` pairs, two-byte NOPs and the token `mov eax,1`.
+// The rows are applied one signature at a time and a miss is a logged skip, exactly
+// like the old addon.
+//
+// SkipWebConnect is the old add-on's single key for the two recovered sections of
+// its `InstallWebConnectChecks`: the three `InternetGetConnectedState` branches
+// (`SkipInternetConnectionCheck`) and the health check's entry (`SkipHealthCheck`).
+// The two fine-grained keys stay as refinements, so an old INI's `SkipWebConnect=0`
+// keeps both checks in place (the reference's outcome) while a user who wants one
+// of the two skipped can still say so.
 //
 // The original's `MiscFixes` bundle had an eleventh literal -- a short jump in the
 // DLC manager init -- which the old addon never applied and which sits inside the
@@ -65,11 +73,17 @@ export namespace xla::core
     // SkipHealthCheck: the GFWL health check's entry.
     std::span<const Row> HealthCheckRows() noexcept;
 
+    // The three per-fix keys of the "core" group.
     struct Options
     {
         bool dataIntegrity{true};
         bool tokenActivation{true};
         bool firstTimePlay{true};
+    };
+
+    // SkipWebConnect's two recovered sections, in the reference's order.
+    struct WebConnectOptions
+    {
         bool internetConnection{true};
         bool healthCheck{true};
     };
@@ -85,8 +99,12 @@ export namespace xla::core
     // image.
     Report Apply(const Image& image, std::span<const Row> rows, std::string_view key);
 
-    // The five fixes, each behind its key. Returns the summed report.
+    // The three "core" fixes, each behind its key. Returns the summed report.
     Report Install(const Image& image, const Options& options);
+
+    // [Options] SkipWebConnect: the reference add-on's `InstallWebConnectChecks`,
+    // one section over the two recovered row sets.
+    Report InstallWebConnectChecks(const Image& image, const WebConnectOptions& options);
 } // namespace xla::core
 
 namespace xla::core
@@ -263,8 +281,27 @@ namespace xla::core
         run(options.dataIntegrity, kDataIntegrity, "RemoveDataIntegrityChecks");
         run(options.tokenActivation, kTokenActivation, "SkipTokenActivation");
         run(options.firstTimePlay, kFirstTimePlay, "SkipFirstTimePlayAsk");
-        run(options.internetConnection, kInternetConnection, "SkipInternetConnectionCheck");
-        run(options.healthCheck, kHealthCheck, "SkipHealthCheck");
+        return total;
+    }
+
+    Report InstallWebConnectChecks(const Image& image, const WebConnectOptions& options)
+    {
+        Report total;
+        // The reference's `InstallWebConnectChecks` order: the three web-connect
+        // branches first, then the health check's entry.
+        const auto run = [&](bool enabled, std::span<const Row> rows, std::string_view key)
+        {
+            if (!enabled)
+            {
+                Log::Trace("{}: option off", key);
+                return;
+            }
+            const Report report = Apply(image, rows, key);
+            total.applied += report.applied;
+            total.missing += report.missing;
+        };
+        run(options.internetConnection, kInternetConnection, "SkipWebConnect (web-connect)");
+        run(options.healthCheck, kHealthCheck, "SkipWebConnect (health check)");
         return total;
     }
 } // namespace xla::core

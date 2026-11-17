@@ -376,6 +376,80 @@ export namespace xla::patch
         return true;
     }
 
+    // Retargets the `call rel32` at `site` and returns the destination it had
+    // before (nullptr when the site is not writable). The previous destination is
+    // read first: the caller publishes it as its body's resume, the same contract
+    // as the live-site `Call` and as FusionFix's `injector::MakeCALL(..).get()`.
+    inline void* RetargetCallAt(const Image& image, std::uint8_t* site, void* destination,
+                                std::string_view label)
+    {
+        if (site == nullptr || destination == nullptr || !image.contains(site, 5))
+        {
+            return nullptr;
+        }
+        std::int32_t displacement = 0;
+        std::memcpy(&displacement, site + 1, sizeof(displacement));
+        auto* previous = reinterpret_cast<void*>(
+            site + 5 + static_cast<std::ptrdiff_t>(displacement));
+        injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(destination), true);
+        Log::Print("{}: call to {:08X} at {:08X} (was {:08X})", label,
+                   reinterpret_cast<std::uintptr_t>(destination),
+                   reinterpret_cast<std::uintptr_t>(site),
+                   reinterpret_cast<std::uintptr_t>(previous));
+        return previous;
+    }
+
+    // Replaces the whole `length`-byte instruction window at `site` with a jump to
+    // `destination` (five bytes) and NOP-fills the rest, so the destination owns
+    // the instructions the window held and continues at `site + length`. The pinned
+    // injector's classic revision has no `MakeInline`/`reg_pack`, so a window hook
+    // is this jump plus a body; FusionFix writes the same window through
+    // `injector::MakeInline`.
+    inline bool InlineJumpAt(const Image& image, std::uint8_t* site, std::size_t length,
+                             const void* destination, std::string_view label)
+    {
+        if (site == nullptr || destination == nullptr || length < 5 ||
+            !image.contains(site, length))
+        {
+            return false;
+        }
+        injector::MakeJMP(injector::raw_ptr(site),
+                          injector::raw_ptr(const_cast<void*>(destination)), true);
+        if (length > 5)
+        {
+            injector::MemoryFill(injector::raw_ptr(site + 5), 0x90, length - 5, true);
+        }
+        Log::Print("{}: window jmp to {:08X} at {:08X} ({} byte(s), resume {:08X})", label,
+                   reinterpret_cast<std::uintptr_t>(destination),
+                   reinterpret_cast<std::uintptr_t>(site), length,
+                   reinterpret_cast<std::uintptr_t>(site + length));
+        return true;
+    }
+
+    // Copies a caller-assembled body into fresh executable memory and flushes the
+    // instruction cache. The bytes are the caller's data (a recovered stub or the
+    // register contract a window hook has to reproduce); a failed allocation is a
+    // logged skip, so the caller can leave the site alone.
+    inline void* MakeStub(std::span<const std::uint8_t> code, std::string_view label)
+    {
+        if (code.empty())
+        {
+            return nullptr;
+        }
+        void* memory = ::VirtualAlloc(nullptr, code.size(), MEM_COMMIT | MEM_RESERVE,
+                                      PAGE_EXECUTE_READWRITE);
+        if (memory == nullptr)
+        {
+            Log::Print("{}: cannot allocate a {} byte stub", label, code.size());
+            return nullptr;
+        }
+        std::memcpy(memory, code.data(), code.size());
+        ::FlushInstructionCache(::GetCurrentProcess(), memory, code.size());
+        Log::Print("{}: {} byte stub at {:08X}", label, code.size(),
+                   reinterpret_cast<std::uintptr_t>(memory));
+        return memory;
+    }
+
     // Replaces import slots in `module`'s import (and delay-import) tables. The
     // return value maps each input name to the target the slot held before the
     // replacement; a name with no map entry was not present, so "was it replaced"

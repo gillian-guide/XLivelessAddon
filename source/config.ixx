@@ -16,8 +16,9 @@
 // with FusionFix on 1.0.8.0 (the two redirects fight over the same shell/import
 // slots and the gate can clear a path the user configured for this add-on). Those
 // three keys are gone; `[USERPROFILE] CustomUserProfilePath` is one redirect of the
-// shell profile folders and works on this add-on's own detection. The new tree
-// gates only the windowed options, which are genuinely FusionFix's subsystem.
+// shell profile folders and works on this add-on's own detection. The frontend pair
+// (SkipIntro/SkipMenu) and the windowed options are genuinely FusionFix's
+// subsystems and stay gated.
 
 module;
 
@@ -31,8 +32,10 @@ import common;
 export namespace xla::config
 {
     // One INI option set. Every member's initializer is the original add-on's
-    // code default, not the shipped INI: the shipped file explicitly enables
-    // DoNotPauseOnMinimize and BorderlessWindowed.
+    // distribution default, not the shipped INI: the shipped file explicitly
+    // enables DoNotPauseOnMinimize and BorderlessWindowed. The four restored
+    // frontend/GFWL/VRAM keys carry their shipped values here too, so an existing
+    // INI written before they existed keeps the old add-on's shipped behaviour.
     struct Options
     {
         std::string customUserProfilePath;
@@ -42,10 +45,14 @@ export namespace xla::config
         bool skipFirstTimePlayAsk{true};
         bool skipInternetConnectionCheck{true};
         bool skipHealthCheck{true};
+        bool skipWebConnect{true};
         bool skipLauncher{true};
         bool legacyLauncher{true};
         bool launchWithPlayGTAIV{true};
         bool removeRegistryPathDependency{true};
+        bool skipIntro{true};
+        bool skipMenu{false};
+        bool vramFix{true};
         bool doNotPauseOnMinimize{false};
         bool borderlessWindowed{false};
         bool startupWarnings{true};
@@ -107,6 +114,9 @@ SkipTokenActivation=1
 SkipFirstTimePlayAsk=1
 SkipInternetConnectionCheck=1
 SkipHealthCheck=1
+; skip the GFWL web-connect and health checks (the old add-on's single key for the
+; two fine-grained keys above; 0 leaves both checks in place)
+SkipWebConnect=1
 ; skip the launcher/DRM checks (recovered DFA and ROM stages)
 SkipLauncher=1
 ; legacy DFA + WM_ROM stage, only when SkipLauncher=0; with both at 0 no launcher work
@@ -117,6 +127,14 @@ LegacyLauncher=1
 LaunchWithPlayGTAIV=1
 ; remove the Rockstar Games registry path dependency
 RemoveRegistryPathDependency=1
+; shorten the intro screens (the ones under 8000 ms; FusionFix's skipintro.ixx owns
+; this when present)
+SkipIntro=1
+; skip the main menu (hold SHIFT on startup to reach it) (FusionFix's skipintro.ixx
+; owns this when present)
+SkipMenu=0
+; fix the VRAM detection so the graphics settings are not locked out
+VRAMFix=1
 ; keep rendering while the borderless window is unfocused
 DoNotPauseOnMinimize=1
 ; borderless window
@@ -151,17 +169,21 @@ CustomUserProfilePath=./Savefiles
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 13> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 17> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"RemoveDataIntegrityChecks", &Options::removeDataIntegrityChecks},
             {"SkipTokenActivation", &Options::skipTokenActivation},
             {"SkipFirstTimePlayAsk", &Options::skipFirstTimePlayAsk},
             {"SkipInternetConnectionCheck", &Options::skipInternetConnectionCheck},
             {"SkipHealthCheck", &Options::skipHealthCheck},
+            {"SkipWebConnect", &Options::skipWebConnect},
             {"SkipLauncher", &Options::skipLauncher},
             {"LegacyLauncher", &Options::legacyLauncher},
             {"LaunchWithPlayGTAIV", &Options::launchWithPlayGTAIV},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
+            {"SkipIntro", &Options::skipIntro},
+            {"SkipMenu", &Options::skipMenu},
+            {"VRAMFix", &Options::vramFix},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize},
             {"BorderlessWindowed", &Options::borderlessWindowed},
             {"StartupWarnings", &Options::startupWarnings},
@@ -405,7 +427,10 @@ CustomUserProfilePath=./Savefiles
 
     // Switches off the options whose subsystem FusionFix owns and returns what
     // was gated. The local-directory options are deliberately absent: they must
-    // work on this add-on's own detection (see the file header).
+    // work on this add-on's own detection (see the file header). `VRAMFix` and
+    // `SkipWebConnect` are absent too: this tree's VRAM fix is the recovered
+    // call-site clamp (not FusionFix's `grcDevice::GetAvailableVideoMemory`
+    // rewrite), and FusionFix has no GFWL, so neither overlaps.
     inline std::vector<FusionFixGate> ApplyFusionFixGates(Options& options)
     {
         struct Gate
@@ -415,7 +440,9 @@ CustomUserProfilePath=./Savefiles
             std::string_view fusionFixModule;
         };
 
-        constexpr std::array<Gate, 2> gates{{
+        constexpr std::array<Gate, 4> gates{{
+            {"SkipIntro", &Options::skipIntro, "skipintro.ixx"},
+            {"SkipMenu", &Options::skipMenu, "skipintro.ixx"},
             {"BorderlessWindowed", &Options::borderlessWindowed, "windowed.ixx"},
             {"DoNotPauseOnMinimize", &Options::doNotPauseOnMinimize, "windowed.ixx"},
         }};

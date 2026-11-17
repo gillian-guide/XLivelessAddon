@@ -6,6 +6,12 @@ A clean reimplementation of the XLivelessAddon companion for GTA IV / EFLC, in
 the shape of GTAIV.EFLC.FusionFix. It is its **own repository**; it is loaded
 next to OpenPreCEPatch and never links it.
 
+Its scope is **the original XLivelessAddon's whole option surface**, rebuilt in
+FusionFix shape and reusing ZolikaPatch/FusionFix code wherever that is the
+reference (the frontend pair is FusionFix's `skipintro.ixx`; the launcher, the
+VRAM fix and the GFWL checks are the old add-on's recovered rows). It is not a
+subset: an old INI's keys keep their meaning here.
+
 The behavioural reference is `../openprecepatch/xlivelessaddon/`; the
 shape/feature reference is `../GTAIV.EFLC.FusionFix/`; the build/layout template
 is `../fusionfix-skeleton/`. Those three trees are read-only: copy from them and
@@ -26,8 +32,9 @@ The invariants the tree is built around:
 - **Every install is INI-gated, and all-off is inert.** `SavegameFix`,
   `SkipLauncher`, `LaunchWithPlayGTAIV`, `LegacyLauncher`,
   `RemoveRegistryPathDependency`, `RemoveDataIntegrityChecks`,
-  `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipInternetConnectionCheck`,
-  `SkipHealthCheck`, `BorderlessWindowed`,
+  `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipWebConnect` (with
+  `SkipInternetConnectionCheck`/`SkipHealthCheck` refining it), `SkipIntro`,
+  `SkipMenu`, `VRAMFix`, `BorderlessWindowed`,
   `DoNotPauseOnMinimize` and a non-empty `[USERPROFILE] CustomUserProfilePath`
   cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
@@ -59,19 +66,22 @@ The invariants the tree is built around:
 - `source/*.ixx` — one C++23 module interface unit per feature family, plus the
   infrastructure units (`common`, `patch`, `build`, `config`, `probe`, `startup`)
   and the feature families `warnings`, `savegames`, `registry`, `profile`,
-  `core`, `launcher`, `windowed`. They are listed in the `CXX_MODULES` file set.
+  `core`, `launcher`, `menu`, `vram`, `windowed`. They are listed in the
+  `CXX_MODULES` file set.
   A module is one feature family, not one original handler: `launcher` owns every
-  launcher stage (both SkipLauncher stages and the `LaunchWithPlayGTAIV` arm), and
-  `core` owns the five core fixes.
+  launcher stage (both SkipLauncher stages and the `LaunchWithPlayGTAIV` arm),
+  `core` owns the recovered check fixes (the three "core" rows and the
+  SkipWebConnect family), `menu` owns the frontend pair, and `vram` owns the VRAM
+  detection fix.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
 - `source/dllmain.cpp` — the entry point and the only plain TU in `source/`.
 - `source/patch.ixx` — the primitive scan/store/branch/IAT helpers; the only
   installer.
 - `source/config.ixx` — the INI defaults, load, legacy fallback and the
-  FusionFix windowed gates. `Load`/`Publish` are out of line: `IniReader` is
-  all-inline and MSVC 19.51 crashes when that body is imported into another
-  module interface unit.
+  FusionFix gates (the frontend pair and the windowed options). `Load`/`Publish`
+  are out of line: `IniReader` is all-inline and MSVC 19.51 crashes when that
+  body is imported into another module interface unit.
 - `source/startup.ixx` — `Game` initialisation, the registration order, the
   synchronous pass, `AnyInstallEnabled` and the all-off path.
 - `source/launcher.ixx` — the whole launcher family: the `SkipLauncher=1`
@@ -91,8 +101,20 @@ The invariants the tree is built around:
 - `source/profile.ixx` — `[USERPROFILE] CustomUserProfilePath`: the shell-folder
   user-data redirect. The save folder is one of the roots it redirects; the
   CRC32 bypass is the separate SavegameFix family.
-- `source/core.ixx` — the recovered "core" fixes in one section per key: VDS/
-  data-integrity, DLC token, first-time-play ask, Internet check, health check.
+- `source/core.ixx` — the recovered check fixes in one section per key: the three
+  "core" rows (VDS/data-integrity, DLC token, first-time-play ask) and
+  `SkipWebConnect`, the old add-on's single key for the web-connect and health
+  check pair (`SkipInternetConnectionCheck`/`SkipHealthCheck` refine it).
+- `source/menu.ixx` — `SkipIntro`/`SkipMenu`: FusionFix's `skipintro.ixx`
+  mechanism (the Loadsc window that zeroes the screens under 8000 ms, and the
+  `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch, the SHIFT
+  escape and `a1 = 6`). The pinned injector is the classic revision with no
+  `MakeInline`, so the Loadsc window jumps into an assembled stub whose bytes the
+  suite pins (`BuildIntroStub`) and executes; the menu call keeps the reference
+  add-on's `E8` retarget with the captured original called from the body.
+- `source/vram.ixx` — `VRAMFix`: the old add-on's recovered `InstallVramFix`
+  (three call sites retargeted at a body that clamps a non-positive answer to
+  INT_MAX), including the reference's one-variable overwrite order.
 - `source/registry.ixx` — `RemoveRegistryPathDependency`.
 - `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
   FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
@@ -112,6 +134,8 @@ The invariants the tree is built around:
 **Mirrored:**
 
 - the borderless window, centring and focus-loss input (`windowed.ixx`);
+- the `SkipIntro`/`SkipMenu` mechanism (`menu.ixx`, taken from FusionFix's
+  `skipintro.ixx`: the Loadsc window, the `sub_7870A0` body and its latch);
 - the `SHGetFolderPath` user-data redirect and its `[USERPROFILE]
   CustomUserProfilePath` key (`profile.ixx`);
 - the `Event<Args...>` tiers, `Log`, `Game` context and `find_pattern` idiom
@@ -120,12 +144,16 @@ The invariants the tree is built around:
 
 **Deliberately not FusionFix-gated:** `[USERPROFILE] CustomUserProfilePath`. The
 old addon's gate misbehaves with FusionFix on 1.0.8.0 and can clear a path the
-user configured. The windowed options stay gated.
+user configured. `VRAMFix` and `SkipWebConnect` stay ungated: the VRAM fix here
+is the old add-on's recovered call-site clamp, not FusionFix's
+`grcDevice::GetAvailableVideoMemory` rewrite, and FusionFix has no GFWL. The
+frontend pair and the windowed options are gated.
 
 **No FusionFix counterpart / recovered:** the SkipLauncher main table, the DFA
 and ROM stages, the WM_ROM service, the `LaunchWithPlayGTAIV` name-slot rewrite,
-the SavegameFix CRC bypass and its hardened save-path call sites, the registry
-path and the legacy launcher stage.
+the SavegameFix CRC bypass and its hardened save-path call sites, the
+`SkipWebConnect` family, the VRAM call-site clamp, the registry path and the
+legacy launcher stage.
 
 ## Build and test
 
@@ -141,17 +169,23 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**353 checks**.
+**448 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
 SkipLauncher table against the old addon's golden). The native suite now also
 pins the launcher arm (`TestLaunchWithPlayGTAIV`: the two recovered slots on a
 synthetic image of the right shape, the 16-byte payload, the short/long/off-RVA
-refusals, the one-row-per-classified-build switch and the probe override) and the
+refusals, the one-row-per-classified-build switch and the probe override), the
 savegame arm (`TestSavegames`: the four recovered body VAs, the ten call
 retargets with their destinations and order, the two-byte NOP, and the
-missing-anchor and short-view skips).
+missing-anchor and short-view skips), the frontend pair (`TestMenu`: FusionFix's
+pattern strings, the intro stub's bytes and its executed register contract, the
+five-hit and fallback menu installs, the body's latch/SHIFT/a1 = 6 behaviour and
+the missing-pattern skips), the VRAM fix (`TestVram`: the three call retargets,
+the clamp answers and the reference's overwrite quirk) and the web-connect family
+(`TestWebConnect`: the two recovered sections, their exact writes and the
+fine-grained keys).
 
 ## Rules learned the hard way
 
@@ -177,6 +211,13 @@ missing-anchor and short-view skips).
 7. **All-off is a supported state.** Do not add an install outside the
    `AnyInstallEnabled()` predicate; `TestAllOff` flips each key and expects the
    predicate to become true again.
+8. **The frontend pair is FusionFix's mechanism, ported.** Keep the Loadsc window
+   (two instructions, 10 bytes), the 8000 ms test and the zeroing of the screen
+   time: do not substitute the old add-on's `-6` detour or its 300 ms literal.
+   The `SkipMenu` hook must stay installed while `SkipIntro` is on, because its
+   first call sets the `bSkipIntroNotNeeded` latch; the two install steps are
+   separate only so each key has its own log line. `VRAMFix` is the old add-on's
+   recovered call-site clamp, not FusionFix's memory rewrite; do not swap them.
 
 ## Dependency policy
 

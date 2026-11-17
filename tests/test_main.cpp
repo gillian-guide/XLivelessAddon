@@ -1297,10 +1297,20 @@ namespace
         return 5678;
     }
 
+    std::uint64_t __cdecl FusionFixHighAnswer()
+    {
+        return 3ull * 1024 * 1024 * 1024;
+    }
+    std::uint64_t __cdecl FusionFixLowAnswer()
+    {
+        return 1024ull * 1024 * 1024;
+    }
+
     void TestVram()
     {
         using namespace xla::vram;
 
+        // The recovered reference rows and FusionFix's patterns are pinned.
         Check(Rows().size() == 3, "vram: the three recovered call sites are pinned");
         Check(Rows()[0].signature == "E8 ? ? ? ? D9 E8 85 C0" &&
                   Rows()[1].signature ==
@@ -1308,7 +1318,19 @@ namespace
                   Rows()[2].signature ==
                       "E8 ? ? ? ? F3 0F 10 05 ? ? ? ? 89 44 24 08 6A 01 8D 44 24",
               "vram: the recovered signatures are unchanged");
+        Check(kFusionFixPattern == "8B 0D ? ? ? ? 83 EC ? 33 C0",
+              "vram: the FusionFix generation's entry pattern is FusionFix's");
+        Check(DevicePatterns().size() == 3 &&
+                  DevicePatterns()[0] == "83 3D ? ? ? ? ? 74 17 8B 4D 14" &&
+                  DevicePatterns()[1] == "83 3D ? ? ? ? ? 74 15 8B 44 24 1C" &&
+                  DevicePatterns()[2] == "83 3D ? ? ? ? ? 74 EF",
+              "vram: FusionFix's device-pointer patterns are unchanged");
+        Check(kTwoGigabytes == 2147483648ull, "vram: FusionFix's 2 GB floor is pinned");
+        Check(PathName(Path::none) == "none" && PathName(Path::reference) == "reference" &&
+                  PathName(Path::fusionFix) == "fusionFix",
+              "vram: the path names are the log's words");
 
+        // ---- the reference generation ----------------------------------------
         // The body clamps a non-positive answer to INT_MAX and passes the rest.
         SetVidMemOriginal(nullptr);
         Check(GetVidMemBody() == INT_MAX, "vram: a missing original answers INT_MAX");
@@ -1319,6 +1341,7 @@ namespace
         SetVidMemOriginal(&VidMemSmall);
         Check(GetVidMemBody() == 1234, "vram: a positive answer passes through");
         SetVidMemOriginal(nullptr);
+
         constexpr std::size_t kStride = 0x80;
         const std::array<std::int32_t(__cdecl*)(), 3> originals{&VidMemZero, &VidMemNegative,
                                                                &VidMemLast};
@@ -1333,21 +1356,23 @@ namespace
             sites.push_back(at);
         }
         const std::vector<std::byte> pristine = image;
-        Check(Install(xla::Image{image.data(), image.size()}) == 3,
-              "vram: all three call sites are retargeted");
+        const auto reference = Install(xla::Image{image.data(), image.size()});
+        Check(reference.path == Path::reference && reference.rowsApplied == 3,
+              "vram: the reference generation installs its three rows",
+              std::format("{} {}", PathName(reference.path), reference.rowsApplied));
         for (const std::size_t at : sites)
         {
             Check(CallTarget(image, at) ==
                       reinterpret_cast<std::uintptr_t>(&GetVidMemBody),
                   std::format("vram: the call at {:#x} runs the clamp body", at));
         }
-        const std::array spans{
+        const std::array referenceSpans{
             std::pair<std::size_t, std::size_t>{sites[0], 5},
             std::pair<std::size_t, std::size_t>{sites[1], 5},
             std::pair<std::size_t, std::size_t>{sites[2], 5},
         };
-        Check(OnlyChangedWithin(image, pristine, spans),
-              "vram: the arm writes only the three call displacements");
+        Check(OnlyChangedWithin(image, pristine, referenceSpans),
+              "vram: the reference arm writes only the three call displacements");
         Check(HasVidMemOriginal() && GetVidMemBody() == 5678,
               "vram: every body forwards through the last row's original");
 
@@ -1358,7 +1383,8 @@ namespace
         SetCallTarget(partial, 0x80, reinterpret_cast<std::uintptr_t>(&VidMemZero));
         WriteBytes(partial, 0x100, BytesOf(Rows()[1].signature));
         SetCallTarget(partial, 0x100, reinterpret_cast<std::uintptr_t>(&VidMemNegative));
-        Check(Install(xla::Image{partial.data(), partial.size()}) == 2,
+        const auto partialReport = Install(xla::Image{partial.data(), partial.size()});
+        Check(partialReport.path == Path::reference && partialReport.rowsApplied == 2,
               "vram: two present rows install, the third is a skip");
         Check(CallTarget(partial, 0x80) == reinterpret_cast<std::uintptr_t>(&GetVidMemBody) &&
                   CallTarget(partial, 0x100) == reinterpret_cast<std::uintptr_t>(&GetVidMemBody),
@@ -1368,13 +1394,109 @@ namespace
         Check(GetVidMemBody() == INT_MAX,
               "vram: ... so the installed bodies then answer INT_MAX");
 
-        // No row at all: a clean skip, no writes.
-        std::vector<std::byte> empty(0x100, std::byte{0});
-        const std::vector<std::byte> emptyPristine = empty;
-        Check(Install(xla::Image{empty.data(), empty.size()}) == 0,
-              "vram: a missing signature is a logged skip");
-        Check(empty == emptyPristine, "vram: the skip writes nothing");
-        Check(!HasVidMemOriginal(), "vram: ... and leaves no original published");
+        // ---- the FusionFix generation ---------------------------------------
+        // Its value contract: 2 GB or more stands, otherwise the largest of the
+        // preferred GPU memory, the d3d9 texture memory and the 2 GB floor.
+        Check(FusionFixVramValue(kTwoGigabytes + 1, 0, 0) == kTwoGigabytes + 1,
+              "vram: an answer of 2 GB or more is passed through");
+        Check(FusionFixVramValue(FusionFixLowAnswer(), 0, 0) == kTwoGigabytes,
+              "vram: a smaller answer is floored at 2 GB");
+        Check(FusionFixVramValue(FusionFixLowAnswer(), 4ull * 1024 * 1024 * 1024, 0) ==
+                  4ull * 1024 * 1024 * 1024,
+              "vram: the preferred GPU memory wins when it is the largest");
+        Check(FusionFixVramValue(FusionFixLowAnswer(), 1024ull * 1024 * 1024,
+                                 2ull * 1024 * 1024 * 1024) == 2ull * 1024 * 1024 * 1024,
+              "vram: the d3d9 texture memory is part of the maximum");
+
+        // A synthetic image with the entry prologue and FusionFix's device site.
+        constexpr std::size_t kEntryAt = 0x100;
+        constexpr std::size_t kDeviceAt = 0x200;
+        constexpr std::size_t kEntryGlobalAt = 0x300;
+        constexpr std::size_t kDeviceSlotAt = 0x304;
+        constexpr std::size_t kWindow = 6;
+
+        ResetFusionFixState();
+        std::vector<std::byte> fusionfix(0x400, std::byte{0});
+        WriteBytes(fusionfix, kEntryAt, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
+        WriteDword(fusionfix, kEntryAt + 2,
+                   static_cast<std::uint32_t>(
+                       reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kEntryGlobalAt));
+        WriteBytes(fusionfix, kDeviceAt, BytesOf("83 3D ? ? ? ? 00 74 EF"));
+        WriteDword(fusionfix, kDeviceAt + 2,
+                   static_cast<std::uint32_t>(
+                       reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kDeviceSlotAt));
+        const std::vector<std::byte> fusionfixPristine = fusionfix;
+
+        const auto fusionfixReport = Install(xla::Image{fusionfix.data(), fusionfix.size()});
+        Check(fusionfixReport.path == Path::fusionFix && fusionfixReport.rowsApplied == 0,
+              "vram: the FusionFix path installs where the reference rows are absent",
+              std::format("{} {}", PathName(fusionfixReport.path),
+                          fusionfixReport.rowsApplied));
+        Check(fusionfix[kEntryAt] == std::byte{0xE9} &&
+                  JumpTarget(fusionfix, kEntryAt) ==
+                      reinterpret_cast<std::uintptr_t>(&FusionFixGetAvailableVideoMemory),
+              "vram: the entry becomes a jump into FusionFix's replacement");
+        Check(fusionfix[kEntryAt + 5] == std::byte{0x90},
+              "vram: the rest of the replaced window is NOPed");
+        Check(FusionFixOriginal() != nullptr,
+              "vram: the trampoline is published as the original");
+        const auto* trampoline =
+            reinterpret_cast<const std::uint8_t*>(FusionFixOriginal());
+        Check(trampoline[0] == 0x8B && trampoline[1] == 0x0D &&
+                  DwordAt(trampoline, 2) == DwordAt(fusionfixPristine.data(), kEntryAt + 2),
+              "vram: the trampoline runs the instruction the hook replaced");
+        Check(trampoline[kWindow] == 0xE9 &&
+                  reinterpret_cast<std::uintptr_t>(trampoline) + kWindow + 5 +
+                          static_cast<std::intptr_t>(DwordAt(trampoline, kWindow + 1)) ==
+                      reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kEntryAt + kWindow,
+              "vram: the trampoline resumes after the replaced window");
+        const std::array fusionfixSpans{
+            std::pair<std::size_t, std::size_t>{kEntryAt, kWindow}};
+        Check(OnlyChangedWithin(fusionfix, fusionfixPristine, fusionfixSpans),
+              "vram: the FusionFix arm writes only the entry window");
+
+        // The generation split: with a reference row on the same image, the reference
+        // path wins and the FusionFix entry is left alone.
+        {
+            ResetFusionFixState();
+            std::vector<std::byte> both(0x400, std::byte{0});
+            WriteBytes(both, 0x80, BytesOf(Rows()[0].signature));
+            SetCallTarget(both, 0x80, reinterpret_cast<std::uintptr_t>(&VidMemZero));
+            WriteBytes(both, kEntryAt, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
+            WriteDword(both, kEntryAt + 2,
+                       static_cast<std::uint32_t>(
+                           reinterpret_cast<std::uintptr_t>(both.data()) + kEntryGlobalAt));
+            const std::vector<std::byte> bothPristine = both;
+            const auto bothReport = Install(xla::Image{both.data(), both.size()});
+            Check(bothReport.path == Path::reference && bothReport.rowsApplied == 1,
+                  "vram: the reference generation owns a build whose rows match",
+                  std::format("{} {}", PathName(bothReport.path), bothReport.rowsApplied));
+            Check(both[kEntryAt] == bothPristine[kEntryAt] && FusionFixOriginal() == nullptr,
+                  "vram: ... and the FusionFix entry is left alone");
+            ResetFusionFixState();
+        }
+
+        // No path at all: a clean skip, no writes.
+        {
+            std::vector<std::byte> empty(0x100, std::byte{0});
+            const std::vector<std::byte> emptyPristine = empty;
+            const auto emptyReport = Install(xla::Image{empty.data(), empty.size()});
+            Check(emptyReport.path == Path::none && emptyReport.rowsApplied == 0,
+                  "vram: no path matched this build");
+            Check(empty == emptyPristine, "vram: the skip writes nothing");
+            Check(!HasVidMemOriginal() && FusionFixOriginal() == nullptr,
+                  "vram: ... and leaves nothing published");
+        }
+
+        // The replacement itself: the original's answer is forwarded or floored.
+        ResetFusionFixState();
+        SetFusionFixOriginal(&FusionFixHighAnswer);
+        Check(FusionFixGetAvailableVideoMemory() == 3ull * 1024 * 1024 * 1024,
+              "vram: a 3 GB answer is passed through by the replacement");
+        SetFusionFixOriginal(&FusionFixLowAnswer);
+        Check(FusionFixGetAvailableVideoMemory() == kTwoGigabytes,
+              "vram: a 1 GB answer becomes FusionFix's 2 GB floor (no d3d9 device here)");
+        SetFusionFixOriginal(nullptr);
     }
 
     // ---- SkipWebConnect ------------------------------------------------------

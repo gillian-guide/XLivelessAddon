@@ -36,8 +36,11 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 - `SkipIntro`/`SkipMenu` — shorten the intro screens (the ones under 8000 ms) and skip the main
   menu, with SHIFT held on startup to reach it. FusionFix's mechanism, ported from its
   `skipintro.ixx`; FusionFix's own copy owns these keys when its ASI is installed.
-- `VRAMFix` — retarget the game's VRAM queries at a clamp, so the graphics settings are not
-  locked out (the old add-on's recovered call-site fix).
+- `VRAMFix` — fix the VRAM detection so the graphics settings are not locked out, in the two
+  generations the game has: the old add-on's recovered call-site clamp on the builds whose
+  queries it can retarget, and FusionFix's `GetAvailableVideoMemory` replacement (DXGI budget,
+  d3d9 texture memory and its 2 GB floor) on 1.0.8.0/EFLC 1.1.3.0. The log names the path that
+  ran.
 - `RemoveRegistryPathDependency` — remove the Rockstar Games registry path dependency.
 - `BorderlessWindowed`/`DoNotPauseOnMinimize` — add borderless windowed mode and keep
   rendering while the borderless window is unfocused.
@@ -70,7 +73,7 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite (448 checks), the ASI image load, the PE checks, the
+INI. `ctest` runs the native suite (470 checks), the ASI image load, the PE checks, the
 no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit

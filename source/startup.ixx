@@ -583,7 +583,9 @@ namespace xla::startup
                     Log::Trace("vramFix: option off");
                     return;
                 }
-                vram::Install(game.View());
+                // The installer picks the build's generation (the old add-on's rows or
+                // FusionFix's replacement) and logs the path it took.
+                (void)vram::Install(game.View());
             };
 
             Record("Complete");

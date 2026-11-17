@@ -16,7 +16,9 @@ add-on for GTA IV / Episodes from Liberty City. It is meant to run next to
   (GPL-3.0), which supplied the windowed/focus-loss implementation, the
   SHGetFolderPath user-data redirect, the FusionFix notice shape, the
   `SkipIntro`/`SkipMenu` mechanism (`source/skipintro.ixx`, copied into
-  `source/menu.ixx`) and the overall module layout conventions.
+  `source/menu.ixx`), the `grcDevice::GetAvailableVideoMemory` replacement and
+  its value contract (`source/memory.ixx`, copied into `source/vram.ixx`) and
+  the overall module layout conventions.
 - **LINK/2012 and ThirteenAG** — the `injector` memory-patching library.
 - **CitizenFX / NTAuthority** — `Hooking.Patterns`.
 - **ThirteenAG** — `IniReader`; **Danijel Durakovic** — `mINI`.

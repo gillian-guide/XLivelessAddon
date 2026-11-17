@@ -460,6 +460,62 @@ export namespace xla::patch
         return memory;
     }
 
+    // A callable copy of the whole instruction in the `length` bytes at `entry`:
+    // the window is copied into fresh executable memory, followed by
+    // `jmp entry + length`, so a caller can call the copy and reach the rest of the
+    // original function. This is the trampoline half of a call-through entry hook
+    // (safetyhook builds the same thing for FusionFix's `create_inline`). The caller
+    // owns the claim that the window is one instruction and publishes the returned
+    // pointer BEFORE `HookEntryAt` writes the jump.
+    inline void* MakeEntryTrampoline(const std::uint8_t* entry, std::size_t length,
+                                     std::string_view label)
+    {
+        if (entry == nullptr || length < 5)
+        {
+            return nullptr;
+        }
+        const std::size_t size = length + 5;
+        auto* memory = static_cast<std::uint8_t*>(
+            ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (memory == nullptr)
+        {
+            Log::Print("{}: cannot allocate a {} byte trampoline", label, size);
+            return nullptr;
+        }
+        std::memcpy(memory, entry, length);
+        const auto resume = reinterpret_cast<std::uintptr_t>(entry) + length;
+        const auto displacement = static_cast<std::int32_t>(
+            resume - (reinterpret_cast<std::uintptr_t>(memory) + size));
+        memory[length] = Byte(Opcode::kJmpRel32);
+        std::memcpy(memory + length + 1, &displacement, sizeof(displacement));
+        ::FlushInstructionCache(::GetCurrentProcess(), memory, size);
+        Log::Print("{}: {} byte trampoline at {:08X} (resume {:08X})", label, size,
+                   reinterpret_cast<std::uintptr_t>(memory), resume);
+        return memory;
+    }
+
+    // The entry half of the same hook: the `length` bytes at `entry` become a jump to
+    // `replacement`, with the rest of the window NOPed.
+    inline bool HookEntryAt(const Image& image, std::uint8_t* entry, std::size_t length,
+                            const void* replacement, std::string_view label)
+    {
+        if (entry == nullptr || replacement == nullptr || length < 5 ||
+            !image.contains(entry, length))
+        {
+            return false;
+        }
+        injector::MakeJMP(injector::raw_ptr(entry),
+                          injector::raw_ptr(const_cast<void*>(replacement)), true);
+        if (length > 5)
+        {
+            injector::MemoryFill(injector::raw_ptr(entry + 5), 0x90, length - 5, true);
+        }
+        Log::Print("{}: entry hook to {:08X} at {:08X} ({} byte(s))", label,
+                   reinterpret_cast<std::uintptr_t>(replacement),
+                   reinterpret_cast<std::uintptr_t>(entry), length);
+        return true;
+    }
+
     // Replaces import slots in `module`'s import (and delay-import) tables. The
     // return value maps each input name to the target the slot held before the
     // replacement; a name with no map entry was not present, so "was it replaced"

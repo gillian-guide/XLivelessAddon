@@ -112,9 +112,16 @@ The invariants the tree is built around:
   `MakeInline`, so the Loadsc window jumps into an assembled stub whose bytes the
   suite pins (`BuildIntroStub`) and executes; the menu call keeps the reference
   add-on's `E8` retarget with the captured original called from the body.
-- `source/vram.ixx` — `VRAMFix`: the old add-on's recovered `InstallVramFix`
-  (three call sites retargeted at a body that clamps a non-positive answer to
-  INT_MAX), including the reference's one-variable overwrite order.
+- `source/vram.ixx` — `VRAMFix`, the two build generations of the same fix under one
+  key: the old add-on's recovered `InstallVramFix` (three call sites retargeted at
+  a body that clamps a non-positive answer to INT_MAX, including the reference's
+  one-variable overwrite order) for the builds its rows match, and FusionFix's
+  `grcDevice::GetAvailableVideoMemory` replacement (`memory.ixx`: the DXGI
+  `QueryVideoMemoryInfo` budget, the d3d9 adapter match, `max(..., 2 GB)` and the
+  half-system-memory ceiling) for the builds where the rows no longer match. The
+  entry hook is a call-through trampoline (`patch::MakeEntryTrampoline` +
+  `patch::HookEntryAt`, FusionFix's `create_inline` shape); exactly one path
+  installs per build and `vram: <path> ...` says which.
 - `source/registry.ixx` — `RemoveRegistryPathDependency`.
 - `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
   FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
@@ -136,6 +143,8 @@ The invariants the tree is built around:
 - the borderless window, centring and focus-loss input (`windowed.ixx`);
 - the `SkipIntro`/`SkipMenu` mechanism (`menu.ixx`, taken from FusionFix's
   `skipintro.ixx`: the Loadsc window, the `sub_7870A0` body and its latch);
+- the `grcDevice::GetAvailableVideoMemory` replacement and its value contract
+  (`vram.ixx`, FusionFix's `memory.ixx`), on the builds where it applies;
 - the `SHGetFolderPath` user-data redirect and its `[USERPROFILE]
   CustomUserProfilePath` key (`profile.ixx`);
 - the `Event<Args...>` tiers, `Log`, `Game` context and `find_pattern` idiom
@@ -144,16 +153,17 @@ The invariants the tree is built around:
 
 **Deliberately not FusionFix-gated:** `[USERPROFILE] CustomUserProfilePath`. The
 old addon's gate misbehaves with FusionFix on 1.0.8.0 and can clear a path the
-user configured. `VRAMFix` and `SkipWebConnect` stay ungated: the VRAM fix here
-is the old add-on's recovered call-site clamp, not FusionFix's
-`grcDevice::GetAvailableVideoMemory` rewrite, and FusionFix has no GFWL. The
-frontend pair and the windowed options are gated.
+user configured. `VRAMFix` and `SkipWebConnect` stay ungated: the VRAM fix has
+its own generation split (the old add-on's rows on the builds they match,
+FusionFix's `GetAvailableVideoMemory` replacement on 1.0.8.0/EFLC 1.1.3.0) so
+FusionFix's copy must not switch it off, and FusionFix has no GFWL. The frontend
+pair and the windowed options are gated.
 
 **No FusionFix counterpart / recovered:** the SkipLauncher main table, the DFA
 and ROM stages, the WM_ROM service, the `LaunchWithPlayGTAIV` name-slot rewrite,
 the SavegameFix CRC bypass and its hardened save-path call sites, the
-`SkipWebConnect` family, the VRAM call-site clamp, the registry path and the
-legacy launcher stage.
+`SkipWebConnect` family, the VRAM reference generation's call-site rows, the
+registry path and the legacy launcher stage.
 
 ## Build and test
 
@@ -169,7 +179,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**448 checks**.
+**470 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -182,10 +192,11 @@ retargets with their destinations and order, the two-byte NOP, and the
 missing-anchor and short-view skips), the frontend pair (`TestMenu`: FusionFix's
 pattern strings, the intro stub's bytes and its executed register contract, the
 five-hit and fallback menu installs, the body's latch/SHIFT/a1 = 6 behaviour and
-the missing-pattern skips), the VRAM fix (`TestVram`: the three call retargets,
-the clamp answers and the reference's overwrite quirk) and the web-connect family
-(`TestWebConnect`: the two recovered sections, their exact writes and the
-fine-grained keys).
+the missing-pattern skips), the VRAM fix (`TestVram`: the reference generation's
+three call retargets, its clamp answers and overwrite quirk, FusionFix's entry
+hook and trampoline on a synthetic image, its value contract, the generation
+split and the no-path skip) and the web-connect family (`TestWebConnect`: the
+two recovered sections, their exact writes and the fine-grained keys).
 
 ## Rules learned the hard way
 
@@ -216,8 +227,16 @@ fine-grained keys).
    time: do not substitute the old add-on's `-6` detour or its 300 ms literal.
    The `SkipMenu` hook must stay installed while `SkipIntro` is on, because its
    first call sets the `bSkipIntroNotNeeded` latch; the two install steps are
-   separate only so each key has its own log line. `VRAMFix` is the old add-on's
-   recovered call-site clamp, not FusionFix's memory rewrite; do not swap them.
+   separate only so each key has its own log line.
+9. **`VRAMFix` has two generation paths under one key, and only one installs per
+   build.** The old add-on's recovered rows run first (the builds they match);
+   when they all miss, FusionFix's `GetAvailableVideoMemory` replacement installs
+   instead (1.0.8.0 / EFLC 1.1.3.0). The entry hook is a call-through trampoline:
+   publish the trampoline as the original before the entry jump is written, keep
+   the replaced window one whole instruction (`mov ecx,[imm32]`), and keep
+   FusionFix's value contract (2 GB floor, `max(preferred, texture, 2 GB)`,
+   half-system-RAM ceiling, `static` once-per-process caching). The log line must
+   name the path that ran; do not make the two paths install together.
 
 ## Dependency policy
 

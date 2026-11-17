@@ -263,26 +263,6 @@ namespace xla::startup
                 }
             };
 
-            Record("Writable");
-            FusionFix::onInitEvent() += []
-            {
-                Game& game = Game::Get();
-                if (game.Stopped())
-                {
-                    return;
-                }
-                if (!AnyInstallEnabled())
-                {
-                    Log::Line("init: every feature is off; image left untouched");
-                    return;
-                }
-                if (!patch::MakeImageWritable(game.View()))
-                {
-                    Log::Line("init: image is not writable; no patches applied");
-                    game.RequestStop(0);
-                }
-            };
-
             Record("Build");
             FusionFix::onInitEvent() += []
             {

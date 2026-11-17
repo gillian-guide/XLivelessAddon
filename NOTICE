@@ -25,30 +25,49 @@ as a compiled ASI without source; no original source is redistributed here.
 ## GTAIV.EFLC.FusionFix
 
 The borderless-window/focus-loss logic (`source/windowed.ixx`), the
-SHGetFolderPath user-data redirect (`source/profile.ixx`) and the shared
-`Event`, `Log`, `Game` and `find_pattern` shapes (`source/common.ixx`) follow
-GTAIV.EFLC.FusionFix (`windowed.ixx`, `userdata.ixx`, `common.ixx`), Copyright
-(C) ThirteenAG and contributors, GPL-3.0. The windowed compatibility gates in
+SHGetFolderPath user-data redirect (`source/profile.ixx`), the
+`SkipIntro`/`SkipMenu` mechanism (`source/menu.ixx`, `skipintro.ixx`), the
+`grcDevice::GetAvailableVideoMemory` VRAM code (`source/vram.ixx`,
+`memory.ixx`) and the shared `Event`, `Log`, `Game` and `find_pattern` shapes
+(`source/common.ixx`) follow GTAIV.EFLC.FusionFix (`windowed.ixx`,
+`userdata.ixx`, `common.ixx`), Copyright (C) ThirteenAG and contributors,
+GPL-3.0. The windowed compatibility gates in
 `source/config.ixx` follow the same project's approach. The local-directory
 options are deliberately **not** gated on FusionFix being present.
 
-## Vendored libraries (committed, not submodules)
+## Pinned submodules
 
-The licence text of each library is committed next to it. The libraries are
-compiled from these pinned copies only; nothing is fetched at build time.
+The dependencies are pinned upstream submodules under `external/`, never
+committed copies; a fresh checkout needs
+`git submodule update --init --recursive`. The licence text of each project is
+committed inside its own submodule.
 
-| Path | Project | Revision | Licence |
+| Path | Project | Pin | Licence |
 | --- | --- | --- | --- |
-| `external/injector` | [ThirteenAG/injector](https://github.com/ThirteenAG/injector) (LINK/2012) | `fdd277056a9b12e209d58c35a269277391cf955a` | zlib |
-| `external/hooking` | [ThirteenAG/Hooking.Patterns](https://github.com/ThirteenAG/Hooking.Patterns) (NTAuthority, CitizenFX) | `460a47bc813085b66c79768531caab1ed5ea96fc` | MIT |
-| `external/inireader` | [ThirteenAG/IniReader](https://github.com/ThirteenAG/IniReader) | `206c4b343d3cb0d2ca83afd1fccbe71331137a37` | MIT |
+| `external/injector` | [SandeMC/injector](https://github.com/SandeMC/injector) (fork of LINK/2012's injector) | `c196f900` | zlib |
+| `external/injector/safetyhook` | [cursey/safetyhook](https://github.com/cursey/safetyhook) | `f44cc070` | BSL-1.0 |
+| `external/injector/minhook` | [TsudaKageyu/minhook](https://github.com/TsudaKageyu/minhook) | `8af6b4ac` | BSD-2-Clause |
+| `external/injector/bddisasm` | [bitdefender/bddisasm](https://github.com/bitdefender/bddisasm) | `709fd970` | Apache-2.0 |
+| `external/injector/kananlib` | [cursey/kananlib](https://github.com/cursey/kananlib) | `114de171` | BSL-1.0 |
+| `external/injector/utility` | `utility` submodule of the injector tree (praydog) | in-tree | MIT |
+| `external/injector/zydis` | Zydis amalgamation shipped inside the injector tree | in-tree (`Zydis.c`/`Zydis.h`) | MIT |
+| `external/hooking` | [ThirteenAG/Hooking.Patterns](https://github.com/ThirteenAG/Hooking.Patterns) (NTAuthority, CitizenFX) | `460a47bc` | MIT |
+| `external/inireader` | [ThirteenAG/IniReader](https://github.com/ThirteenAG/IniReader) | `a0a5973c` | MIT |
 | `external/inireader/mINI` | [metayeti/mINI](https://github.com/metayeti/mINI) (Danijel Durakovic) | bundled by the above | MIT |
 
-The pinned injector is the classic 2017 tree. Its `MakeRET` stores
-`pop ? 0xC2 : 0xC3` through a deduced `int`, so it writes four bytes for both
-`ret` forms; the maintained fork fixed this, but this tree keeps the requested
-classic pin and `source/patch.ixx` writes `ret`/`ret N` itself at the exact
-one-/three-byte width. The vendored header is unmodified.
+The injector pin is the owner's fork. Upstream `MakeRET` stores
+`pop ? 0xC2 : 0xC3` through a deduced `int` and writes four bytes for both `ret`
+forms; the fork stores a `uint8_t` opcode and a `uint16_t` immediate, so
+`injector::MakeRET` emits `ret`/`ret N` at their exact width. The tree calls
+`injector::MakeRET` directly and keeps no width workaround.
+
+`CMakeLists.txt` compiles safetyhook's `src/*.cpp` and the injector tree's Zydis
+amalgamation (`zydis/Zydis.c`) into `xla_safetyhook`, with
+`external/injector/include`, `external/injector/safetyhook/include` and
+`external/injector/zydis` on the include path. safetyhook at this pin carries its
+x86 mid-hook thunk as assembled bytes in `mid_hook.cpp`; its `.asm` files are the
+source of that embed, so there is no MASM step and nothing is fetched at build
+time.
 
 The pinned `CIniReader` is all-inline; MSVC 19.51's CL.exe crashes when a
 function body that instantiates it is imported into another module interface

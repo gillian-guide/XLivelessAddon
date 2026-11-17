@@ -11,11 +11,11 @@
 // lambda hoisted to module state. Its two injection idioms stay behind patch.ixx,
 // the only unit allowed to install:
 //
-//  - FusionFix's inline hook over the Loadsc window is `patch::InlineHookAt<Loadsc>`
-//    - the vendored injector's `MakeInline(at, end)` call, behind that boundary;
-//  - FusionFix's hook_back holder and its call retarget are `patch::HookBack` and
-//    `patch::HookCallAt`, which return the call's previous destination the same
-//    way.
+//  - FusionFix's inline hook over the Loadsc window is `patch::InlineHook<Loadsc>`,
+//    the injector's `MakeInline(at, end)` call behind that boundary;
+//  - FusionFix's call retarget is `patch::RetargetCallAt`, the injector's call
+//    store returning the destination the call had before, so the body can forward
+//    to it.
 //
 // The old add-on shipped the same two options with a different mechanism (a -6
 // detour into a body that scaled ECX by 400 and forced 300 ms, and a menu-state
@@ -120,8 +120,9 @@ namespace xla::menu
         bool g_skipIntroNotNeeded = false;
         // FusionFix's `bOnce`: set on the first first-boot call only.
         bool g_menuLatch = false;
-        // FusionFix's `hbsub_7870A0`: the call's original destination.
-        patch::HookBack<void(__cdecl*)(int)> g_menuOriginal;
+        // FusionFix's `hbsub_7870A0`: the call's original destination (the
+        // `hook_back` holder's `fun`, as a plain function pointer).
+        void(__cdecl* g_menuOriginal)(int) = nullptr;
     } // namespace
 
     void Loadsc::operator()(patch::Registers& regs)
@@ -168,9 +169,8 @@ namespace xla::menu
         // FusionFix's `*pattern.get_first<int32_t*>(2)`: the operand is the screen-id
         // global's address, so the pointer is that value, not the operand's address.
         g_screenId = *pattern.get_first<std::int32_t*>(kScreenIdGlobalOperand);
-        if (!patch::InlineHookAt<Loadsc>(image, pattern.get_first<std::uint8_t>(0),
-                                         pattern.get_first<std::uint8_t>(kIntroHookLength),
-                                         "skipIntro"))
+        if (!patch::InlineHook<Loadsc>(image, pattern.get_first<std::uint8_t>(0),
+                                       kIntroHookLength, "skipIntro"))
         {
             Log::Line("skipIntro: hook window outside the image; skipped");
             return false;
@@ -203,15 +203,15 @@ namespace xla::menu
             }
         }
 
-        if (g_menuOriginal.fun != nullptr)
+        if (g_menuOriginal != nullptr)
         {
-            g_menuOriginal.fun(value);
+            g_menuOriginal(value);
         }
     }
 
     void SetMenuOriginal(void(__cdecl* original)(int)) noexcept
     {
-        g_menuOriginal.fun = original;
+        g_menuOriginal = original;
     }
 
     void ResetMenuState() noexcept
@@ -253,11 +253,14 @@ namespace xla::menu
         }
 
         g_skipMenu = skipMenu;
-        if (!patch::HookCallAt(image, site, &MenuBody, g_menuOriginal.fun, "skipMenu"))
+        void* previous =
+            patch::RetargetCallAt(image, site, reinterpret_cast<void*>(&MenuBody), "skipMenu");
+        if (previous == nullptr)
         {
-            Log::Line("skipMenu: hook site outside the image; skipped");
+            Log::Line("skipMenu: hook site outside the image or not a call; skipped");
             return false;
         }
+        g_menuOriginal = reinterpret_cast<void(__cdecl*)(int)>(previous);
 
         if (skipMenu)
         {

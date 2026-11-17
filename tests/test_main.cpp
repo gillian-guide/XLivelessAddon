@@ -14,6 +14,7 @@
 // user-data divergence from the old addon.
 
 #include <common.hxx>
+#include <injector/injector.hpp>
 #include <cstdio>
 
 import common;
@@ -620,12 +621,14 @@ namespace
         Check(xla::patch::Nop(baseSite, 0x108, 3, "test"), "patch: a NOP run applies");
         Check(memory[0x108] == 0x90 && memory[0x10A] == 0x90, "patch: the NOPs landed");
 
-        Check(xla::patch::Ret(baseSite, 0x120, 8, "test"), "patch: ret 8 applies");
+        injector::MakeRET(injector::raw_ptr(memory + 0x120), 8, true);
+        Check(memory[0x120] == 0xC2, "patch: ret 8 applies");
         Check(memory[0x120] == 0xC2 && memory[0x121] == 0x08 && memory[0x122] == 0x00,
               "patch: ret 8 is C2 08 00 (three bytes)");
         Check(memory[0x123] == 0xCC, "patch: ret 8 does not write a fourth byte");
 
-        Check(xla::patch::Ret(baseSite, 0x130, 0, "test"), "patch: ret applies");
+        injector::MakeRET(injector::raw_ptr(memory + 0x130), 0, true);
+        Check(memory[0x130] == 0xC3, "patch: ret applies");
         Check(memory[0x130] == 0xC3 && memory[0x131] == 0xCC,
               "patch: ret is C3 only (one byte)");
 
@@ -994,6 +997,37 @@ namespace
               "core: all three keys off leaves the image untouched");
     }
 
+    // A synthetic image whose bytes a real hook may patch must outlive the process:
+    // the injector's inline hooks are registered in module state and write the
+    // original bytes back when they are destroyed at exit, so a freed heap buffer
+    // would fault there. These pages are deliberately never released.
+    std::byte* PinnedImage(std::size_t size = 0x1000)
+    {
+        auto* page = static_cast<std::byte*>(
+            ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (page != nullptr)
+        {
+            std::memset(page, 0, size);
+        }
+        return page;
+    }
+
+    void WriteBytesAt(std::byte* image, std::size_t offset,
+                      const std::vector<std::uint8_t>& bytes)
+    {
+        std::memcpy(image + offset, bytes.data(), bytes.size());
+    }
+
+    void WriteDwordAt(std::byte* image, std::size_t offset, std::uint32_t value)
+    {
+        std::memcpy(image + offset, &value, sizeof(value));
+    }
+
+    std::vector<std::byte> Snapshot(const std::byte* image, std::size_t size)
+    {
+        return {image, image + size};
+    }
+
     // ---- SkipIntro / SkipMenu ------------------------------------------------
     //
     // FusionFix's Loadsc functor is driven directly: the injector's inline stub
@@ -1044,32 +1078,35 @@ namespace
         constexpr std::uint32_t kInitialEdx = 0x2222;
 
         // ---- the intro hook and its functor ---------------------------------
-        std::vector<std::byte> image(0x1000, std::byte{0});
-        WriteBytes(image, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
-        WriteDword(image, kIntroAt + 2,
-                   static_cast<std::uint32_t>(
-                       reinterpret_cast<std::uintptr_t>(image.data()) + kScreenIdAt));
-        WriteDword(image, kScreenIdAt, kImageScreenId);
-        const std::vector<std::byte> introPristine = image;
+        // The image must be pinned: the install leaves a live inline hook (and its
+        // trampoline) registered in module state, and the injector writes the original
+        // bytes back when that hook is destroyed at process exit.
+        std::byte* image = PinnedImage();
+        Check(image != nullptr, "menu: the synthetic intro image allocates");
+        WriteBytesAt(image, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
+        WriteDwordAt(image, kIntroAt + 2,
+                     static_cast<std::uint32_t>(
+                         reinterpret_cast<std::uintptr_t>(image) + kScreenIdAt));
+        WriteDwordAt(image, kScreenIdAt, kImageScreenId);
+        const auto introPristine = Snapshot(image, 0x1000);
 
-        Check(InstallIntro(xla::Image{image.data(), image.size()}, true),
+        Check(InstallIntro(xla::Image{image, 0x1000}, true),
               "menu: the intro hook installs on a 1.0.8.0-shaped window");
-        Check(image[kIntroAt] == std::byte{0xE8},
-              "menu: the window becomes a call into the register stub");
-        Check(CallTarget(image, kIntroAt) != 0,
-              "menu: ... whose destination is the injector's stub");
-        Check(std::all_of(image.begin() + kIntroAt + 5,
-                          image.begin() + kIntroAt + kIntroHookLength,
+        const auto introAfter = Snapshot(image, 0x1000);
+        Check(introAfter[kIntroAt] != introPristine[kIntroAt],
+              "menu: the window's head becomes the injector's jump");
+        Check(std::all_of(introAfter.begin() + kIntroAt + 5,
+                          introAfter.begin() + kIntroAt + kIntroHookLength,
                           [](std::byte value) { return value == std::byte{0x90}; }),
               "menu: the rest of the window is NOPed");
-        Check(image[kIntroAt + kIntroHookLength] ==
+        Check(introAfter[kIntroAt + kIntroHookLength] ==
                       introPristine[kIntroAt + kIntroHookLength] &&
-                  image[kIntroAt + kIntroHookLength + 1] ==
+                  introAfter[kIntroAt + kIntroHookLength + 1] ==
                       introPristine[kIntroAt + kIntroHookLength + 1],
               "menu: the instruction after the window is the resume, untouched");
         const std::array introSpans{
             std::pair<std::size_t, std::size_t>{kIntroAt, kIntroHookLength}};
-        Check(OnlyChangedWithin(image, introPristine, introSpans),
+        Check(OnlyChangedWithin(introAfter, introPristine, introSpans),
               "menu: the intro arm writes only its window");
 
         // The functor: `regs.esp` is the game's stack pointer, so the frame's
@@ -1102,31 +1139,44 @@ namespace
               std::to_string(regs.edx));
 
         // The v1 window is the eax variant.
-        std::vector<std::byte> v1Image(0x1000, std::byte{0});
-        WriteBytes(v1Image, kIntroAt, BytesOf(kIntroPatternV1));
-        WriteDword(v1Image, kIntroAt + 2,
-                   static_cast<std::uint32_t>(
-                       reinterpret_cast<std::uintptr_t>(v1Image.data()) + kScreenIdAt));
-        WriteDword(v1Image, kScreenIdAt, kImageScreenId);
-        Check(InstallIntro(xla::Image{v1Image.data(), v1Image.size()}, true),
+        std::byte* v1Image = PinnedImage();
+        Check(v1Image != nullptr, "menu: the second synthetic intro image allocates");
+        WriteBytesAt(v1Image, kIntroAt, BytesOf(kIntroPatternV1));
+        WriteDwordAt(v1Image, kIntroAt + 2,
+                     static_cast<std::uint32_t>(
+                         reinterpret_cast<std::uintptr_t>(v1Image) + kScreenIdAt));
+        WriteDwordAt(v1Image, kScreenIdAt, kImageScreenId);
+        Check(InstallIntro(xla::Image{v1Image, 0x1000}, true),
               "menu: the pre-1.0.8.0 intro pattern installs");
         runFunctor(4000);
         Check(regs.eax == 0 && regs.edx == kInitialEdx,
               "menu: the v1 variant zeroes eax and leaves edx alone",
               std::format("eax={:#x} edx={:#x}", regs.eax, regs.edx));
 
-        // SkipIntro off keeps the screen time. The window is patched, so a fresh copy
-        // of the image is the one that still carries the pattern.
-        std::vector<std::byte> offImage(introPristine);
-        Check(InstallIntro(xla::Image{offImage.data(), offImage.size()}, false),
+        // SkipIntro off keeps the screen time. The window is patched, so a fresh image
+        // is the one that still carries the pattern.
+        std::byte* offImage = PinnedImage();
+        Check(offImage != nullptr, "menu: the third synthetic intro image allocates");
+        WriteBytesAt(offImage, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
+        WriteDwordAt(offImage, kIntroAt + 2,
+                     static_cast<std::uint32_t>(
+                         reinterpret_cast<std::uintptr_t>(offImage) + kScreenIdAt));
+        WriteDwordAt(offImage, kScreenIdAt, kImageScreenId);
+        Check(InstallIntro(xla::Image{offImage, 0x1000}, false),
               "menu: the intro hook installs with the key off");
         runFunctor(4000);
         Check(regs.edx == 4000,
               "menu: SkipIntro off keeps the screen time", std::to_string(regs.edx));
 
         // Put the intro state back on for the latch check at the end of the test.
-        std::vector<std::byte> latchedImage(introPristine);
-        Check(InstallIntro(xla::Image{latchedImage.data(), latchedImage.size()}, true),
+        std::byte* latchedImage = PinnedImage();
+        Check(latchedImage != nullptr, "menu: the fourth synthetic intro image allocates");
+        WriteBytesAt(latchedImage, kIntroAt, BytesOf("8B 0D ? ? ? ? 8B 54 24 1C 83 C4 0C"));
+        WriteDwordAt(latchedImage, kIntroAt + 2,
+                     static_cast<std::uint32_t>(
+                         reinterpret_cast<std::uintptr_t>(latchedImage) + kScreenIdAt));
+        WriteDwordAt(latchedImage, kScreenIdAt, kImageScreenId);
+        Check(InstallIntro(xla::Image{latchedImage, 0x1000}, true),
               "menu: the intro hook installs again on a fresh image");
         runFunctor(4000);
         Check(regs.edx == 0,
@@ -1258,8 +1308,8 @@ namespace
                   DevicePatterns()[0] == "83 3D ? ? ? ? ? 74 17 8B 4D 14" &&
                   DevicePatterns()[1] == "83 3D ? ? ? ? ? 74 15 8B 44 24 1C" &&
                   DevicePatterns()[2] == "83 3D ? ? ? ? ? 74 EF",
-              "vram: FusionFix's device-pointer patterns are unchanged");
-        Check(kTwoGigabytes == 2147483648ull, "vram: FusionFix's 2 GB floor is pinned");
+              "vram: FusionFix's device-slot patterns are unchanged");
+        Check(_2048mb == 2147483648ull, "vram: FusionFix's 2 GB floor is pinned");
         Check(PathName(Path::none) == "none" && PathName(Path::reference) == "reference" &&
                   PathName(Path::fusionFix) == "fusionFix",
               "vram: the path names are the log's words");
@@ -1328,109 +1378,97 @@ namespace
         Check(GetVidMemBody() == INT_MAX,
               "vram: ... so the installed bodies then answer INT_MAX");
 
-        // ---- the FusionFix generation ---------------------------------------
-        // Its value contract: 2 GB or more stands, otherwise the largest of the
-        // preferred GPU memory, the d3d9 texture memory and the 2 GB floor.
-        Check(FusionFixVramValue(kTwoGigabytes + 1, 0, 0) == kTwoGigabytes + 1,
+        // ---- the FusionFix generation's value contract ----------------------
+        // memory.ixx:210-214 (the replacement) and memory.ixx:197-198 (the GPU read).
+        constexpr std::uint64_t gb = 1024ull * 1024 * 1024;
+        Check(ReplacementValue(3 * gb, 0, 0) == 3 * gb,
               "vram: an answer of 2 GB or more is passed through");
-        Check(FusionFixVramValue(FusionFixLowAnswer(), 0, 0) == kTwoGigabytes,
-              "vram: a smaller answer is floored at 2 GB");
-        Check(FusionFixVramValue(FusionFixLowAnswer(), 4ull * 1024 * 1024 * 1024, 0) ==
-                  4ull * 1024 * 1024 * 1024,
-              "vram: the preferred GPU memory wins when it is the largest");
-        Check(FusionFixVramValue(FusionFixLowAnswer(), 1024ull * 1024 * 1024,
-                                 2ull * 1024 * 1024 * 1024) == 2ull * 1024 * 1024 * 1024,
+        Check(ReplacementValue(_2048mb + 1, 0, 0) == _2048mb + 1,
+              "vram: the pass-through starts at exactly 2 GB plus one");
+        Check(ReplacementValue(1 * gb, 4 * gb, 0) == 4 * gb,
+              "vram: the preferred GPU memory is part of the maximum");
+        Check(ReplacementValue(1 * gb, 0, 3 * gb) == 3 * gb,
               "vram: the d3d9 texture memory is part of the maximum");
+        Check(ReplacementValue(1 * gb, 1 * gb, 1 * gb) == _2048mb,
+              "vram: a small answer is floored at 2 GB");
+        Check(PreferredGpuValue(0, 0, 8 * gb) == _2048mb,
+              "vram: the preferred memory is floored at 2 GB");
+        Check(PreferredGpuValue(3 * gb, 0, 8 * gb) == 3 * gb,
+              "vram: a 3 GB budget is kept under the half-RAM cap");
+        Check(PreferredGpuValue(6 * gb, 0, 8 * gb) == 4 * gb,
+              "vram: the preferred memory is capped at half the system RAM");
+        Check(PreferredGpuValue(1 * gb, 512ull * 1024 * 1024, 16 * gb) == _2048mb,
+              "vram: the 2 GB floor wins over a smaller dedicated answer");
+        Check(PreferredGpuValue(1 * gb, 2 * gb + 4096, 16 * gb) == 2 * gb + 4096,
+              "vram: the dedicated fallback joins the budget before the caps");
 
-        // A synthetic image with the entry prologue and FusionFix's device site.
-        constexpr std::size_t kEntryAt = 0x100;
-        constexpr std::size_t kDeviceAt = 0x200;
-        constexpr std::size_t kEntryGlobalAt = 0x300;
-        constexpr std::size_t kDeviceSlotAt = 0x304;
-        constexpr std::size_t kWindow = 6;
+        // ---- the install gate ------------------------------------------------
+        // Nothing is installed yet, so a build without the patterns stays inert.
+        Check(!HookInstalled(), "vram: no FusionFix hook before the install");
 
-        ResetFusionFixState();
-        std::vector<std::byte> fusionfix(0x400, std::byte{0});
-        WriteBytes(fusionfix, kEntryAt, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
-        WriteDword(fusionfix, kEntryAt + 2,
-                   static_cast<std::uint32_t>(
-                       reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kEntryGlobalAt));
-        WriteBytes(fusionfix, kDeviceAt, BytesOf("83 3D ? ? ? ? 00 74 EF"));
-        WriteDword(fusionfix, kDeviceAt + 2,
-                   static_cast<std::uint32_t>(
-                       reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kDeviceSlotAt));
-        const std::vector<std::byte> fusionfixPristine = fusionfix;
-
-        const auto fusionfixReport = Install(xla::Image{fusionfix.data(), fusionfix.size()});
-        Check(fusionfixReport.path == Path::fusionFix && fusionfixReport.rowsApplied == 0,
-              "vram: the FusionFix path installs where the reference rows are absent",
-              std::format("{} {}", PathName(fusionfixReport.path),
-                          fusionfixReport.rowsApplied));
-        Check(fusionfix[kEntryAt] == std::byte{0xE9} &&
-                  JumpTarget(fusionfix, kEntryAt) ==
-                      reinterpret_cast<std::uintptr_t>(&FusionFixGetAvailableVideoMemory),
-              "vram: the entry becomes a jump into FusionFix's replacement");
-        Check(fusionfix[kEntryAt + 5] == std::byte{0x90},
-              "vram: the rest of the replaced window is NOPed");
-        Check(FusionFixOriginal() != nullptr,
-              "vram: the trampoline is published as the original");
-        const auto* trampoline =
-            reinterpret_cast<const std::uint8_t*>(FusionFixOriginal());
-        Check(trampoline[0] == 0x8B && trampoline[1] == 0x0D &&
-                  DwordAt(trampoline, 2) == DwordAt(fusionfixPristine.data(), kEntryAt + 2),
-              "vram: the trampoline runs the instruction the hook replaced");
-        Check(trampoline[kWindow] == 0xE9 &&
-                  reinterpret_cast<std::uintptr_t>(trampoline) + kWindow + 5 +
-                          static_cast<std::intptr_t>(DwordAt(trampoline, kWindow + 1)) ==
-                      reinterpret_cast<std::uintptr_t>(fusionfix.data()) + kEntryAt + kWindow,
-              "vram: the trampoline resumes after the replaced window");
-        const std::array fusionfixSpans{
-            std::pair<std::size_t, std::size_t>{kEntryAt, kWindow}};
-        Check(OnlyChangedWithin(fusionfix, fusionfixPristine, fusionfixSpans),
-              "vram: the FusionFix arm writes only the entry window");
-
-        // The generation split: with a reference row on the same image, the reference
-        // path wins and the FusionFix entry is left alone.
         {
-            ResetFusionFixState();
+            std::vector<std::byte> empty(0x100, std::byte{0});
+            Check(Install(xla::Image{empty.data(), empty.size()}).path == Path::none,
+                  "vram: no path matched a build without any pattern");
+            Check(!HookInstalled(), "vram: ... and nothing was hooked");
+        }
+        {
+            // The entry pattern without the device pattern is a logged skip: the
+            // replacement's d3d9 read needs the device slot.
+            std::vector<std::byte> noDevice(0x400, std::byte{0});
+            WriteBytes(noDevice, 0x100, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
+            Check(Install(xla::Image{noDevice.data(), noDevice.size()}).path == Path::none,
+                  "vram: an entry pattern without the device pattern is a skip");
+            Check(!HookInstalled(), "vram: ... and nothing was hooked");
+        }
+        {
+            // A reference row on the same image owns the build: the FusionFix entry
+            // is left alone.
             std::vector<std::byte> both(0x400, std::byte{0});
             WriteBytes(both, 0x80, BytesOf(Rows()[0].signature));
             SetCallTarget(both, 0x80, reinterpret_cast<std::uintptr_t>(&VidMemZero));
-            WriteBytes(both, kEntryAt, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
-            WriteDword(both, kEntryAt + 2,
-                       static_cast<std::uint32_t>(
-                           reinterpret_cast<std::uintptr_t>(both.data()) + kEntryGlobalAt));
+            WriteBytes(both, 0x100, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
             const std::vector<std::byte> bothPristine = both;
             const auto bothReport = Install(xla::Image{both.data(), both.size()});
             Check(bothReport.path == Path::reference && bothReport.rowsApplied == 1,
-                  "vram: the reference generation owns a build whose rows match",
-                  std::format("{} {}", PathName(bothReport.path), bothReport.rowsApplied));
-            Check(both[kEntryAt] == bothPristine[kEntryAt] && FusionFixOriginal() == nullptr,
-                  "vram: ... and the FusionFix entry is left alone");
-            ResetFusionFixState();
+                  "vram: the reference generation owns a build whose rows match");
+            Check(both == bothPristine || both[0x100] == bothPristine[0x100],
+                  "vram: ... and the FusionFix entry is not hooked");
+            Check(!HookInstalled(), "vram: ... and no FusionFix hook exists");
         }
 
-        // No path at all: a clean skip, no writes.
         {
-            std::vector<std::byte> empty(0x100, std::byte{0});
-            const std::vector<std::byte> emptyPristine = empty;
-            const auto emptyReport = Install(xla::Image{empty.data(), empty.size()});
-            Check(emptyReport.path == Path::none && emptyReport.rowsApplied == 0,
-                  "vram: no path matched this build");
-            Check(empty == emptyPristine, "vram: the skip writes nothing");
-            Check(!HasVidMemOriginal() && FusionFixOriginal() == nullptr,
-                  "vram: ... and leaves nothing published");
+            // The real install: a page that stays mapped for the process's life, with
+            // the entry prologue and FusionFix's device pattern. This is the
+            // `safetyhook::create_inline` path, so the check also proves the entry
+            // pattern is what installs.
+            std::byte* page = PinnedImage(0x2000);
+            Check(page != nullptr, "vram: the synthetic image allocates");
+            if (page != nullptr)
+            {
+                constexpr std::size_t kEntryAt = 0x100;
+                constexpr std::size_t kDeviceAt = 0x40;
+                constexpr std::size_t kSlotAt = 0x180;
+                constexpr std::size_t kGlobalAt = 0x1C0;
+                const auto base = static_cast<std::uint32_t>(
+                    reinterpret_cast<std::uintptr_t>(page));
+                WriteBytesAt(page, kEntryAt, BytesOf("8B 0D ? ? ? ? 83 EC 14 33 C0"));
+                WriteDwordAt(page, kEntryAt + 2, base + kGlobalAt);
+                WriteBytesAt(page, kDeviceAt, BytesOf("83 3D ? ? ? ? 00 74 EF"));
+                WriteDwordAt(page, kDeviceAt + 2, base + kSlotAt);
+                WriteDwordAt(page, kSlotAt, 0); // no d3d9 device in a test process
+                const std::vector<std::byte> pagePristine = Snapshot(page, 0x2000);
+                const auto report = Install(xla::Image{page, 0x2000});
+                Check(report.path == Path::fusionFix && report.rowsApplied == 0,
+                      "vram: the FusionFix path installs where the reference rows are absent",
+                      std::format("{} {}", PathName(report.path), report.rowsApplied));
+                Check(HookInstalled(),
+                      "vram: ... through safetyhook, so the replacement owns the entry");
+                const std::vector<std::byte> pageAfter = Snapshot(page, 0x2000);
+                Check(pageAfter[kEntryAt] != pagePristine[kEntryAt],
+                      "vram: ... and the entry became the hook's jump");
+            }
         }
-
-        // The replacement itself: the original's answer is forwarded or floored.
-        ResetFusionFixState();
-        SetFusionFixOriginal(&FusionFixHighAnswer);
-        Check(FusionFixGetAvailableVideoMemory() == 3ull * 1024 * 1024 * 1024,
-              "vram: a 3 GB answer is passed through by the replacement");
-        SetFusionFixOriginal(&FusionFixLowAnswer);
-        Check(FusionFixGetAvailableVideoMemory() == kTwoGigabytes,
-              "vram: a 1 GB answer becomes FusionFix's 2 GB floor (no d3d9 device here)");
-        SetFusionFixOriginal(nullptr);
     }
 
     // ---- SkipWebConnect ------------------------------------------------------
@@ -2152,9 +2190,9 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 28> expected{{
+        const std::array<std::string_view, 27> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
-            "FusionFix", "ReportConfiguration", "Image", "Writable", "Build", "Profile",
+            "FusionFix", "ReportConfiguration", "Image", "Build", "Profile",
             "Savegames", "SkipLauncher", "LaunchWithPlayGTAIV", "BorderlessWindow", "FocusLoss",
             "CorePatches", "LauncherStage", "WebConnect", "SkipIntro", "SkipMenu",
             "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "VramFix", "Complete",

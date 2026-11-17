@@ -38,9 +38,9 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
   `skipintro.ixx`; FusionFix's own copy owns these keys when its ASI is installed.
 - `VRAMFix` — fix the VRAM detection so the graphics settings are not locked out, in the two
   generations the game has: the old add-on's recovered call-site clamp on the builds whose
-  queries it can retarget, and FusionFix's `GetAvailableVideoMemory` replacement (DXGI budget,
-  d3d9 texture memory and its 2 GB floor) on 1.0.8.0/EFLC 1.1.3.0. The log names the path that
-  ran.
+  queries it can retarget, and FusionFix's `GetAvailableVideoMemory` replacement (copied from
+  its `memory.ixx`: the d3d9-matched DXGI budget, the d3d9 texture memory and the 2 GB floor,
+  installed with safetyhook) on 1.0.8.0/EFLC 1.1.3.0. The log names the path that ran.
 - `RemoveRegistryPathDependency` — remove the Rockstar Games registry path dependency.
 - `BorderlessWindowed`/`DoNotPauseOnMinimize` — add borderless windowed mode and keep
   rendering while the borderless window is unfocused.
@@ -60,8 +60,13 @@ which key was gated.
 ## Building
 
 Requirements: Windows 10/11, Visual Studio 18 2026 (or newer) with the **x86** C++ toolchain,
-and CMake 3.28+. The three vendor libraries are committed under `external/`; there are no
-submodules to initialise.
+and CMake 3.28+. The dependencies are pinned upstream submodules under `external/` (the injector
+tree with safetyhook, MinHook, bddisasm, kananlib and its in-tree Zydis amalgamation,
+Hooking.Patterns and IniReader), so a fresh clone starts with:
+
+```bat
+git submodule update --init --recursive
+```
 
 ```bat
 cmake --preset win-x86
@@ -73,7 +78,7 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite (456 checks), the ASI image load, the PE checks, the
+INI. `ctest` runs the native suite (463 checks), the ASI image load, the PE checks, the
 no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit

@@ -20,10 +20,12 @@ cite, never edit them.
 The invariants the tree is built around:
 
 - **`source/patch.ixx` is the only unit allowed to install.** It owns signature
-  scanning, the injector stores/branches, the IAT replacement and the image
-  unprotect. A feature module calls `patch::...`; it never names `injector::`,
-  `safetyhook::`, `Make*`, `WriteMemory`, `VirtualProtect` or `IATHook`.
-  `tools/check_no_installs.py` (CTest `xla_no_installs`) enforces it.
+  scanning, the injector stores/branches, the IAT replacement and the inline-hook
+  factories; every store goes through the injector with its unprotect flag and the
+  tree keeps no protection code of its own. A feature module calls `patch::...`;
+  it never names `injector::`, `safetyhook::`, `Make*`, `WriteMemory`,
+  `VirtualProtect` or `IATHook`. `tools/check_no_installs.py` (CTest
+  `xla_no_installs`) enforces it.
 - **`source/dllmain.cpp` is the only plain TU in `source/`** and owns startup.
   `source/startup.ixx` owns the registration order and the synchronous pass.
 - **Startup is synchronous in `DllMain`.** The only deferred activity is the
@@ -38,8 +40,8 @@ The invariants the tree is built around:
   `DoNotPauseOnMinimize` and a non-empty `[USERPROFILE] CustomUserProfilePath`
   cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
-  empty, `startup::AnyInstallEnabled()` is false, no install runs and the image
-  unprotect is skipped; `TestAllOff` pins it.
+  empty, `startup::AnyInstallEnabled()` is false and no store runs; `TestAllOff`
+  pins it.
 - **The user-data divergence is intentional.** `CustomUserProfilePath` is never
   switched off because FusionFix is present; only the windowed options are gated.
   Do not "restore" the old gate. It replaces the old addon's
@@ -109,30 +111,35 @@ The invariants the tree is built around:
   mechanism, ported as-is (the Loadsc window that zeroes the screens under
   8000 ms, and the `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch,
   the SHIFT escape and `a1 = 6`). The installs are FusionFix's two idioms behind
-  the only-installer boundary: `patch::InlineHookAt<Loadsc>` is the vendored
-  injector's `MakeInline(at, end)` (a call to the register stub plus a NOP fill of
-  the window), and `patch::HookBack`/`patch::HookCallAt` are its `hook_back` holder
-  and call retarget (the previous destination is returned and called from the
-  body). The suite drives the functor's register contract directly.
+  the only-installer boundary: `patch::InlineHook<Loadsc>` is the injector's
+  `MakeInline(at, end)` behind a bounds check, and `patch::RetargetCallAt` is its
+  call store returning the previous destination, which the body forwards to. The
+  suite drives the functor's register contract directly.
 - `source/vram.ixx` — `VRAMFix`, the two build generations of the same fix under one
   key: the old add-on's recovered `InstallVramFix` (three call sites retargeted at
   a body that clamps a non-positive answer to INT_MAX, including the reference's
   one-variable overwrite order) for the builds its rows match, and FusionFix's
-  `grcDevice::GetAvailableVideoMemory` replacement (`memory.ixx`: the DXGI
-  `QueryVideoMemoryInfo` budget, the d3d9 adapter match, `max(..., 2 GB)` and the
-  half-system-memory ceiling) for the builds where the rows no longer match. The
-  entry hook is a call-through trampoline (`patch::MakeEntryTrampoline` +
-  `patch::HookEntryAt`, FusionFix's `create_inline` shape); exactly one path
-  installs per build and `vram: <path> ...` says which.
+  VRAM code copied verbatim from `GTAIV.EFLC.FusionFix/source/memory.ixx`
+  (`GetProcessPreferredGPUMemory`, lines 14-201: the dynamic
+  `CreateDXGIFactory2`/`CreateDXGIFactory` ladder, the d3d9-matched adapter
+  selection, `GetDesc`/`GetDesc2`, `IDXGIAdapter3::QueryVideoMemoryInfo`, the
+  release order, the 2 GB floor and the half-system-RAM cap; and
+  `grcDevice::GetAvailableVideoMemory`, lines 203-221, with its `SafetyHookInline`
+  original) for the builds where the rows no longer match. The install is
+  FusionFix's own: safetyhook's inline hook at the pattern's first byte, through
+  `patch::CreateInline`. The d3d9 device slot is FusionFix's `comvars.ixx` pattern
+  set. No trampoline, no probe, no opt-in key; exactly one path installs per build
+  and `vram: <path> ...` says which.
 - `source/registry.ixx` — `RemoveRegistryPathDependency`.
 - `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
   FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
   shims.
 - `source/warnings.ixx` — `StartupWarnings`: the ASI loader probe, the
   single-instance guard and the FusionFix notice.
-- `external/` — committed, pinned vendor trees: injector (ThirteenAG's,
-  including `assembly.hpp`/`utility.hpp`), Hooking.Patterns, IniReader + mINI;
-  licences next to each.
+- `external/` — pinned upstream submodules (see Dependencies): the injector tree
+  (with safetyhook/minhook/bddisasm/kananlib and the in-tree Zydis amalgamation),
+  Hooking.Patterns and IniReader + mINI; a fresh clone needs
+  `git submodule update --init --recursive`.
 - `tests/` — the native suite, the ASI image load and the PE checks; also the
   recovered SkipLauncher table golden.
 - `tools/` — `check_no_installs.py`, `check_module_layout.py` and
@@ -182,7 +189,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**456 checks**.
+**463 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -197,10 +204,11 @@ pattern strings, the inline window and NOP fill, the Loadsc functor's register
 contract on a synthetic frame, the five-hit and fallback menu installs, the
 body's latch/SHIFT/a1 = 6 behaviour and the missing-pattern skips), the VRAM fix
 (`TestVram`: the reference generation's three call retargets, its clamp answers
-and overwrite quirk, FusionFix's entry hook and trampoline on a synthetic image,
-its value contract, the generation split and the no-path skip) and the
-web-connect family (`TestWebConnect`: the two recovered sections, their exact
-writes and the fine-grained keys).
+and overwrite quirk, FusionFix's value contract through
+`ReplacementValue`/`PreferredGpuValue`, the `safetyhook` install on a synthetic
+page, the generation split and the no-pattern skips) and the web-connect family
+(`TestWebConnect`: the two recovered sections, their exact writes and the
+fine-grained keys).
 
 ## Rules learned the hard way
 
@@ -217,9 +225,10 @@ writes and the fine-grained keys).
    scanner caches hits per signature string, so one string cannot be scanned
    twice with different counts; a multi-hit row asks for its count up front
    (`0` asks for all).
-5. **The vendored injector's `MakeRET` writes four bytes for both forms.**
-   `patch::Ret` writes the one-/three-byte form itself; the suite pins both
-   widths and the untouched byte after them.
+5. **`injector::MakeRET` emits `ret`/`ret N` at their exact width.** The owner's
+   injector fork fixed upstream's four-byte write, so the tree calls it directly
+   and keeps no width workaround; the suite still pins both widths and the
+   untouched byte after them.
 6. **Every install logs its applied/missing state.** A missing signature is a
    logged skip, never a fault; the log's first line names the build and the ASI
    version.
@@ -235,19 +244,47 @@ writes and the fine-grained keys).
 9. **`VRAMFix` has two generation paths under one key, and only one installs per
    build.** The old add-on's recovered rows run first (the builds they match);
    when they all miss, FusionFix's `GetAvailableVideoMemory` replacement installs
-   instead (1.0.8.0 / EFLC 1.1.3.0). The entry hook is a call-through trampoline:
-   publish the trampoline as the original before the entry jump is written, keep
-   the replaced window one whole instruction (`mov ecx,[imm32]`), and keep
-   FusionFix's value contract (2 GB floor, `max(preferred, texture, 2 GB)`,
-   half-system-RAM ceiling, `static` once-per-process caching). The log line must
-   name the path that ran; do not make the two paths install together.
+   instead (1.0.8.0 / EFLC 1.1.3.0). The hook is safetyhook's inline hook, created
+   through `patch::CreateInline` and kept as FusionFix's `SafetyHookInline`, whose
+   `.call<uint64_t>()` is the original; never hand-roll a trampoline. Keep
+   FusionFix's value contract (2 GB pass-through/floor, `max(preferred, texture,
+   2 GB)`, half-system-RAM ceiling, `static` once-per-process caching) and the d3d9
+   device slot from its `comvars.ixx` patterns. The log line must name the path
+   that ran; do not make the two paths install together.
 
-## Dependency policy
+## Dependencies
 
-`external/` is committed, pinned and unmodified. A vendored defect is adapted to
-in `source/` (the vendored `MakeRET` width and the all-inline `IniReader` are the
-two examples) or upstreamed; never commit inside the vendor tree. Do not copy a
-vendor's code into `source/` without attribution and licence compatibility.
+`external/injector`, `external/hooking` and `external/inireader` are pinned
+upstream submodules, never committed copies. A fresh clone needs
+`git submodule update --init --recursive`; CI checks them out recursively for the
+same reason, and a configure without them fails on the required-file check.
+
+| path | URL | pin |
+| --- | --- | --- |
+| `external/injector` | https://github.com/SandeMC/injector | `c196f90` |
+| `external/injector/safetyhook` | https://github.com/cursey/safetyhook | `f44cc07` |
+| `external/injector/minhook` | https://github.com/TsudaKageyu/minhook | `8af6b4a` |
+| `external/injector/bddisasm` | https://github.com/bitdefender/bddisasm | `709fd97` |
+| `external/injector/kananlib` | https://github.com/cursey/kananlib | `114de17` |
+| `external/injector/zydis` | vendored inside the injector tree | Zydis amalgamation |
+| `external/hooking` | https://github.com/ThirteenAG/Hooking.Patterns | `460a47b` |
+| `external/inireader` | https://github.com/ThirteenAG/IniReader | `a0a5973` |
+
+The injector pin is the owner's fork; upstream's `MakeRET` writes four bytes for
+both forms, the fork writes the exact width, so `injector::MakeRET` is called
+directly. `CMakeLists.txt` compiles safetyhook's sources and the injector's Zydis
+amalgamation into `xla_safetyhook` (no `add_subdirectory`: safetyhook's own
+CMakeLists fetches Zydis over the network, while FusionFix's premake compiles the
+in-tree amalgamation), with `external/injector/include`,
+`external/injector/safetyhook/include` and `external/injector/zydis` on the
+include path. safetyhook at this pin embeds its x86 mid-hook thunk as data in
+`mid_hook.cpp`, so there is no MASM step.
+
+Do not write a primitive the submodules already provide: signature scanning is
+Hooking.Patterns, stores/branches/`MakeInline`/`MakeRET`/IAT-slot writes are the
+injector's (with its unprotect flag), and entry hooks that call their original
+are safetyhook's `create_inline`. `source/patch.ixx` keeps only thin forwarding
+wrappers for the image-bounds contract, the logging and the only-installer rule.
 
 ## Git
 

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // xla.patch - the one unit allowed to install. It owns signature scanning and
-// every write primitive (injector stores and branches, the IAT replacement, the
-// image unprotect). A feature module calls these helpers; it never names
-// injector/safetyhook/VirtualProtect itself, which tools/check_no_installs.py
-// enforces.
+// every write primitive (injector stores and branches, the safetyhook inline
+// hooks, the IAT replacement, the image unprotect). A feature module calls these
+// helpers; it never names injector/safetyhook/VirtualProtect itself, which
+// tools/check_no_installs.py enforces.
 //
 // Ported from openprecepatch/xlivelessaddon/source/patch.ixx; the IAT walker and
 // the find_pattern shape follow GTAIV.EFLC.FusionFix's common.ixx/IATHook
@@ -23,6 +23,7 @@ module;
 #include <injector/injector.hpp>
 #include <injector/assembly.hpp>
 #include <injector/utility.hpp>
+#include <safetyhook.hpp>
 #include <Hooking.Patterns.h>
 
 export module patch;
@@ -210,36 +211,6 @@ export namespace xla::patch
         return true;
     }
 
-    // Writes `ret`/`ret N` at the instruction's exact width: one byte (C3) for
-    // `ret`, three (C2 imm16) for `ret N`.
-    //
-    // The vendored injector's `MakeRET` writes `pop ? 0xC2 : 0xC3` through a
-    // deduced `int`, i.e. four bytes for both forms. The width is therefore written
-    // here instead of calling the vendor helper, and the native suite pins both
-    // widths plus the untouched byte after them.
-    inline bool Ret(Site site, std::ptrdiff_t offset, std::size_t popBytes,
-                    std::string_view label)
-    {
-        if (!site || popBytes > 0xFFFF)
-        {
-            return false;
-        }
-        auto* target = site.at(offset);
-        std::array<std::uint8_t, 3> code{Byte(Opcode::kRet), 0, 0};
-        std::size_t length = 1;
-        if (popBytes != 0)
-        {
-            code[0] = Byte(Opcode::kRetImm16);
-            code[1] = static_cast<std::uint8_t>(popBytes & 0xFF);
-            code[2] = static_cast<std::uint8_t>((popBytes >> 8) & 0xFF);
-            length = 3;
-        }
-        injector::WriteMemoryRaw(injector::raw_ptr(target), code.data(), length, true);
-        Log::Print("{}: ret {} at {:08X}", label, popBytes,
-                   reinterpret_cast<std::uintptr_t>(target));
-        return true;
-    }
-
     inline bool Jump(Site site, std::ptrdiff_t offset, const void* destination,
                      std::string_view label)
     {
@@ -306,12 +277,6 @@ export namespace xla::patch
                          std::string_view label)
     {
         return Nop(Find(signature, label), offset, count, label);
-    }
-
-    inline bool RetFirst(std::string_view signature, std::ptrdiff_t offset,
-                         std::size_t popBytes, std::string_view label)
-    {
-        return Ret(Find(signature, label), offset, popBytes, label);
     }
 
     inline bool JumpFirst(std::string_view signature, std::ptrdiff_t offset,
@@ -388,9 +353,10 @@ export namespace xla::patch
     }
 
     // Retargets the `call rel32` at `site` and returns the destination it had
-    // before (nullptr when the site is not writable). The previous destination is
-    // read first: the caller publishes it as its body's resume, the same contract
-    // as the live-site `Call` and as FusionFix's `injector::MakeCALL(..).get()`.
+    // before (nullptr when the site is not a writable call). The previous
+    // destination is injector::MakeCALL's own return value, i.e. FusionFix's
+    // `injector::MakeCALL(at, body).get<T>()` idiom; the bounds check is this
+    // tree's caller-owned-image contract.
     inline void* RetargetCallAt(const Image& image, std::uint8_t* site, void* destination,
                                 std::string_view label)
     {
@@ -398,11 +364,9 @@ export namespace xla::patch
         {
             return nullptr;
         }
-        std::int32_t displacement = 0;
-        std::memcpy(&displacement, site + 1, sizeof(displacement));
-        auto* previous = reinterpret_cast<void*>(
-            site + 5 + static_cast<std::ptrdiff_t>(displacement));
-        injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(destination), true);
+        void* previous =
+            injector::MakeCALL(injector::raw_ptr(site), injector::raw_ptr(destination), true)
+                .get<void*>();
         Log::Print("{}: call to {:08X} at {:08X} (was {:08X})", label,
                    reinterpret_cast<std::uintptr_t>(destination),
                    reinterpret_cast<std::uintptr_t>(site),
@@ -411,112 +375,54 @@ export namespace xla::patch
     }
 
     // FusionFix's `injector::reg_pack`: the register file an inline functor gets.
-    // A feature module names this alias instead of the vendored type, so the
+    // A feature module names this alias instead of the injector type, so the
     // no-installs guard still holds.
     using Registers = injector::reg_pack;
-
-    // FusionFix's `injector::hook_back<T>`: the holder for the destination a
-    // retargeted call had before the hook.
-    template <typename FuncT>
-    using HookBack = injector::hook_back<FuncT>;
 
     // FusionFix's `injector::MakeInline<Functor>(at, end)`: the window [at, end) is
     // NOPed and `at` becomes a call into a stub that saves the register file, runs
     // `Functor(registers)`, restores it and returns to `end`. The functor therefore
-    // reproduces the instructions the window held.
+    // reproduces the instructions the window held. A thin forwarder, so the
+    // install itself stays in this unit.
     template <typename Functor>
-    bool InlineHookAt(const Image& image, std::uint8_t* at, std::uint8_t* end,
-                      std::string_view label)
+    bool InlineHook(const Image& image, std::uint8_t* at, std::size_t length,
+                    std::string_view label)
     {
-        if (at == nullptr || end == nullptr || end <= at || !image.contains(at, end - at))
+        if (at == nullptr || length == 0 || !image.contains(at, length))
         {
             return false;
         }
-        injector::MakeInline<Functor>(injector::raw_ptr(at), injector::raw_ptr(end));
+        injector::MakeInline<Functor>(injector::raw_ptr(at),
+                                      injector::raw_ptr(at + length));
         Log::Print("{}: inline hook at {:08X} ({} byte(s), resume {:08X})", label,
+                   reinterpret_cast<std::uintptr_t>(at), length,
+                   reinterpret_cast<std::uintptr_t>(at + length));
+        return true;
+    }
+
+    // FusionFix's `safetyhook::create_inline(at, replacement)`: an entry hook with a
+    // callable trampoline. The feature keeps the returned SafetyHookInline and calls
+    // the original through `.call<...>()`, which is FusionFix's own idiom; the hook
+    // is created here because this unit is the only installer.
+    inline SafetyHookInline CreateInline(std::uint8_t* at, void* replacement,
+                                         std::string_view label)
+    {
+        if (at == nullptr || replacement == nullptr)
+        {
+            return {};
+        }
+        SafetyHookInline hook =
+            safetyhook::create_inline(reinterpret_cast<void*>(at), replacement);
+        if (!hook)
+        {
+            Log::Print("{}: inline hook at {:08X} failed", label,
+                       reinterpret_cast<std::uintptr_t>(at));
+            return {};
+        }
+        Log::Print("{}: inline hook at {:08X} -> {:08X}", label,
                    reinterpret_cast<std::uintptr_t>(at),
-                   static_cast<std::size_t>(end - at),
-                   reinterpret_cast<std::uintptr_t>(end));
-        return true;
-    }
-
-    // FusionFix's `injector::MakeCALL(at, body).get()`: the call at `site` becomes a
-    // call to `replacement` and the destination it had before is stored in
-    // `original` (the `hook_back` holder the replacement calls).
-    template <typename FuncT>
-    bool HookCallAt(const Image& image, std::uint8_t* site, FuncT replacement,
-                    FuncT& original, std::string_view label)
-    {
-        static_assert(std::is_pointer_v<FuncT>, "a hook body is a function pointer");
-        if (site == nullptr || replacement == nullptr || !image.contains(site, 5))
-        {
-            return false;
-        }
-        const auto previous = injector::MakeCALL(
-            injector::raw_ptr(site),
-            injector::raw_ptr(injector::force_ptr(replacement)), true);
-        original = reinterpret_cast<FuncT>(previous.template get<void*>());
-        Log::Print("{}: call to {:08X} at {:08X} (was {:08X})", label,
-                   reinterpret_cast<std::uintptr_t>(injector::force_ptr(replacement)),
-                   reinterpret_cast<std::uintptr_t>(site),
-                   reinterpret_cast<std::uintptr_t>(injector::force_ptr(original)));
-        return true;
-    }
-
-    // A callable copy of the whole instruction in the `length` bytes at `entry`:
-    // the window is copied into fresh executable memory, followed by
-    // `jmp entry + length`, so a caller can call the copy and reach the rest of the
-    // original function. This is the trampoline half of a call-through entry hook
-    // (safetyhook builds the same thing for FusionFix's `create_inline`). The caller
-    // owns the claim that the window is one instruction and publishes the returned
-    // pointer BEFORE `HookEntryAt` writes the jump.
-    inline void* MakeEntryTrampoline(const std::uint8_t* entry, std::size_t length,
-                                     std::string_view label)
-    {
-        if (entry == nullptr || length < 5)
-        {
-            return nullptr;
-        }
-        const std::size_t size = length + 5;
-        auto* memory = static_cast<std::uint8_t*>(
-            ::VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-        if (memory == nullptr)
-        {
-            Log::Print("{}: cannot allocate a {} byte trampoline", label, size);
-            return nullptr;
-        }
-        std::memcpy(memory, entry, length);
-        const auto resume = reinterpret_cast<std::uintptr_t>(entry) + length;
-        const auto displacement = static_cast<std::int32_t>(
-            resume - (reinterpret_cast<std::uintptr_t>(memory) + size));
-        memory[length] = Byte(Opcode::kJmpRel32);
-        std::memcpy(memory + length + 1, &displacement, sizeof(displacement));
-        ::FlushInstructionCache(::GetCurrentProcess(), memory, size);
-        Log::Print("{}: {} byte trampoline at {:08X} (resume {:08X})", label, size,
-                   reinterpret_cast<std::uintptr_t>(memory), resume);
-        return memory;
-    }
-
-    // The entry half of the same hook: the `length` bytes at `entry` become a jump to
-    // `replacement`, with the rest of the window NOPed.
-    inline bool HookEntryAt(const Image& image, std::uint8_t* entry, std::size_t length,
-                            const void* replacement, std::string_view label)
-    {
-        if (entry == nullptr || replacement == nullptr || length < 5 ||
-            !image.contains(entry, length))
-        {
-            return false;
-        }
-        injector::MakeJMP(injector::raw_ptr(entry),
-                          injector::raw_ptr(const_cast<void*>(replacement)), true);
-        if (length > 5)
-        {
-            injector::MemoryFill(injector::raw_ptr(entry + 5), 0x90, length - 5, true);
-        }
-        Log::Print("{}: entry hook to {:08X} at {:08X} ({} byte(s))", label,
-                   reinterpret_cast<std::uintptr_t>(replacement),
-                   reinterpret_cast<std::uintptr_t>(entry), length);
-        return true;
+                   reinterpret_cast<std::uintptr_t>(replacement));
+        return hook;
     }
 
     // Replaces import slots in `module`'s import (and delay-import) tables. The
@@ -552,14 +458,9 @@ export namespace xla::patch
             {
                 return;
             }
-            DWORD previous = 0;
-            if (!::VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &previous))
-            {
-                return;
-            }
+            // The injector owns the unprotect, exactly like its own writes.
             originals.try_emplace(std::string(hookedName), *slot);
-            *slot = replacement;
-            ::VirtualProtect(slot, sizeof(void*), previous, &previous);
+            injector::WriteMemory<void*>(injector::raw_ptr(slot), replacement, true);
         };
 
         // A hook entry may name an ordinal as `Name@12`; the ordinal is matched
@@ -732,69 +633,4 @@ export namespace xla::patch
         return originals;
     }
 
-    // Makes .text and .rdata writable so the recovered stores can land. Returns
-    // false (and logs) instead of terminating the game when the image is not the
-    // one this build expects.
-    inline bool MakeImageWritable(const Image& image)
-    {
-        constexpr DWORD kSectionAlignment = 0x1000;
-        constexpr DWORD kSectionAlignmentMask = kSectionAlignment - 1;
-
-        if (image.empty() || image.size < sizeof(IMAGE_DOS_HEADER))
-        {
-            return false;
-        }
-
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image.base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-        {
-            Log::Line("image: bad DOS signature; no patches applied");
-            return false;
-        }
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-            image.base + dos->e_lfanew);
-        if (!image.contains(nt, sizeof(IMAGE_NT_HEADERS)))
-        {
-            Log::Line("image: NT headers outside the image; no patches applied");
-            return false;
-        }
-        if (nt->Signature != IMAGE_NT_SIGNATURE)
-        {
-            Log::Line("image: bad NT signature; no patches applied");
-            return false;
-        }
-
-        auto* section = IMAGE_FIRST_SECTION(nt);
-        for (WORD index = 0; index < nt->FileHeader.NumberOfSections; ++index, ++section)
-        {
-            const auto* name = reinterpret_cast<const char*>(section->Name);
-            std::size_t nameLength = 0;
-            while (nameLength < IMAGE_SIZEOF_SHORT_NAME && name[nameLength] != '\0')
-            {
-                ++nameLength;
-            }
-            const std::string_view sectionName{name, nameLength};
-            const bool isText = std::strncmp(name, ".text", IMAGE_SIZEOF_SHORT_NAME) == 0;
-            const bool isRdata = std::strncmp(name, ".rdata", IMAGE_SIZEOF_SHORT_NAME) == 0;
-            if (!isText && !isRdata)
-            {
-                continue;
-            }
-
-            const DWORD physicalSize =
-                (section->Misc.VirtualSize + kSectionAlignmentMask) & ~kSectionAlignmentMask;
-            const DWORD protection = (section->Characteristics & IMAGE_SCN_MEM_EXECUTE)
-                                         ? PAGE_EXECUTE_READWRITE
-                                         : PAGE_READWRITE;
-            DWORD previous = 0;
-            if (!::VirtualProtect(image.base + section->VirtualAddress, physicalSize, protection,
-                                  &previous))
-            {
-                Log::Print("image: cannot unprotect {} ({:#x}); no patches applied",
-                           sectionName, ::GetLastError());
-                return false;
-            }
-        }
-        return true;
-    }
 } // namespace xla::patch

@@ -19,7 +19,12 @@ add-on for GTA IV / Episodes from Liberty City. It is meant to run next to
   `source/menu.ixx`), the `grcDevice::GetAvailableVideoMemory` replacement and
   its value contract (`source/memory.ixx`, copied into `source/vram.ixx`) and
   the overall module layout conventions.
-- **LINK/2012 and ThirteenAG** — the `injector` memory-patching library.
+- **LINK/2012, ThirteenAG and SandeMC** — the `injector` memory-patching library and
+  the owner's fork pin, which writes `ret`/`ret N` at their exact width.
+- **cursey** — `safetyhook` (BSL-1.0) and `kananlib` (BSL-1.0); **Florian Bernd and
+  Joel Höner** — the Zydis disassembler (MIT); **Tsuda Kageyu** — MinHook
+  (BSD-2-Clause); **Bitdefender** — bddisasm (Apache-2.0); **praydog** — `utility`
+  (MIT).
 - **CitizenFX / NTAuthority** — `Hooking.Patterns`.
 - **ThirteenAG** — `IniReader`; **Danijel Durakovic** — `mINI`.
 

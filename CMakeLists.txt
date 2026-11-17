@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(XLivelessAddonFusion
     VERSION 1.0.0
     DESCRIPTION "XLivelessAddon reimplemented in GTAIV.EFLC.FusionFix style"
-    LANGUAGES CXX RC)
+    LANGUAGES C CXX RC)
 
 # Release, Debug and Trace. Trace compiles exactly like Release and enables the
 # per-scan diagnostic lines; the shipped binary's log is unchanged either way.
@@ -33,13 +33,19 @@ set(XLA_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(XLA_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(XLA_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 
+# The dependencies are pinned upstream submodules (see .gitmodules), never
+# vendored copies. A fresh clone needs `git submodule update --init --recursive`.
 foreach(required
         external/injector/include/injector/injector.hpp
+        external/injector/safetyhook/include/safetyhook.hpp
+        external/injector/zydis/Zydis.h
         external/hooking/Hooking.Patterns.h
         external/inireader/IniReader.h
         external/inireader/mINI/src/mini/ini.h)
   if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${required}")
-    message(FATAL_ERROR "Missing vendored file ${required}")
+    message(FATAL_ERROR
+            "Missing submodule file ${required}; run "
+            "`git submodule update --init --recursive`")
   endif()
 endforeach()
 
@@ -64,8 +70,36 @@ configure_file(cmake/version.hpp.in
 configure_file(res/version.rc.in
                "${CMAKE_CURRENT_BINARY_DIR}/generated/version.rc" @ONLY)
 
-# One module interface unit per feature. The library also owns the vendored
-# Hooking.Patterns TU (the only external .cpp); everything else is a module.
+# The injection stack, wired the way GTAIV.EFLC.FusionFix's premake5.lua wires it
+# (`external/injector/safetyhook/include` on the include path, `safetyhook/src/*.cpp`
+# and the in-tree Zydis amalgamation compiled in). safetyhook 0.7 embeds the
+# assembled x86 mid-hook stub in `mid_hook.cpp` as `asm_data`, so its `src/*.asm`
+# files are data for that embed and are not separate MASM sources - FusionFix's
+# premake has no MASM item either. `os.linux.cpp` is empty behind
+# `SAFETYHOOK_OS_LINUX`; it is listed because the premake glob compiles it.
+set(XLA_INJECTOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/injector")
+add_library(xla_safetyhook STATIC
+  ${XLA_INJECTOR_DIR}/safetyhook/src/allocator.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/easy.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/inline_hook.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/mid_hook.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/os.linux.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/os.windows.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/utility.cpp
+  ${XLA_INJECTOR_DIR}/safetyhook/src/vmt_hook.cpp
+  ${XLA_INJECTOR_DIR}/zydis/Zydis.c)
+set_target_properties(xla_safetyhook PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+target_include_directories(xla_safetyhook SYSTEM PUBLIC
+  ${XLA_INJECTOR_DIR}/safetyhook/include
+  ${XLA_INJECTOR_DIR}/zydis
+  ${XLA_INJECTOR_DIR}/include)
+target_compile_features(xla_safetyhook PUBLIC cxx_std_23)
+target_compile_definitions(xla_safetyhook PUBLIC NOMINMAX)
+target_compile_options(xla_safetyhook PRIVATE /EHsc)
+
+# One module interface unit per feature. The library also owns the
+# Hooking.Patterns TU from its submodule (the only external .cpp); everything
+# else is a module.
 set(XLA_MODULES
     source/common.ixx
     source/patch.ixx
@@ -95,7 +129,9 @@ target_include_directories(xla_modules PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/source
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(xla_modules SYSTEM PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/external/injector/include
+  ${XLA_INJECTOR_DIR}/include
+  ${XLA_INJECTOR_DIR}/safetyhook/include
+  ${XLA_INJECTOR_DIR}/zydis
   ${CMAKE_CURRENT_SOURCE_DIR}/external/hooking
   ${CMAKE_CURRENT_SOURCE_DIR}/external/inireader)
 target_compile_features(xla_modules PUBLIC cxx_std_23)
@@ -108,6 +144,7 @@ target_compile_options(xla_modules PUBLIC
   $<$<CONFIG:Release>:/O2>
   $<$<CONFIG:Trace>:/O2>)
 target_link_libraries(xla_modules PUBLIC
+  xla_safetyhook
   user32 psapi shell32 version advapi32)
 
 # The ASI. dllmain.cpp is the only plain translation unit in source/ and owns

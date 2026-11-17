@@ -29,6 +29,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          # The injector (with safetyhook/minhook/bddisasm/kananlib), Hooking.Patterns
+          # and IniReader are pinned submodules; without them there are no headers
+          # or sources to build.
+          submodules: recursive
 
       # No -G: use whichever Visual Studio generator the image provides (the
       # windows-latest image moves between VS 2022 and VS 2026). -A Win32 is the
@@ -76,6 +80,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          # The injector (with safetyhook/minhook/bddisasm/kananlib), Hooking.Patterns
+          # and IniReader are pinned submodules; without them there are no headers
+          # or sources to build.
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5

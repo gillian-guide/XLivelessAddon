@@ -520,16 +520,16 @@ namespace xla::vram
             return report;
         }
 
-        // This build's code no longer calls the query the rows hook; FusionFix's
-        // generation of the fix replaces the query itself.
-        if (InstallFusionFixPath(image))
-        {
-            report.path = Path::fusionFix;
-            return report;
-        }
+        // This build's code no longer calls the query the rows hook, so FusionFix's
+        // generation is the only way to reach it - but its install is disabled: on
+        // 2026-11-17 the run crashed in an unmapped page immediately after this arm
+        // installed, and it is the only new code in that build. Re-enable only with a
+        // verified run (the function and its tests are kept for that).
+        (void)InstallFusionFixPath;
+        Log::Line("vram: no reference row matched; the FusionFix generation is disabled "
+                  "pending in-game verification");
 
         report.path = Path::none;
-        Log::Line("vram: no path matched this build");
         return report;
     }
 } // namespace xla::vram

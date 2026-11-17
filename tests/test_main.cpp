@@ -1459,14 +1459,18 @@ namespace
                 WriteDwordAt(page, kSlotAt, 0); // no d3d9 device in a test process
                 const std::vector<std::byte> pagePristine = Snapshot(page, 0x2000);
                 const auto report = Install(xla::Image{page, 0x2000});
-                Check(report.path == Path::fusionFix && report.rowsApplied == 0,
-                      "vram: the FusionFix path installs where the reference rows are absent",
+                // The FusionFix generation exists and is tested in this file, but its
+                // install is disabled until a run proves it: the arm is the only new
+                // code in the build that crashed on 2026-11-17, so the entry stays
+                // untouched and the path reports none.
+                Check(report.path == Path::none && report.rowsApplied == 0,
+                      "vram: the FusionFix path stays disabled pending in-game verification",
                       std::format("{} {}", PathName(report.path), report.rowsApplied));
-                Check(HookInstalled(),
-                      "vram: ... through safetyhook, so the replacement owns the entry");
+                Check(!HookInstalled(),
+                      "vram: ... so no safetyhook entry owns the function");
                 const std::vector<std::byte> pageAfter = Snapshot(page, 0x2000);
-                Check(pageAfter[kEntryAt] != pagePristine[kEntryAt],
-                      "vram: ... and the entry became the hook's jump");
+                Check(pageAfter[kEntryAt] == pagePristine[kEntryAt],
+                      "vram: ... and the entry is left untouched");
             }
         }
     }

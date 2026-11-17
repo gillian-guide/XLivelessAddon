@@ -129,7 +129,13 @@ The invariants the tree is built around:
   FusionFix's own: safetyhook's inline hook at the pattern's first byte, through
   `patch::CreateInline`. The d3d9 device slot is FusionFix's `comvars.ixx` pattern
   set. No trampoline, no probe, no opt-in key; exactly one path installs per build
-  and `vram: <path> ...` says which.
+  and `vram: <path> ...` says which. The copied code's calls are guarded because a
+  wrong pattern resolution must never become an arbitrary call (the 08:21 crash:
+  `0xC0000005` at an unmapped private page): the device slot is only called when its
+  vtable lies inside a loaded module (`IsModuleRange`), every COM pointer is null- or
+  `SUCCEEDED`-checked, and each stage logs (factory, adapters with LUIDs, adapter3
+  `QueryVideoMemoryInfo`, the d3d9 texture answer, the final max/cap) so the last log
+  line names where a failure died.
 - `source/registry.ixx` — `RemoveRegistryPathDependency`.
 - `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
   FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
@@ -189,7 +195,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**463 checks**.
+**471 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -248,9 +254,12 @@ fine-grained keys).
    through `patch::CreateInline` and kept as FusionFix's `SafetyHookInline`, whose
    `.call<uint64_t>()` is the original; never hand-roll a trampoline. Keep
    FusionFix's value contract (2 GB pass-through/floor, `max(preferred, texture,
-   2 GB)`, half-system-RAM ceiling, `static` once-per-process caching) and the d3d9
-   device slot from its `comvars.ixx` patterns. The log line must name the path
-   that ran; do not make the two paths install together.
+   2 GB)`, half-system-RAM ceiling, `static` once-per-process caching), the d3d9
+   device slot from its `comvars.ixx` patterns, and the guards that make a wrong
+   pattern resolution a logged skip: the device's vtable must be inside a loaded
+   module before any method call, every COM pointer is checked, and each stage logs
+   so the last line names the stage. The log line must name the path that ran; do
+   not make the two paths install together.
 
 ## Dependencies
 

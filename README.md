@@ -40,7 +40,9 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
   generations the game has: the old add-on's recovered call-site clamp on the builds whose
   queries it can retarget, and FusionFix's `GetAvailableVideoMemory` replacement (copied from
   its `memory.ixx`: the d3d9-matched DXGI budget, the d3d9 texture memory and the 2 GB floor,
-  installed with safetyhook) on 1.0.8.0/EFLC 1.1.3.0. The log names the path that ran.
+  installed with safetyhook, with the device/COM calls guarded and every stage logged) on
+  1.0.8.0/EFLC 1.1.3.0. The log names the path that ran and, if the copied code cannot
+  finish, the stage it died in.
 - `RemoveRegistryPathDependency` — remove the Rockstar Games registry path dependency.
 - `BorderlessWindowed`/`DoNotPauseOnMinimize` — add borderless windowed mode and keep
   rendering while the borderless window is unfocused.
@@ -78,7 +80,7 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite (463 checks), the ASI image load, the PE checks, the
+INI. `ctest` runs the native suite (471 checks), the ASI image load, the PE checks, the
 no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit

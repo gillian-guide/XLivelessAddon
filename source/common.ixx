@@ -101,6 +101,47 @@ export namespace xla
         }
     };
 
+    // True when [address, address + length) lies inside a loaded module's image (the
+    // loader's SizeOfImage range). The VRAM arm's copied code answers its 08:21 crash
+    // with it: a pointer the patterns resolved wrongly was called and the target was a
+    // private, unmapped page, so anything not inside a module is treated as "not a
+    // code object" and never called.
+    inline bool IsModuleRange(const void* address, std::size_t length = 1) noexcept
+    {
+        const auto begin = reinterpret_cast<std::uintptr_t>(address);
+        if (begin == 0 || length == 0)
+        {
+            return false;
+        }
+        const auto end = begin + length;
+
+        std::array<HMODULE, 256> modules{};
+        DWORD needed = 0;
+        if (!::EnumProcessModules(::GetCurrentProcess(), modules.data(),
+                                  static_cast<DWORD>(modules.size() * sizeof(HMODULE)),
+                                  &needed))
+        {
+            return false;
+        }
+        const std::size_t count =
+            std::min<std::size_t>(modules.size(), needed / sizeof(HMODULE));
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            MODULEINFO info{};
+            if (!::GetModuleInformation(::GetCurrentProcess(), modules[index], &info,
+                                        sizeof(info)))
+            {
+                continue;
+            }
+            const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll);
+            if (base != 0 && begin >= base && end <= base + info.SizeOfImage)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // The FusionFix tiers. This add-on installs synchronously from `onInit`; the
     // rest exist so a feature written for FusionFix keeps its shape and so a
     // later port does not have to invent a tier.

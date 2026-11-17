@@ -127,6 +127,15 @@ export namespace xla::vram
     // the entry pattern matches".
     [[nodiscard]] bool HookInstalled() noexcept;
 
+    // The replacement's body below the hook: FusionFix's `ret < 2 GB` branch with its
+    // two guarded reads. Exposed so the suite can drive the guarded value path with a
+    // wrong device slot (the 08:21 crash was a call through one).
+    std::uint64_t ReplacementForOriginal(std::uint64_t original);
+
+    // The d3d9 `GetAvailableTextureMem` answer, or 0 when the device slot cannot be
+    // trusted. The same function the replacement calls; exposed for the suite.
+    std::uint64_t D3D9TextureMemory();
+
     // Which generation path the build took.
     enum class Path : std::uint8_t
     {
@@ -216,11 +225,40 @@ namespace xla::vram
 
     namespace rage::grcDevice
     {
+        // memory.ixx's `*ms_pD3DDevice`. The slot is resolved before the hook installs,
+        // so a null slot means "not installed"; answer null instead of dereferencing it.
         IDirect3DDevice9* GetD3DDevice()
         {
-            return *g_d3dDevice;
+            return g_d3dDevice != nullptr ? *g_d3dDevice : nullptr;
         }
     } // namespace rage::grcDevice
+
+    namespace
+    {
+        // The 08:21 crash (`0xC0000005` at 0x0649000E, an unmapped private page, right
+        // after this arm installed) was a call through a device the patterns had
+        // resolved wrongly. A COM object itself lives on the heap, but its vtable must
+        // be inside a loaded module: anything else is "not a device", and the copied
+        // code below never calls it.
+        IDirect3DDevice9* ValidatedD3DDevice()
+        {
+            IDirect3DDevice9* device = rage::grcDevice::GetD3DDevice();
+            if (device == nullptr)
+            {
+                return nullptr;
+            }
+            const auto* vtable = *reinterpret_cast<const void* const*>(device);
+            if (vtable == nullptr || !IsModuleRange(vtable, sizeof(void*)))
+            {
+                Log::Print("vram: d3d9 device slot looks wrong (device {:08X}, vtable {:08X}); "
+                           "using the DXGI answer only",
+                           reinterpret_cast<std::uintptr_t>(device),
+                           reinterpret_cast<std::uintptr_t>(vtable));
+                return nullptr;
+            }
+            return device;
+        }
+    } // namespace
 
     // ---- FusionFix, memory.ixx:14-201, verbatim ------------------------------
     // The game's d3d9 device tells us which DXGI adapter is its own; that
@@ -230,31 +268,50 @@ namespace xla::vram
     {
         uint64_t Memory = _2048mb;
 
-        IDirect3DDevice9* Device = rage::grcDevice::GetD3DDevice();
-        if (!Device)
-            return Memory;
-
-        // Get d3d9 adapter details
-        D3DDEVICE_CREATION_PARAMETERS DeviceCreationParams;
-        if (FAILED(Device->GetCreationParameters(&DeviceCreationParams)))
-            return Memory;
-
-        IDirect3D9* d3d9 = nullptr;
-        if (FAILED(Device->GetDirect3D(&d3d9)) || !d3d9)
-            return Memory;
-
-        D3DADAPTER_IDENTIFIER9 AdapterIdentifier;
-        if (FAILED(d3d9->GetAdapterIdentifier(DeviceCreationParams.AdapterOrdinal, 0, &AdapterIdentifier)))
+        // memory.ixx:18-40 reads the d3d9 adapter through the device. The 08:21 crash
+        // says never call a device the patterns may have resolved wrongly, so the
+        // device part is guarded: a wrong slot leaves `haveAdapterIdentifier` false and
+        // the DXGI answer still arrives (memory.ixx's early return would skip DXGI).
+        D3DADAPTER_IDENTIFIER9 AdapterIdentifier{};
+        bool haveAdapterIdentifier = false;
+        if (IDirect3DDevice9* Device = ValidatedD3DDevice())
         {
-            d3d9->Release();
-
-            return Memory;
+            // Get d3d9 adapter details
+            D3DDEVICE_CREATION_PARAMETERS DeviceCreationParams{};
+            if (SUCCEEDED(Device->GetCreationParameters(&DeviceCreationParams)))
+            {
+                IDirect3D9* d3d9 = nullptr;
+                if (SUCCEEDED(Device->GetDirect3D(&d3d9)) && d3d9 != nullptr)
+                {
+                    const HRESULT identifier = d3d9->GetAdapterIdentifier(
+                        DeviceCreationParams.AdapterOrdinal, 0, &AdapterIdentifier);
+                    haveAdapterIdentifier = SUCCEEDED(identifier);
+                    Log::Print("vram: d3d9 GetAdapterIdentifier -> {:#x}; adapter match {}",
+                               static_cast<std::uint32_t>(identifier),
+                               haveAdapterIdentifier ? "on" : "off");
+                    d3d9->Release();
+                }
+                else
+                {
+                    Log::Line("vram: d3d9 GetDirect3D failed; no adapter match");
+                }
+            }
+            else
+            {
+                Log::Line("vram: d3d9 GetCreationParameters failed; no adapter match");
+            }
         }
-        d3d9->Release();
+        else
+        {
+            Log::Line("vram: no trusted d3d9 device; the DXGI answer decides");
+        }
 
         HMODULE hDxgi = LoadLibraryA("dxgi.dll");
         if (!hDxgi)
+        {
+            Log::Line("vram: dxgi.dll unavailable; using the 2 GB floor");
             return Memory;
+        }
 
         // Helper to get system memory
         MEMORYSTATUSEX MemoryInfo;
@@ -264,6 +321,9 @@ namespace xla::vram
 
         IDXGIAdapter* SelectedAdapter = nullptr;
         uint64_t MaxDedicated = 0;
+        UINT MaxDedicatedIndex = 0;
+        UINT MatchedIndex = 0;
+        bool selectedByMatch = false;
 
         auto EnumerateAdapters = [&](IDXGIFactory* Factory) -> bool
         {
@@ -275,12 +335,30 @@ namespace xla::vram
 
             while (SUCCEEDED(Factory->EnumAdapters(AdapterID, &Adapter)))
             {
-                DXGI_ADAPTER_DESC Description;
+                // A SUCCEEDED enumeration still has to hand back an interface; the
+                // 08:21 crash was a call through an unchecked pointer.
+                if (Adapter == nullptr)
+                {
+                    Log::Print("vram: EnumAdapters({}) returned no adapter; stopping",
+                               AdapterID);
+                    break;
+                }
+
+                DXGI_ADAPTER_DESC Description{};
 
                 if (SUCCEEDED(Adapter->GetDesc(&Description)))
                 {
-                    // Match with d3d9 identifier
-                    if (Description.VendorId == AdapterIdentifier.VendorId &&
+                    Log::Print("vram: adapter {} LUID {:08X}{:08X} dedicated {} MB vendor "
+                               "{:04X} device {:04X}",
+                               AdapterID, Description.AdapterLuid.HighPart,
+                               Description.AdapterLuid.LowPart,
+                               Description.DedicatedVideoMemory / (1024 * 1024),
+                               Description.VendorId, Description.DeviceId);
+
+                    // Match with d3d9 identifier (only when the identifier was read; a
+                    // rejected device leaves every field zero and must not match).
+                    if (haveAdapterIdentifier &&
+                        Description.VendorId == AdapterIdentifier.VendorId &&
                         Description.DeviceId == AdapterIdentifier.DeviceId &&
                         Description.SubSysId == AdapterIdentifier.SubSysId &&
                         Description.Revision == AdapterIdentifier.Revision)
@@ -292,6 +370,8 @@ namespace xla::vram
                         SelectedAdapter->AddRef();
                         Adapter->Release(); // Release the enum ref
 
+                        MatchedIndex = AdapterID;
+                        selectedByMatch = true;
                         return true; // Found match, done
                     }
 
@@ -299,6 +379,7 @@ namespace xla::vram
                     if (Description.DedicatedVideoMemory > MaxDedicated)
                     {
                         MaxDedicated = Description.DedicatedVideoMemory;
+                        MaxDedicatedIndex = AdapterID;
 
                         if (SelectedAdapter)
                             SelectedAdapter->Release();
@@ -306,6 +387,10 @@ namespace xla::vram
                         SelectedAdapter = Adapter;
                         SelectedAdapter->AddRef();
                     }
+                }
+                else
+                {
+                    Log::Print("vram: adapter {} GetDesc failed", AdapterID);
                 }
 
                 Adapter->Release();
@@ -324,10 +409,19 @@ namespace xla::vram
         {
             IDXGIFactory3* Factory3 = nullptr;
 
-            if (SUCCEEDED(CreateDXGIFactory2_fun(0, __uuidof(IDXGIFactory3), (void**)&Factory3)))
+            const HRESULT created =
+                CreateDXGIFactory2_fun(0, __uuidof(IDXGIFactory3), (void**)&Factory3);
+            Log::Print("vram: CreateDXGIFactory2(IDXGIFactory3) -> {:#x}",
+                       static_cast<std::uint32_t>(created));
+            if (SUCCEEDED(created) && Factory3 != nullptr)
             {
                 FactoryToUse = static_cast<IDXGIFactory*>(Factory3);
+                Log::Line("vram: DXGI factory: CreateDXGIFactory2/IDXGIFactory3");
             }
+        }
+        else
+        {
+            Log::Line("vram: CreateDXGIFactory2 not exported; trying CreateDXGIFactory");
         }
 
         // Fallback to CreateDXGIFactory if Factory2 not available
@@ -340,10 +434,19 @@ namespace xla::vram
             {
                 IDXGIFactory* Factory = nullptr;
 
-                if (SUCCEEDED(CreateDXGIFactory_fun(__uuidof(IDXGIFactory), (void**)&Factory)))
+                const HRESULT created =
+                    CreateDXGIFactory_fun(__uuidof(IDXGIFactory), (void**)&Factory);
+                Log::Print("vram: CreateDXGIFactory(IDXGIFactory) -> {:#x}",
+                           static_cast<std::uint32_t>(created));
+                if (SUCCEEDED(created) && Factory != nullptr)
                 {
                     FactoryToUse = Factory;
+                    Log::Line("vram: DXGI factory: CreateDXGIFactory/IDXGIFactory");
                 }
+            }
+            else
+            {
+                Log::Line("vram: CreateDXGIFactory not exported; using the 2 GB floor");
             }
         }
 
@@ -353,10 +456,22 @@ namespace xla::vram
             EnumerateAdapters(FactoryToUse);
 
             FactoryToUse->Release();
+
+            if (selectedByMatch)
+            {
+                Log::Print("vram: adapter {} selected by the d3d9 identifier", MatchedIndex);
+            }
+            else
+            {
+                Log::Print("vram: no d3d9 match; largest dedicated adapter {} selected",
+                           MaxDedicatedIndex);
+            }
         }
 
         if (!SelectedAdapter)
         {
+            Log::Line("vram: no DXGI adapter selected; using the 2 GB floor");
+
             FreeLibrary(hDxgi);
 
             return Memory;
@@ -375,11 +490,20 @@ namespace xla::vram
         }
 
         IDXGIAdapter3* Adapter3 = nullptr;
-        if (SUCCEEDED(SelectedAdapter->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&Adapter3)))
+        const HRESULT adapter3Result =
+            SelectedAdapter->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&Adapter3);
+        Log::Print("vram: QueryInterface(IDXGIAdapter3) -> {:#x}",
+                   static_cast<std::uint32_t>(adapter3Result));
+        if (SUCCEEDED(adapter3Result) && Adapter3 != nullptr)
         {
-            DXGI_QUERY_VIDEO_MEMORY_INFO VRAMInfo;
+            DXGI_QUERY_VIDEO_MEMORY_INFO VRAMInfo{};
 
-            if (SUCCEEDED(Adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &VRAMInfo)))
+            const HRESULT query = Adapter3->QueryVideoMemoryInfo(
+                0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &VRAMInfo);
+            Log::Print("vram: QueryVideoMemoryInfo(LOCAL) -> {:#x}, budget {} MB",
+                       static_cast<std::uint32_t>(query),
+                       VRAMInfo.Budget / (1024 * 1024));
+            if (SUCCEEDED(query))
             {
                 Budget = VRAMInfo.Budget;
             }
@@ -389,10 +513,14 @@ namespace xla::vram
         else
         {
             IDXGIAdapter2* Adapter2 = nullptr;
+            const HRESULT adapter2Result =
+                SelectedAdapter->QueryInterface(__uuidof(IDXGIAdapter2), (void**)&Adapter2);
+            Log::Print("vram: QueryInterface(IDXGIAdapter2) -> {:#x}",
+                       static_cast<std::uint32_t>(adapter2Result));
 
-            if (SUCCEEDED(SelectedAdapter->QueryInterface(__uuidof(IDXGIAdapter2), (void**)&Adapter2)))
+            if (SUCCEEDED(adapter2Result) && Adapter2 != nullptr)
             {
-                DXGI_ADAPTER_DESC2 Description2;
+                DXGI_ADAPTER_DESC2 Description2{};
 
                 if (SUCCEEDED(Adapter2->GetDesc2(&Description2)))
                 {
@@ -409,30 +537,76 @@ namespace xla::vram
         FreeLibrary(hDxgi); // Free only after all interfaces are released
 
         // Safety caps
-        Memory = std::max(std::max(Budget, Dedicated), _2048mb);
-        Memory = std::min(Memory, TotalSystemMemory / 2);
+        const std::uint64_t floored = std::max(std::max(Budget, Dedicated), _2048mb);
+        const std::uint64_t capped = std::min(floored, TotalSystemMemory / 2);
+        Log::Print("vram: preferred GPU memory: budget {} MB, dedicated {} MB -> {} MB "
+                   "(2 GB floor), capped to half of {} MB -> {} MB",
+                   Budget / (1024 * 1024), Dedicated / (1024 * 1024),
+                   floored / (1024 * 1024), TotalSystemMemory / (1024 * 1024),
+                   capped / (1024 * 1024));
+        Memory = capped;
 
         return Memory;
     }
 
-    // ---- FusionFix, memory.ixx:203-221, verbatim -----------------------------
+    // ---- FusionFix, memory.ixx:203-221 ---------------------------------------
+    std::uint64_t D3D9TextureMemory()
+    {
+        // memory.ixx:213's `GetD3DDevice()->GetAvailableTextureMem()` behind the guard
+        // the 08:21 crash demands: no call through a slot the patterns may have
+        // resolved wrongly.
+        IDirect3DDevice9* device = ValidatedD3DDevice();
+        if (device == nullptr)
+        {
+            Log::Line("vram: d3d9 GetAvailableTextureMem skipped (no trusted device); "
+                      "using the DXGI answer");
+            return 0;
+        }
+        const auto textureMemory =
+            static_cast<std::uint64_t>(device->GetAvailableTextureMem());
+        Log::Print("vram: d3d9 GetAvailableTextureMem -> {} MB",
+                   textureMemory / (1024 * 1024));
+        return textureMemory;
+    }
+
+    std::uint64_t ReplacementForOriginal(std::uint64_t original)
+    {
+        // memory.ixx:206-221: the original answer stands at 2 GB or more, otherwise
+        // max(preferred, d3d9 texture, 2 GB), with both reads cached once per process.
+        // The reads are the guarded functions above, so a wrong device slot degrades to
+        // the DXGI answer instead of a call.
+        std::uint64_t ret = original;
+
+        if (ret < _2048mb)
+        {
+            static const std::uint64_t VRAM = GetProcessPreferredGPUMemory();
+            static const std::uint64_t d3d9VRAM = D3D9TextureMemory();
+            static const std::uint64_t TotalVRAM =
+                std::max(std::max(VRAM, d3d9VRAM), _2048mb);
+            Log::Print("vram: replacement: original {} MB, preferred {} MB, d3d9 {} MB -> "
+                       "{} MB",
+                       original / (1024 * 1024), VRAM / (1024 * 1024),
+                       d3d9VRAM / (1024 * 1024), TotalVRAM / (1024 * 1024));
+
+            ret = TotalVRAM;
+        }
+
+        return ret;
+    }
+
     namespace grcDevice
     {
         SafetyHookInline shGetAvailableVideoMemory = {};
+
         uint64_t GetAvailableVideoMemory()
         {
-            auto ret = shGetAvailableVideoMemory.call<uint64_t>();
-
-            if (ret < _2048mb)
-            {
-                static auto VRAM = GetProcessPreferredGPUMemory();
-                static auto d3d9VRAM = static_cast<uint64_t>(rage::grcDevice::GetD3DDevice()->GetAvailableTextureMem());
-                static auto TotalVRAM = std::max(std::max(VRAM, d3d9VRAM), _2048mb);
-
-                ret = TotalVRAM;
-            }
-
-            return ret;
+            // The original only exists once the hook was created; a null hook cannot
+            // happen after InstallFusionFixPath succeeded, but calling through it would
+            // fault, so answer the branch's input instead.
+            const std::uint64_t original = shGetAvailableVideoMemory
+                                               ? shGetAvailableVideoMemory.call<std::uint64_t>()
+                                               : 0;
+            return ReplacementForOriginal(original);
         }
     } // namespace grcDevice
 
@@ -520,16 +694,18 @@ namespace xla::vram
             return report;
         }
 
-        // This build's code no longer calls the query the rows hook, so FusionFix's
-        // generation is the only way to reach it - but its install is disabled: on
-        // 2026-11-17 the run crashed in an unmapped page immediately after this arm
-        // installed, and it is the only new code in that build. Re-enable only with a
-        // verified run (the function and its tests are kept for that).
-        (void)InstallFusionFixPath;
-        Log::Line("vram: no reference row matched; the FusionFix generation is disabled "
-                  "pending in-game verification");
+        // This build's code no longer calls the query the rows hook; FusionFix's
+        // generation of the fix replaces the query itself. Its device and COM calls are
+        // guarded and every stage logs, so a wrong pattern resolution degrades to a
+        // logged skip instead of the arbitrary call that crashed on 08:21.
+        if (InstallFusionFixPath(image))
+        {
+            report.path = Path::fusionFix;
+            return report;
+        }
 
         report.path = Path::none;
+        Log::Line("vram: no path matched this build");
         return report;
     }
 } // namespace xla::vram

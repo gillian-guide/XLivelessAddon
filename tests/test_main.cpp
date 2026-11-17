@@ -1402,6 +1402,13 @@ namespace
         Check(PreferredGpuValue(1 * gb, 2 * gb + 4096, 16 * gb) == 2 * gb + 4096,
               "vram: the dedicated fallback joins the budget before the caps");
 
+        // The pointer guard the copied code relies on: a loaded module's range is
+        // code, a private page is not.
+        Check(xla::IsModuleRange(::GetModuleHandleW(nullptr)),
+              "vram: the main module lies in a module range");
+        Check(!xla::IsModuleRange(nullptr) && !xla::IsModuleRange(reinterpret_cast<const void*>(0xDEADBEEFu)),
+              "vram: a null pointer and a private address are outside every module");
+
         // ---- the install gate ------------------------------------------------
         // Nothing is installed yet, so a build without the patterns stays inert.
         Check(!HookInstalled(), "vram: no FusionFix hook before the install");
@@ -1459,18 +1466,41 @@ namespace
                 WriteDwordAt(page, kSlotAt, 0); // no d3d9 device in a test process
                 const std::vector<std::byte> pagePristine = Snapshot(page, 0x2000);
                 const auto report = Install(xla::Image{page, 0x2000});
-                // The FusionFix generation exists and is tested in this file, but its
-                // install is disabled until a run proves it: the arm is the only new
-                // code in the build that crashed on 2026-11-17, so the entry stays
-                // untouched and the path reports none.
-                Check(report.path == Path::none && report.rowsApplied == 0,
-                      "vram: the FusionFix path stays disabled pending in-game verification",
+                Check(report.path == Path::fusionFix && report.rowsApplied == 0,
+                      "vram: the FusionFix path installs where the reference rows are absent",
                       std::format("{} {}", PathName(report.path), report.rowsApplied));
-                Check(!HookInstalled(),
-                      "vram: ... so no safetyhook entry owns the function");
+                Check(HookInstalled(),
+                      "vram: ... through safetyhook, so the replacement owns the entry");
                 const std::vector<std::byte> pageAfter = Snapshot(page, 0x2000);
-                Check(pageAfter[kEntryAt] == pagePristine[kEntryAt],
-                      "vram: ... and the entry is left untouched");
+                Check(pageAfter[kEntryAt] != pagePristine[kEntryAt],
+                      "vram: ... and the entry became the hook's jump");
+
+                // No device in a test process: the null slot must read as "no d3d9
+                // answer", never as a call, and the value path must still answer.
+                Check(D3D9TextureMemory() == 0,
+                      "vram: a null device slot gives no d3d9 answer");
+                Check(ReplacementForOriginal(3 * gb) == 3 * gb,
+                      "vram: ... a 3 GB original is still passed through");
+                Check(ReplacementForOriginal(1 * gb) >= _2048mb,
+                      "vram: ... and a 1 GB original is raised to at least the 2 GB floor",
+                      std::to_string(ReplacementForOriginal(1 * gb)));
+
+                // A device whose vtable is not inside any module is rejected before the
+                // copied code calls it: the 08:21 crash was a call through one
+                // (0xC0000005 at 0x0649000E, an unmapped private page).
+                std::byte* bogusDevice = PinnedImage(0x100);
+                Check(bogusDevice != nullptr, "vram: the bogus device allocates");
+                if (bogusDevice != nullptr)
+                {
+                    WriteDwordAt(bogusDevice, 0, 0xDEADBEEFu); // not a module address
+                    WriteDwordAt(page, kSlotAt,
+                                 static_cast<std::uint32_t>(
+                                     reinterpret_cast<std::uintptr_t>(bogusDevice)));
+                    Check(D3D9TextureMemory() == 0,
+                          "vram: a device whose vtable is not in a module is rejected");
+                    Check(ReplacementForOriginal(3 * gb) == 3 * gb,
+                          "vram: ... and the pass-through path still answers");
+                }
             }
         }
     }

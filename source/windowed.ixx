@@ -238,7 +238,15 @@ namespace xla::windowed
             {
                 return nullptr;
             }
-            return reinterpret_cast<bool*>(static_cast<std::uintptr_t>(*slot));
+            // The operand is a global only when it points into the image. A matched
+            // site whose operand is a plain constant must not become a pointer: reading
+            // the module start's DOS bytes as one crashed the input hook on focus loss.
+            const auto resolved = static_cast<std::uintptr_t>(*slot);
+            if (!image.contains(reinterpret_cast<const void*>(resolved), 1))
+            {
+                return nullptr;
+            }
+            return reinterpret_cast<bool*>(resolved);
         }
 
         LRESULT WINAPI DefWindowProcAProxy(HWND window, UINT message, WPARAM wparam,
@@ -366,7 +374,8 @@ namespace xla::windowed
             Log::Line("windowed: windowed global not found");
             return false;
         }
-        g_focusLost = ResolveGlobalBool(image, "C6 05 ? ? ? ? ? 85 C0 74 02 FF D0 E8");
+        g_focusLost = ResolveGlobalBool(image, "C6 05 ? ? ? ? ? 85 C0 74 02 FF D0 E8",
+                                        "C6 05 ? ? ? ? ? 74 02 FF D0 C6 05");
         if (g_focusLost == nullptr)
         {
             Log::Line("windowed: focus-loss global not found");

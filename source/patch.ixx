@@ -69,9 +69,19 @@ export namespace xla::patch
     Pattern find_pattern(Args... args)
     {
         hook::pattern pattern;
-        ((pattern = hook::pattern(args),
-          !pattern.count_hint(static_cast<std::uint32_t>(count)).empty()) ||
-         ...);
+        // An empty variant is never scanned. Hooking.Patterns reads an empty signature
+        // as a match at the module start, so a caller that omitted its fallback (the
+        // string_view default is empty) would get the DOS header as its "hit".
+        auto tryVariant = [&pattern](std::string_view signature) -> bool
+        {
+            if (signature.empty())
+            {
+                return false;
+            }
+            pattern = hook::pattern(signature);
+            return !pattern.count_hint(static_cast<std::uint32_t>(count)).empty();
+        };
+        (tryVariant(args) || ...);
         return Pattern(std::move(pattern));
     }
 

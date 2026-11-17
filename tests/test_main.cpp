@@ -676,6 +676,17 @@ namespace
         Check(!variants.empty() && variants.get_first<std::uint8_t>() == memory + 0x100,
               "patch: the second build variant is used when the first misses");
 
+        // An omitted fallback is an empty variant, and an empty signature matches at the
+        // module start - the regression that handed the focus-loss resolver the DOS bytes.
+        auto missing = xla::patch::find_pattern("DE AD BE EF CA FE", "");
+        Check(missing.empty(), "patch: an empty variant is never scanned");
+        auto emptyOnly = xla::patch::find_pattern("");
+        Check(emptyOnly.empty(), "patch: an empty signature alone finds nothing");
+        auto mz = xla::patch::find_pattern("DE AD BE EF CA FE", "4D 5A");
+        Check(!mz.empty() && mz.get_first<std::uint8_t>() ==
+                  reinterpret_cast<std::uint8_t*>(GetModuleHandleW(nullptr)),
+              "patch: a real variant still matches at the image start");
+
         VirtualFree(memory, 0, MEM_RELEASE);
     }
 

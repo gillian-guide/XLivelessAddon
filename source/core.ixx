@@ -105,6 +105,40 @@ export namespace xla::core
     // [Options] SkipWebConnect: the reference add-on's `InstallWebConnectChecks`,
     // one section over the two recovered row sets.
     Report InstallWebConnectChecks(const Image& image, const WebConnectOptions& options);
+
+    // ---------------------------------------------------------------------
+    // GFWLProtectionDisabler - the xlive.dll protection byte patch
+    // ---------------------------------------------------------------------
+    //
+    // The standalone GFWLProtectionDisabler2019.asi flips xlive.dll+0xF1605 from its
+    // `jz`/`jmp` to a `jmp`, which disables the Games for Windows LIVE protection
+    // check. No xlive image is available to scan, so the RVA is the only anchor and
+    // the pre-image byte is the guard: a different xlive build is left untouched.
+    //
+    // This arm lives here, in the GFWL checks' module, because it is one byte at one
+    // offset: a separate module would carry no second feature. (SteamAchievements is
+    // the big one and has its own module, xla.steam.)
+    inline constexpr std::size_t kGfwlProtectionSiteOffset = 988677; // 0xF1605
+    inline constexpr std::uint8_t kGfwlProtectionBranch = 0x74;      // jz
+    inline constexpr std::uint8_t kGfwlProtectionJump = 0xEB;        // jmp
+    inline constexpr std::uint8_t kGfwlProtectionPatched = 0xEB;     // what it becomes
+
+    // An offset in a module is only readable when it is inside the mapped image and
+    // the containing page is committed and accessible. xlive.dll is also the common
+    // filename of Ultimate ASI Loader's proxy, and patching the UAL proxy's image at
+    // the GFWL RVA would corrupt the loader itself, so this guard is the arm's only
+    // anchor. Exposed so the native suite can drive it.
+    bool ModuleImageContains(std::uintptr_t module, std::size_t offset, std::size_t bytes) noexcept;
+
+    // The arm's only write: `jz`/`jmp` becomes `jmp`, anything else is left alone.
+    // Answers whether the byte was written. Exposed so the suite can pin the write
+    // set (a synthetic byte, no module needed).
+    bool ApplyGfwlProtectionByte(std::uint8_t* site);
+
+    // The install: refuses a process without a real Games for Windows LIVE image, an
+    // unreadable offset and a site that does not carry the protection branch. Answers
+    // whether the byte was written; every refusal is a logged skip.
+    bool InstallGfwlProtectionDisabler();
 } // namespace xla::core
 
 namespace xla::core
@@ -303,5 +337,99 @@ namespace xla::core
         run(options.internetConnection, kInternetConnection, "SkipWebConnect (web-connect)");
         run(options.healthCheck, kHealthCheck, "SkipWebConnect (health check)");
         return total;
+    }
+
+    namespace
+    {
+        // The module-image guard's two probes: the mapped size (psapi) and the page's
+        // state/protection (VirtualQuery). Neither writes anything.
+        bool PageReadable(const void* address, std::size_t bytes) noexcept
+        {
+            if (address == nullptr || bytes == 0)
+            {
+                return false;
+            }
+            MEMORY_BASIC_INFORMATION region{};
+            if (VirtualQuery(address, &region, sizeof(region)) != sizeof(region))
+            {
+                return false;
+            }
+            if (region.State != MEM_COMMIT ||
+                (region.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0)
+            {
+                return false;
+            }
+            return bytes <= region.RegionSize;
+        }
+    } // namespace
+
+    bool ModuleImageContains(std::uintptr_t module, std::size_t offset, std::size_t bytes) noexcept
+    {
+        if (module == 0 || bytes == 0)
+        {
+            return false;
+        }
+
+        MODULEINFO info{};
+        if (!GetModuleInformation(GetCurrentProcess(), reinterpret_cast<HMODULE>(module), &info,
+                                  sizeof(info)))
+        {
+            return false;
+        }
+        const auto size = static_cast<std::size_t>(info.SizeOfImage);
+        if (offset > size || bytes > size - offset)
+        {
+            return false;
+        }
+        return PageReadable(reinterpret_cast<const std::uint8_t*>(module) + offset, bytes);
+    }
+
+    bool ApplyGfwlProtectionByte(std::uint8_t* site)
+    {
+        if (site == nullptr)
+        {
+            return false;
+        }
+
+        // The pre-image byte is the guard: only the protection branch is flipped.
+        const std::uint8_t opcode = *site;
+        if (opcode != kGfwlProtectionBranch && opcode != kGfwlProtectionJump)
+        {
+            Log::Print("gfwl: the protection site holds {:#x}, not the jz/jmp branch; skipped",
+                       opcode);
+            return false;
+        }
+        return patch::Write(patch::Site{site}, 0, kGfwlProtectionPatched,
+                            "gfwl: xlive.dll protection byte");
+    }
+
+    bool InstallGfwlProtectionDisabler()
+    {
+        const HMODULE xlive = GetModuleHandleA("xlive.dll");
+        if (xlive == nullptr)
+        {
+            Log::Line("gfwl: xlive.dll is not loaded; GFWLProtectionDisabler skipped");
+            return false;
+        }
+
+        // Only a real Games for Windows LIVE image has this export; the Ultimate ASI
+        // Loader proxy that shares the filename does not, and patching its image at
+        // the GFWL RVA would corrupt the loader.
+        if (GetProcAddress(xlive, "XLiveInitialize") == nullptr)
+        {
+            Log::Line("gfwl: xlive.dll is not Games for Windows LIVE; skipped");
+            return false;
+        }
+
+        if (!ModuleImageContains(reinterpret_cast<std::uintptr_t>(xlive),
+                                 kGfwlProtectionSiteOffset, 1))
+        {
+            Log::Print("gfwl: xlive.dll+0x{:X} is not readable; skipped",
+                       kGfwlProtectionSiteOffset);
+            return false;
+        }
+
+        return ApplyGfwlProtectionByte(reinterpret_cast<std::uint8_t*>(xlive) +
+                                       kGfwlProtectionSiteOffset);
     }
 } // namespace xla::core

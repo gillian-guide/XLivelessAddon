@@ -115,6 +115,8 @@ set(XLA_MODULES
     source/menu.ixx
     source/vram.ixx
     source/windowed.ixx
+    source/compatibility.ixx
+    source/steam.ixx
     source/startup.ixx)
 
 add_library(xla_modules STATIC

@@ -374,6 +374,20 @@ export namespace xla::patch
         return previous;
     }
 
+    // The destination a `rel32` operand at `site + offset` encodes (injector's
+    // `ReadRelativeOffset`: the operand's own address, plus four, plus the
+    // displacement). A feature that has to publish a site's original target before it
+    // retargets the site reads it here; an unreadable slot answers 0.
+    inline std::uintptr_t RelativeTarget(std::uint8_t* site, std::ptrdiff_t offset = 0)
+    {
+        if (site == nullptr)
+        {
+            return 0;
+        }
+        return static_cast<std::uintptr_t>(
+            injector::ReadRelativeOffset(injector::raw_ptr(site + offset)).as_int());
+    }
+
     // FusionFix's `injector::reg_pack`: the register file an inline functor gets.
     // A feature module names this alias instead of the injector type, so the
     // no-installs guard still holds.

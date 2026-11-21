@@ -32,6 +32,8 @@ import launcher;
 import menu;
 import vram;
 import windowed;
+import compatibility;
+import steam;
 
 export namespace xla::startup
 {
@@ -99,6 +101,12 @@ namespace xla::startup
                        game.Option("VRAMFix"), game.Option("SkipWebConnect"),
                        game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
                        game.Option("StartupWarnings"));
+            Log::Print("compatibility: newFiles={} newSaves={} gfwlProtection={} "
+                       "steamAchievements={}",
+                       game.Option("NewFilesCompatibility"),
+                       game.Option("NewSavesCompatibility"),
+                       game.Option("GFWLProtectionDisabler"),
+                       game.Option("SteamAchievements"));
         }
 
 
@@ -461,6 +469,98 @@ namespace xla::startup
                            report.missing);
             };
 
+            // ---- the recovered [COMPATIBILITY] family ---------------------------
+            // Each key owns its own step, and each step publishes before it installs
+            // (the original's publish tier runs before its install tier, so an anchor's
+            // operand is read before anything overwrites it).
+
+            Record("NewFilesCompatibility");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("NewFilesCompatibility"))
+                {
+                    Log::Trace("newFiles: option off");
+                    return;
+                }
+
+                // The resolver's CRT slots are filled before the arm's bodies can run.
+                compatibility::Prepare();
+
+                const bool conflicting = compatibility::ConflictingFileModulePresent();
+                compatibility::PublishNewFiles(game.View(), conflicting);
+                const compatibility::Report report =
+                    compatibility::InstallNewFiles(game.View(), conflicting);
+                Log::Print("newFiles: {} arm(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
+            Record("NewSavesCompatibility");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("NewSavesCompatibility"))
+                {
+                    Log::Trace("newSaves: option off");
+                    return;
+                }
+                if (!compatibility::BuildHasNewSaves(game.Build()))
+                {
+                    Log::Print("newSaves: build {} is outside the original's [1060-1080] "
+                               "mask; skipped",
+                               BuildLabel(game.Build()));
+                    return;
+                }
+
+                compatibility::PublishNewSaves(game.View());
+                const compatibility::Report report =
+                    compatibility::InstallNewSaves(game.View(), game.Build());
+                Log::Print("newSaves: {} arm(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
+            Record("GFWLProtectionDisabler");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("GFWLProtectionDisabler"))
+                {
+                    Log::Trace("gfwl: option off");
+                    return;
+                }
+                const bool patched = core::InstallGfwlProtectionDisabler();
+                Log::Print("gfwl: protection disabler={}", patched ? "applied" : "skipped");
+            };
+
+            Record("SteamAchievements");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("SteamAchievements"))
+                {
+                    Log::Trace("steam: option off");
+                    return;
+                }
+                const bool installed = steam::Install();
+                Log::Print("steam: achievement mirror={}", installed ? "installed" : "skipped");
+            };
+
             Record("SkipIntro");
             FusionFix::onInitEvent() += []
             {
@@ -597,6 +697,10 @@ namespace xla::startup
                game.Option("SkipTokenActivation") ||
                game.Option("SkipFirstTimePlayAsk") ||
                webConnect ||
+               game.Option("NewFilesCompatibility") ||
+               game.Option("NewSavesCompatibility") ||
+               game.Option("GFWLProtectionDisabler") ||
+               game.Option("SteamAchievements") ||
                game.Option("SkipIntro") || game.Option("SkipMenu") ||
                game.Option("VRAMFix") ||
                !game.OptionString("CustomUserProfilePath").empty() ||

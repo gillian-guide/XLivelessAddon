@@ -9,7 +9,10 @@ loader, hooking and configuration layers around the same recovered signature dat
 Its scope is the original add-on's whole option surface — the loader/launcher family, the
 save/registry/userdata paths, the frontend skips, the GFWL checks, the VRAM fix, the windowed
 options and the startup warnings — rebuilt in FusionFix's shape and reusing ZolikaPatch/FusionFix
-code where that is the reference (the intro/menu pair is FusionFix's own mechanism).
+code where that is the reference (the intro/menu pair is FusionFix's own mechanism), plus the
+pieces that belong to the companion: `LaunchWithPlayGTAIV` and the recovered `[COMPATIBILITY]`
+set (`NewFilesCompatibility`, `NewSavesCompatibility`, `GFWLProtectionDisabler`,
+`SteamAchievements`), which moved here from OpenPreCEPatch.
 
 It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV.EFLC.OpenPreCEPatch) as a companion, because some features belong there; it also works on its own.
 
@@ -46,6 +49,18 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 - `RemoveRegistryPathDependency` — remove the Rockstar Games registry path dependency.
 - `BorderlessWindowed`/`DoNotPauseOnMinimize` — add borderless windowed mode and keep
   rendering while the borderless window is unfocused.
+- `NewFilesCompatibility` — allow `script.img` and `radiohud` from newer versions to work on an
+  older executable (the recovered registrar and the two file-type update calls). Skipped when
+  `GTAC.dll` or `JacksIVFixes.asi` is loaded, because both install the same feature.
+- `NewSavesCompatibility` — allow newer savefiles to load without downgrading them first, by
+  converting the file when the game loads it (`1060`-`1080` only, the builds the newer layout
+  belongs to).
+- `GFWLProtectionDisabler` — flip the GFWL `xlive.dll` protection branch to a jump. The offset
+  is guarded by the mapped image and the pre-image byte, so another xlive build (and Ultimate
+  ASI Loader's `xlive.dll` proxy) is left untouched.
+- `SteamAchievements` — mirror the GFWL achievements to Steam at the `xlive.dll` import
+  boundary: the GFWL store still runs first, and `steam_api.dll` is loaded lazily on the first
+  achievement write. Without `steam_api.dll` the game keeps its GFWL-only behaviour.
 
 With a FusionFix ASI installed, `SkipIntro`, `SkipMenu`, `BorderlessWindowed` and
 `DoNotPauseOnMinimize` are switched off (FusionFix owns those subsystems) and the log records
@@ -80,8 +95,20 @@ ctest --preset trace
 ```
 
 The output is `build/win-x86/Release/XLivelessAddon.asi` (or `Trace\XLivelessAddon.asi`) and its
-INI. `ctest` runs the native suite (471 checks), the ASI image load, the PE checks, the
+INI. `ctest` runs the native suite (555 checks), the ASI image load, the PE checks, the
 no-install guard, the module-layout guard and the recovered SkipLauncher table parity check.
+
+The compatibility arms' asm tail is proved against the original ASI, not assumed: with the
+oracle at hand,
+
+```bat
+python tools/verify_compat_bodies.py --original ..\game_refs\ZolikaPatch_original.asi.off ^
+    --built build\win-x86\Release\XLivelessAddon.asi ^
+    --map build\win-x86\Release\XLivelessAddon.map
+```
+
+decodes both sides and compares every transcribed body instruction by instruction (needs
+`capstone`).
 
 `win-x86` names the **Visual Studio 18 2026** generator and builds Win32; the ASI is 32-bit
 only.
@@ -98,5 +125,8 @@ only.
   windowed/focus-loss implementation, the `SkipIntro`/`SkipMenu` mechanism (its
   `skipintro.ixx`), the SHGetFolderPath user-data redirect, the task-dialog shape and the
   overall module conventions.
+- **OpenPreCEPatch** — the recovered `[COMPATIBILITY]` arms moved here from that project:
+  the NewFiles/NewSaves bodies, anchors and save-file converter, the GFWL protection site and
+  the Steam achievement table/bridge.
 
 Licensed under the GNU General Public License, version 3 or later; see `LICENSE` and `NOTICE`.

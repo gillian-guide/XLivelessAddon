@@ -12,6 +12,13 @@ reference (the frontend pair is FusionFix's `skipintro.ixx`; the launcher, the
 VRAM fix and the GFWL checks are the old add-on's recovered rows). It is not a
 subset: an old INI's keys keep their meaning here.
 
+On top of that surface it owns the pieces that belong to the companion:
+`LaunchWithPlayGTAIV` and, since the compatibility move, **the whole recovered
+`[COMPATIBILITY]` set** (`NewFilesCompatibility`, `NewSavesCompatibility`,
+`GFWLProtectionDisabler`, `SteamAchievements`), with OpenPreCEPatch's shipped
+defaults. OpenPreCEPatch no longer ships those keys; their implementations were
+ported 1:1 from the fork's `source/compatibility.ixx` before it was stripped.
+
 The behavioural reference is `../openprecepatch/xlivelessaddon/`; the
 shape/feature reference is `../GTAIV.EFLC.FusionFix/`; the build/layout template
 is `../fusionfix-skeleton/`. Those three trees are read-only: copy from them and
@@ -37,7 +44,9 @@ The invariants the tree is built around:
   `SkipTokenActivation`, `SkipFirstTimePlayAsk`, `SkipWebConnect` (with
   `SkipInternetConnectionCheck`/`SkipHealthCheck` refining it), `SkipIntro`,
   `SkipMenu`, `VRAMFix`, `BorderlessWindowed`,
-  `DoNotPauseOnMinimize` and a non-empty `[USERPROFILE] CustomUserProfilePath`
+  `DoNotPauseOnMinimize`, `NewFilesCompatibility`, `NewSavesCompatibility`,
+  `GFWLProtectionDisabler`, `SteamAchievements`
+  and a non-empty `[USERPROFILE] CustomUserProfilePath`
   cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
   empty, `startup::AnyInstallEnabled()` is false and no store runs; `TestAllOff`
@@ -68,12 +77,14 @@ The invariants the tree is built around:
 - `source/*.ixx` — one C++23 module interface unit per feature family, plus the
   infrastructure units (`common`, `patch`, `build`, `config`, `probe`, `startup`)
   and the feature families `warnings`, `savegames`, `registry`, `profile`,
-  `core`, `launcher`, `menu`, `vram`, `windowed`. They are listed in the
-  `CXX_MODULES` file set.
+  `core`, `compatibility`, `steam`, `launcher`, `menu`, `vram`, `windowed`. They
+  are listed in the `CXX_MODULES` file set.
   A module is one feature family, not one original handler: `launcher` owns every
   launcher stage (both SkipLauncher stages and the `LaunchWithPlayGTAIV` arm),
-  `core` owns the recovered check fixes (the three "core" rows and the
-  SkipWebConnect family), `menu` owns the frontend pair, and `vram` owns the VRAM
+  `core` owns the recovered check fixes (the three "core" rows, the
+  SkipWebConnect family and the GFWLProtectionDisabler byte patch),
+  `compatibility` owns the two file/save path arms, `steam` owns the achievement
+  bridge, `menu` owns the frontend pair, and `vram` owns the VRAM
   detection fix.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
@@ -106,7 +117,29 @@ The invariants the tree is built around:
 - `source/core.ixx` — the recovered check fixes in one section per key: the three
   "core" rows (VDS/data-integrity, DLC token, first-time-play ask) and
   `SkipWebConnect`, the old add-on's single key for the web-connect and health
-  check pair (`SkipInternetConnectionCheck`/`SkipHealthCheck` refine it).
+  check pair (`SkipInternetConnectionCheck`/`SkipHealthCheck` refine it). Its last
+  section is `GFWLProtectionDisabler` — the xlive.dll protection byte patch
+  (`xlive.dll+0xF1605`, `jz`/`jmp` becomes `jmp`). It lives here rather than in a
+  module of its own because it is one byte at one offset; the module-image guard
+  (the offset must be inside the mapped, committed image, and the module must
+  export `XLiveInitialize`, so Ultimate ASI Loader's `xlive.dll` proxy is never
+  touched) and the pre-image-byte rule are its whole footprint.
+- `source/compatibility.ixx` — `[Options] NewFilesCompatibility` and
+  `NewSavesCompatibility`, ported 1:1 from the fork's `source/compatibility.ixx`
+  before it was stripped: the two publish steps (the registrar's call operand and
+  the save-name buffer/load continuation), the two install steps (the two file-type
+  update calls plus the registrar tail, and the savegame-load entry's trampoline),
+  the savegame-load trampoline and the save-format converter with its three site
+  patches. The transcription's asm tail is proved against the original ASI by
+  `tools/verify_compat_bodies.py`. NewFiles is skipped when `GTAC.dll` or
+  `JacksIVFixes.asi` is loaded (both install the same feature); NewSaves is gated
+  on the original's own `[1060-1080]` build mask.
+- `source/steam.ixx` — `[Options] SteamAchievements`: the GFWL achievement mirror,
+  ported whole (the recovered id -> Steam name table, the xlive
+  `XUserWriteAchievements` ordinal-5278 import boundary, the lazy `SteamAPI_Init`
+  on the first achievement write, the queued/replayed ids and the refusal path).
+  The IAT slot is replaced through `patch::ReplaceImports`, and the original target
+  it returns is called first, so the GFWL store keeps working.
 - `source/menu.ixx` — `SkipIntro`/`SkipMenu`: FusionFix's `skipintro.ixx`
   mechanism, ported as-is (the Loadsc window that zeroes the screens under
   8000 ms, and the `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch,
@@ -148,8 +181,11 @@ The invariants the tree is built around:
   `git submodule update --init --recursive`.
 - `tests/` — the native suite, the ASI image load and the PE checks; also the
   recovered SkipLauncher table golden.
-- `tools/` — `check_no_installs.py`, `check_module_layout.py` and
-  `check_skip_launcher_tables.py`.
+- `tools/` — `check_no_installs.py`, `check_module_layout.py`,
+  `check_skip_launcher_tables.py` and `verify_compat_bodies.py` (the manual proof:
+  it decodes the compatibility module's asm tail and the original ASI's bodies at
+  their recovered VAs and compares them instruction by instruction; it needs the
+  oracle, so it is not a ctest target).
 - `README.md` — features, startup warnings, install, credits and the build.
 
 ### FusionFix overlap
@@ -195,7 +231,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**471 checks**.
+**555 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -212,9 +248,29 @@ body's latch/SHIFT/a1 = 6 behaviour and the missing-pattern skips), the VRAM fix
 (`TestVram`: the reference generation's three call retargets, its clamp answers
 and overwrite quirk, FusionFix's value contract through
 `ReplacementValue`/`PreferredGpuValue`, the `safetyhook` install on a synthetic
-page, the generation split and the no-pattern skips) and the web-connect family
+page, the generation split and the no-pattern skips), the web-connect family
 (`TestWebConnect`: the two recovered sections, their exact writes and the
-fine-grained keys).
+fine-grained keys) and the recovered `[COMPATIBILITY]` family:
+
+- `TestCompatibility`: the missing-anchor pass first (the scanner caches hits per
+  signature string), then the recovered anchors and body VAs, the NewFiles write
+  set on a synthetic image (two retargeted update calls and the registrar tail's
+  jump, and nothing else), its `GTAC.dll`/`JacksIVFixes.asi` gate, the NewSaves
+  published slots, its `[1060-1080]` build gate, the trampoline jump, and the
+  converter's three site patches in both layouts (the branch opcode, the pushed
+  read size, the branch word and the two call retargets, with the published
+  original targets).
+- `TestNewSavesWalk`: the converter's own walk and patch choice over synthetic
+  saves, older/newer/mixed: the three chunk-size flags, the three chosen values,
+  and every rejection path (short header, no `SAVE` at +0xC, a chunk size below
+  nine, a header with no chunk table, a missing file).
+- `TestGfwl`: the module-image guard (start/last byte, one past the end, a read
+  crossing the end, a null module) and the byte rule (`jz`/`jmp` becomes `jmp`,
+  idempotent, `jnz` and an unrelated byte untouched, a null site refused), plus
+  the install's refusal without xlive.
+- `TestSteam`: the 65-row recovered table (size, id order, five spot checks, ids
+  0/66 absent), the ordinal constant, and the refusal path (twice, so it is
+  stable).
 
 ## Rules learned the hard way
 
@@ -260,6 +316,18 @@ fine-grained keys).
    module before any method call, every COM pointer is checked, and each stage logs
    so the last line names the stage. The log line must name the path that ran; do
    not make the two paths install together.
+10. **The `[COMPATIBILITY]` arms are the fork's port, and the transcription is
+    proved, not assumed.** `NewFilesCompatibility`/`NewSavesCompatibility` come from
+    OpenPreCEPatch's `source/compatibility.ixx` (the whole section, with its shipped
+    defaults): the anchors, the offsets inside them and the stored bytes are
+    byte-identical, and the asm tail is compared instruction by instruction with the
+    original ASI's own bodies by `tools/verify_compat_bodies.py`. The converter's
+    walk and its value choice each have one implementation, used by the production
+    path and by the suite (`WalkSaveFile` runs `WalkSaveFileInto` and
+    `ChoosePatchValues`), so a test cannot agree with a copy of a bug. Keep
+    `GFWLProtectionDisabler` in `core` (one byte, one offset) and `SteamAchievements`
+    in `steam` (its table and its bridge): that is the size of each arm, and a module
+    per key would be an empty shell.
 
 ## Dependencies
 

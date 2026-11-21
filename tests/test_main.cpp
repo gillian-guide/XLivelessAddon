@@ -10,8 +10,10 @@
 // (the intro stub's register contract and the menu body), the VRAMFix call
 // retargets and clamp, the SkipWebConnect section, the
 // [USERPROFILE] CustomUserProfilePath resolution and shell redirect, the savegame
-// CRC32 bypass, the IAT replacement, the startup order and the deliberate
-// user-data divergence from the old addon.
+// CRC32 bypass, the IAT replacement, the recovered [COMPATIBILITY] family (the two
+// file/save arms with their write sets and gates, the GFWL protection byte patch with
+// its module-image guard, and the Steam achievement table with its refusal path), the
+// startup order and the deliberate user-data divergence from the old addon.
 
 #include <common.hxx>
 #include <injector/injector.hpp>
@@ -27,6 +29,8 @@ import savegames;
 import registry;
 import profile;
 import core;
+import compatibility;
+import steam;
 import launcher;
 import menu;
 import vram;
@@ -376,6 +380,11 @@ namespace
         Check(game.Option("SkipIntro"), "config: SkipIntro defaults on");
         Check(!game.Option("SkipMenu"), "config: SkipMenu defaults off");
         Check(game.Option("VRAMFix"), "config: VRAMFix defaults on");
+        Check(game.Option("NewFilesCompatibility") &&
+                  game.Option("NewSavesCompatibility") &&
+                  game.Option("GFWLProtectionDisabler") &&
+                  game.Option("SteamAchievements"),
+              "config: the four recovered [COMPATIBILITY] keys default on");
 
         TempDir missing("xla-config-missing");
         (void)xla::config::Load(missing.Path());
@@ -516,6 +525,8 @@ namespace
                   "RemoveDataIntegrityChecks=0\nSkipTokenActivation=0\n"
                   "SkipFirstTimePlayAsk=0\nSkipInternetConnectionCheck=0\n"
                   "SkipHealthCheck=0\nSkipWebConnect=0\n"
+                  "NewFilesCompatibility=0\nNewSavesCompatibility=0\n"
+                  "GFWLProtectionDisabler=0\nSteamAchievements=0\n"
                   "SkipIntro=0\nSkipMenu=0\nVRAMFix=0\n"
                   "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
@@ -525,6 +536,11 @@ namespace
         Check(!loaded.options.skipWebConnect && !loaded.options.skipIntro &&
                   !loaded.options.skipMenu && !loaded.options.vramFix,
               "all-off: the four restored keys are read");
+        Check(!loaded.options.newFilesCompatibility &&
+                  !loaded.options.newSavesCompatibility &&
+                  !loaded.options.gfwlProtectionDisabler &&
+                  !loaded.options.steamAchievements,
+              "all-off: the four [COMPATIBILITY] keys are read");
         Check(!xla::startup::AnyInstallEnabled(),
               "all-off: no install is enabled");
 
@@ -541,6 +557,10 @@ namespace
         flip("LegacyLauncher"); // SkipLauncher is 0 here
         flip("LaunchWithPlayGTAIV");
         flip("RemoveRegistryPathDependency");
+        flip("NewFilesCompatibility");
+        flip("NewSavesCompatibility");
+        flip("GFWLProtectionDisabler");
+        flip("SteamAchievements");
         flip("RemoveDataIntegrityChecks");
         flip("SkipTokenActivation");
         flip("SkipFirstTimePlayAsk");
@@ -1616,6 +1636,494 @@ namespace
               "webConnect: a missing signature is a logged skip");
     }
 
+    // ---- NewFilesCompatibility / NewSavesCompatibility -----------------------
+    //
+    // The two recovered file/save path arms, driven exactly as the install pass
+    // drives them. The scanner caches hits per signature string for the life of the
+    // process, so the missing-anchor pass runs first and the write-set pass runs
+    // after it, each on a persistent image (`static` vectors: the injector's writes
+    // and the scanner's hints both outlive the test function).
+
+    void TestCompatibility()
+    {
+        // ---- the missing-anchor pass ----------------------------------------
+        // An image with room but no recovered anchor: every arm is a logged skip and
+        // nothing is published. It runs first because a later scan of the same string
+        // over another image would be answered from these hints if any existed.
+        static std::vector<std::byte> bare(0x100, std::byte{0});
+        const xla::Image bareView{bare.data(), bare.size()};
+
+        xla::compatibility::Prepare();
+
+        const auto noneFiles = xla::compatibility::InstallNewFiles(bareView, false);
+        Check(noneFiles.applied == 0 && noneFiles.missing == 3,
+              "compatibility: a missing NewFiles anchor is a skip",
+              std::format("{}/{}", noneFiles.applied, noneFiles.missing));
+        xla::compatibility::PublishNewFiles(bareView, false);
+
+        const auto noneSaves =
+            xla::compatibility::InstallNewSaves(bareView, xla::GameBuild::v1080);
+        Check(noneSaves.applied == 0 && noneSaves.missing == 1,
+              "compatibility: a missing NewSaves anchor is a skip");
+        xla::compatibility::PublishNewSaves(bareView);
+
+        const xla::compatibility::NewSavesSites noSites =
+            xla::compatibility::ResolveNewSavesSites(bareView);
+        const auto noneSites = xla::compatibility::ApplyNewSavesSites(noSites, 0, 0);
+        Check(noSites.branch == nullptr && noSites.read == nullptr && noSites.load == nullptr &&
+                  noneSites.applied == 0 && noneSites.missing == 3,
+              "compatibility: missing converter sites are skips");
+
+        const auto nothingPublished = xla::compatibility::PublishedForTest();
+        Check(nothingPublished.registerSlot == 0 && nothingPublished.saveName == 0 &&
+                  nothingPublished.loadResume == 0 && nothingPublished.loadData == 0 &&
+                  nothingPublished.secondLoadOriginal == 0,
+              "compatibility: a missed anchor publishes nothing");
+
+        // ---- the recovered rows and body VAs --------------------------------
+        const auto anchors = xla::compatibility::RecoveredAnchors();
+        Check(anchors.updateA ==
+                      "E8 ? ? ? ? 8B 36 85 F6 75 ED E8 ? ? ? ? 8B 3F 03 EB 85 FF 0F 85 7B FF "
+                      "FF FF" &&
+                  anchors.updateB ==
+                      "E8 ? ? ? ? 8B 36 85 F6 75 ED E8 ? ? ? ? 8B 3F 03 EB 85 FF 0F 85 6C FF "
+                      "FF FF",
+              "compatibility: the two update anchors are the recovered rows");
+        Check(anchors.registrar == "68 64 28 C8 67 E8",
+              "compatibility: the registrar anchor is the recovered row");
+        Check(anchors.saveName == "68 ? ? ? ? E8 ? ? ? ? 8B 2D ? ? ? ? 83 C4 08" &&
+                  anchors.saveResume == "89 84 24 E0 01 00 00 8B 45 08 53 33 DB",
+              "compatibility: the two NewSaves anchors are the recovered rows");
+        Check(anchors.branchSite == "74 37 80 3D ? ? ? ? 00 75 2E 8D 84 ? ? ? ? 00 6A 1E" &&
+                  anchors.readSite == "68 BE 0C 00 00 50 E8" &&
+                  anchors.loadSite ==
+                      "56 E8 ? ? ? ? E8 ? ? ? ? A1 ? ? ? ? 8D 0C 85 00 00 00 00",
+              "compatibility: the three converter anchors are the recovered rows");
+
+        using xla::compatibility::Body;
+        const std::array<std::pair<Body, std::uint32_t>, 9> vas{{
+            {Body::register_tail, 0x10051600},
+            {Body::update_a, 0x10051890},
+            {Body::update_b, 0x100518D0},
+            {Body::read_hook, 0x10051A90},
+            {Body::second_load, 0x10051AD0},
+            {Body::trampoline, 0x100521E0},
+            {Body::prepare, 0x10051FD0},
+            {Body::convert, 0x10051B30},
+            {Body::resolver, 0x10003E50},
+        }};
+        bool vasMatch = true;
+        for (const auto& [body, va] : vas)
+        {
+            vasMatch = vasMatch && xla::compatibility::BodyVa(body) == va &&
+                       xla::compatibility::ResolveBody(body) != 0;
+        }
+        Check(vasMatch, "compatibility: every body keeps its recovered VA");
+
+        // ---- the write set, on an image that carries every anchor -----------
+        constexpr std::size_t kUpdateA = 0x100;
+        constexpr std::size_t kUpdateB = 0x200;
+        constexpr std::size_t kRegistrar = 0x300;
+        constexpr std::size_t kSaveName = 0x400;
+        constexpr std::size_t kSaveResume = 0x500;
+        constexpr std::size_t kBranchSite = 0x600;
+        constexpr std::size_t kReadSite = 0x700;
+        constexpr std::size_t kLoadSite = 0x800;
+        constexpr std::uint32_t kRegisterEntry = 0x10005000;
+        constexpr std::uint32_t kSaveNameBuffer = 0x0012A000;
+        constexpr std::uint32_t kReadDataEntry = 0x10006000;
+        constexpr std::uint32_t kSecondLoadEntry = 0x10007000;
+        constexpr std::uint32_t kSharedReadEntry = 0x10008000;
+
+        static std::vector<std::byte> image(0x1000, std::byte{0});
+        WriteBytes(image, kUpdateA, BytesOf(anchors.updateA));
+        WriteBytes(image, kUpdateB, BytesOf(anchors.updateB));
+        WriteBytes(image, kRegistrar, BytesOf(anchors.registrar));
+        SetCallTarget(image, kRegistrar + 5, kRegisterEntry); // the registrar's `call`
+
+        WriteBytes(image, kSaveName, BytesOf(anchors.saveName));
+        WriteDword(image, kSaveName + 1, kSaveNameBuffer); // the pushed buffer address
+        WriteBytes(image, kSaveResume, BytesOf(anchors.saveResume));
+
+        WriteBytes(image, kBranchSite, BytesOf(anchors.branchSite));
+        WriteBytes(image, kReadSite, BytesOf(anchors.readSite));
+        SetCallTarget(image, kReadSite + 6, kReadDataEntry); // `call LoadData`
+        WriteBytes(image, kLoadSite, BytesOf(anchors.loadSite));
+        SetCallTarget(image, kLoadSite + 6, kSecondLoadEntry); // the second LoadData call
+        image[kLoadSite + 0x1D] = std::byte{0xE8};             // the function's later call
+        SetCallTarget(image, kLoadSite + 0x1D, kSharedReadEntry); // the shared read entry
+
+        const xla::Image view{image.data(), image.size()};
+
+        // ---- NewFilesCompatibility ------------------------------------------
+        xla::compatibility::PublishNewFiles(view, false);
+        Check(xla::compatibility::PublishedForTest().registerSlot == kRegisterEntry,
+              "newFiles: the published slot is the registrar's call target");
+
+        const std::vector<std::byte> pristine = image;
+        const auto files = xla::compatibility::InstallNewFiles(view, false);
+        Check(files.applied == 3 && files.missing == 0,
+              "newFiles: the two update calls and the registrar tail apply",
+              std::format("{}/{}", files.applied, files.applied + files.missing));
+        Check(image[kUpdateA] == std::byte{0xE8} &&
+                  CallTarget(image, kUpdateA) ==
+                      xla::compatibility::ResolveBody(Body::update_a),
+              "newFiles: the first update call targets its body");
+        Check(image[kUpdateB] == std::byte{0xE8} &&
+                  CallTarget(image, kUpdateB) ==
+                      xla::compatibility::ResolveBody(Body::update_b),
+              "newFiles: the second update call targets its body");
+        Check(image[kRegistrar + 28] == std::byte{0xE9} &&
+                  JumpTarget(image, kRegistrar + 28) ==
+                      xla::compatibility::ResolveBody(Body::register_tail),
+              "newFiles: the registrar's tail jumps to its body");
+        const std::array<std::pair<std::size_t, std::size_t>, 3> fileSpans{{
+            {kUpdateA, 5},
+            {kUpdateB, 5},
+            {kRegistrar + 28, 5},
+        }};
+        Check(OnlyChangedWithin(image, pristine, fileSpans),
+              "newFiles: the arm writes only its three sites");
+
+        // The original's gate: GTAC.dll / JacksIVFixes.asi install the same feature,
+        // so the arm is skipped entirely (no scan, no write).
+        const std::vector<std::byte> afterFiles = image;
+        const auto gatedConflict = xla::compatibility::InstallNewFiles(view, true);
+        Check(gatedConflict.applied == 0 && gatedConflict.missing == 0 && image == afterFiles,
+              "newFiles: a loaded GTAC.dll/JacksIVFixes.asi skips the arm");
+
+        // ---- NewSavesCompatibility ------------------------------------------
+        xla::compatibility::PublishNewSaves(view);
+        const auto published = xla::compatibility::PublishedForTest();
+        Check(published.saveName == kSaveNameBuffer,
+              "newSaves: the published slot is the pushed save-name buffer");
+        Check(published.loadResume == static_cast<std::uint32_t>(
+                                          reinterpret_cast<std::uintptr_t>(image.data()) +
+                                          kSaveResume + 13),
+              "newSaves: the load continuation is the anchor's +0xD");
+
+        Check(xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1060) &&
+                  xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1070) &&
+                  xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1080),
+              "newSaves: the recovered [1060-1080] mask is the gate");
+        Check(!xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1000) &&
+                  !xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1040) &&
+                  !xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1100) &&
+                  !xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1110) &&
+                  !xla::compatibility::BuildHasNewSaves(xla::GameBuild::v1130) &&
+                  !xla::compatibility::BuildHasNewSaves(xla::GameBuild::unknown),
+              "newSaves: every other build is outside it");
+
+        const std::vector<std::byte> beforeSaves = image;
+        const auto gatedBuild =
+            xla::compatibility::InstallNewSaves(view, xla::GameBuild::v1040);
+        Check(gatedBuild.applied == 0 && gatedBuild.missing == 0 && image == beforeSaves,
+              "newSaves: a build outside the mask installs nothing");
+
+        const auto saves = xla::compatibility::InstallNewSaves(view, xla::GameBuild::v1080);
+        Check(saves.applied == 1 && saves.missing == 0,
+              "newSaves: the load entry jumps to the trampoline");
+        Check(image[kSaveResume] == std::byte{0xE9} &&
+                  JumpTarget(image, kSaveResume) ==
+                      xla::compatibility::ResolveBody(Body::trampoline),
+              "newSaves: ... and the destination is the transcribed trampoline");
+
+        // ---- the converter's three sites ------------------------------------
+        // The sites are resolved once for the life of the process (the original's
+        // TLS-guarded statics), so the suite resolves them once too and applies them
+        // repeatedly; a per-load re-scan would lose the branch after the first newer
+        // save rewrote it.
+        const xla::compatibility::NewSavesSites sites =
+            xla::compatibility::ResolveNewSavesSites(view);
+        const auto byteAt = [](std::size_t offset)
+        { return reinterpret_cast<std::uint8_t*>(image.data() + offset); };
+        Check(sites.branch == byteAt(kBranchSite) && sites.read == byteAt(kReadSite) &&
+                  sites.load == byteAt(kLoadSite),
+              "newSaves: the three converter sites resolve to their anchors");
+
+        // The older layout first: the branch, the pushed size and the branch word stay
+        // at the old values (the branch byte is the anchor's own `jz`).
+        const std::vector<std::byte> beforeSites = image;
+        const auto older = xla::compatibility::ApplyNewSavesSites(sites, 0, 0);
+        Check(older.applied == 3 && older.missing == 0,
+              "newSaves: the three converter sites patch",
+              std::format("{}/{}", older.applied, older.applied + older.missing));
+        Check(image[kBranchSite] == std::byte{0x74},
+              "newSaves: an older save keeps the jz branch");
+        Check(image[kReadSite - 5] == std::byte{0x75} && image[kReadSite - 4] == std::byte{0x26},
+              "newSaves: an older save keeps the jne branch");
+        Check(DwordAt(image.data(), kReadSite + 1) == 0x0CBE,
+              "newSaves: an older save pushes the 0xCBE read size");
+        Check(image[kReadSite + 6] == std::byte{0xE8} &&
+                  CallTarget(image, kReadSite + 6) ==
+                      xla::compatibility::ResolveBody(Body::read_hook),
+              "newSaves: the read call targets its transcribed hook");
+        Check(image[kLoadSite + 6] == std::byte{0xE8} &&
+                  CallTarget(image, kLoadSite + 6) ==
+                      xla::compatibility::ResolveBody(Body::second_load),
+              "newSaves: the second LoadData call targets its hook");
+        const std::vector<std::byte> afterOlder = image;
+
+        // The newer layout: `jmp` instead of `jz`, the 0xE6E read size and NOPs in
+        // front of it. The published state keeps the original targets the hooks call.
+        const auto newer = xla::compatibility::ApplyNewSavesSites(sites, 1, 1);
+        Check(newer.applied == 3 && newer.missing == 0,
+              "newSaves: the newer layout patches the same three sites");
+        Check(image[kBranchSite] == std::byte{0xEB},
+              "newSaves: a newer save forces the longer path");
+        Check(image[kReadSite - 5] == std::byte{0x90} && image[kReadSite - 4] == std::byte{0x90},
+              "newSaves: ... and NOPs the jne branch");
+        Check(DwordAt(image.data(), kReadSite + 1) == 0x0E6E,
+              "newSaves: ... pushes the 0xE6E read size");
+        const auto state = xla::compatibility::PublishedForTest();
+        Check(state.secondLoadOriginal == kSecondLoadEntry,
+              "newSaves: the second call's original target is kept");
+        Check(state.loadData == kSharedReadEntry,
+              "newSaves: the shared read entry is the function's later call target");
+        const std::array<std::pair<std::size_t, std::size_t>, 5> siteSpans{{
+            {kBranchSite, 1},
+            {kReadSite - 5, 2},
+            {kReadSite + 1, 4},
+            {kReadSite + 6, 5},
+            {kLoadSite + 6, 5},
+        }};
+        Check(OnlyChangedWithin(image, beforeSites, siteSpans),
+              "newSaves: the converter writes only its three sites");
+
+        // The sites are cached, not re-scanned: the next older save restores the old
+        // triple even though the branch byte no longer matches its own anchor. The
+        // choice is a pure function of the two flags, and the walk below asserts the
+        // same values on a file.
+        const auto restored = xla::compatibility::ApplyNewSavesSites(sites, 0, 0);
+        Check(restored.applied == 3 && image == afterOlder,
+              "newSaves: a cached site survives the branch it rewrote");
+    }
+
+    // A synthetic save: the 0x110-byte header with "SAVE" at +0xC, then one 9-byte
+    // chunk header per size with the payload that size implies. The walk reads only
+    // the headers; the payload is written so the file really has the layout it
+    // declares.
+    std::vector<std::uint8_t> SaveBytes(std::span<const std::uint32_t> chunkSizes,
+                                        std::string_view tag = "BLOCK")
+    {
+        std::vector<std::uint8_t> bytes(0x110, 0);
+        std::memcpy(bytes.data() + 0x0C, "SAVE", 4);
+        for (const std::uint32_t size : chunkSizes)
+        {
+            const std::size_t at = bytes.size();
+            bytes.resize(at + 9, 0);
+            std::memcpy(bytes.data() + at, tag.data(),
+                        std::min<std::size_t>(tag.size(), 5));
+            std::memcpy(bytes.data() + at + 5, &size, sizeof(size));
+            const std::uint32_t payload = size > 9 ? size - 9 : 0;
+            bytes.resize(bytes.size() + payload, 0);
+        }
+        return bytes;
+    }
+
+    // ---- the savegame-load converter's decisions -----------------------------
+    //
+    // `WalkSaveFile` runs the converter's own walk (`WalkSaveFileInto`) and its own
+    // patch choice (`ChoosePatchValues`) and writes nothing; the values asserted here
+    // are the recovered literals. The three site writes themselves are pinned by
+    // TestCompatibility above, so a bug in either half cannot hide in the other.
+    void TestNewSavesWalk()
+    {
+        TempDir work("xla-save-walk");
+        const auto writeFile = [&](std::string_view name, const std::vector<std::uint8_t>& bytes)
+        {
+            const auto path = work / name;
+            std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+            stream.write(reinterpret_cast<const char*>(bytes.data()),
+                         static_cast<std::streamsize>(bytes.size()));
+            return path.string();
+        };
+
+        using xla::compatibility::SaveWalkEnd;
+
+        // The older layout: eighteen minimal chunks, so no flag is set.
+        std::vector<std::uint32_t> older(18, 9);
+        const std::string olderPath = writeFile("older.sav", SaveBytes(older));
+        const auto olderWalk = xla::compatibility::WalkSaveFile(olderPath.c_str());
+        Check(olderWalk.end == SaveWalkEnd::walked && olderWalk.chunkCount == 18,
+              "saveWalk: the older layout walks eighteen chunk headers",
+              std::format("{} chunk(s)", olderWalk.chunkCount));
+        Check(olderWalk.forceRead == 0 && olderWalk.extraBlock == 0 &&
+                  olderWalk.newChunk16 == 0,
+              "saveWalk: none of the three newer chunk sizes is found");
+        Check(olderWalk.branchOpcode == 0x74 && olderWalk.readSize == 0x0CBE &&
+                  olderWalk.readBranch == 0x2675,
+              "saveWalk: an older save selects the old triple");
+        Check(std::string_view(olderWalk.chunks[0].id, 5) == "BLOCK" &&
+                  olderWalk.chunks[0].size == 9,
+              "saveWalk: the chunk tag and size are the file's own");
+
+        // The newer layout: the three size literals.
+        std::vector<std::uint32_t> newer(18, 9);
+        newer[9] = 0x4C45;
+        newer[13] = 0x1741;
+        newer[16] = 0x0E77;
+        const std::string newerPath = writeFile("newer.sav", SaveBytes(newer));
+        const auto newerWalk = xla::compatibility::WalkSaveFile(newerPath.c_str());
+        Check(newerWalk.end == SaveWalkEnd::walked &&
+                  newerWalk.forceRead == 1 && newerWalk.extraBlock == 1 &&
+                  newerWalk.newChunk16 == 1,
+              "saveWalk: the newer layout sets all three flags");
+        Check(newerWalk.branchOpcode == 0xEB && newerWalk.readSize == 0x0E6E &&
+                  newerWalk.readBranch == 0x9090,
+              "saveWalk: a newer save selects the new triple");
+
+        // One flag alone: the three are independent and only chunk 16 decides the read
+        // size and the branch word.
+        std::vector<std::uint32_t> mixed(18, 9);
+        mixed[16] = 0x0E77;
+        const std::string mixedPath = writeFile("mixed.sav", SaveBytes(mixed));
+        const auto mixedWalk = xla::compatibility::WalkSaveFile(mixedPath.c_str());
+        Check(mixedWalk.forceRead == 0 && mixedWalk.extraBlock == 0 &&
+                  mixedWalk.newChunk16 == 1,
+              "saveWalk: the three flags are decided independently");
+        Check(mixedWalk.branchOpcode == 0x74 && mixedWalk.readSize == 0x0E6E &&
+                  mixedWalk.readBranch == 0x9090,
+              "saveWalk: ... and only chunk 16 decides the read triple");
+
+        // The rejection paths. A short header, a header without the magic and a chunk
+        // size below the nine-byte header are all "rejected" / "notASave", never a
+        // fault: the arm's hardening group.
+        std::vector<std::uint8_t> shortHeader(0x20, 0);
+        std::memcpy(shortHeader.data() + 0x0C, "SAVE", 4);
+        Check(xla::compatibility::WalkSaveFile(
+                  writeFile("short-header.sav", shortHeader).c_str())
+                      .end == SaveWalkEnd::rejected,
+              "saveWalk: a short header is rejected");
+
+        std::vector<std::uint8_t> noMagic(0x110, 0);
+        Check(xla::compatibility::WalkSaveFile(
+                  writeFile("no-magic.sav", noMagic).c_str())
+                      .end == SaveWalkEnd::notASave,
+              "saveWalk: a header without SAVE at +0xC is not a save");
+
+        std::vector<std::uint32_t> tooSmall{8};
+        Check(xla::compatibility::WalkSaveFile(
+                  writeFile("small-chunk.sav", SaveBytes(tooSmall)).c_str())
+                      .end == SaveWalkEnd::rejected,
+              "saveWalk: a chunk size below nine is rejected");
+
+        std::vector<std::uint32_t> nineGood(9, 9);
+        nineGood.push_back(8);
+        Check(xla::compatibility::WalkSaveFile(
+                  writeFile("ninth-bad.sav", SaveBytes(nineGood)).c_str())
+                      .end == SaveWalkEnd::rejected,
+              "saveWalk: a bad chunk after good ones is rejected");
+
+        Check(xla::compatibility::WalkSaveFile(
+                  writeFile("header-only.sav", SaveBytes({})).c_str())
+                      .end == SaveWalkEnd::rejected,
+              "saveWalk: a header with no chunk table is rejected");
+
+        Check(xla::compatibility::WalkSaveFile(
+                  (work / "does-not-exist.sav").string().c_str())
+                      .end == SaveWalkEnd::noFile,
+              "saveWalk: a missing file is reported, not faulted");
+    }
+
+    // ---- GFWLProtectionDisabler ---------------------------------------------
+    //
+    // The xlive.dll protection byte patch: the module-image guard (an offset is only
+    // readable inside the mapped image and on a committed page) and the pre-image byte
+    // rule (only the protection branch is flipped). The install refuses a process
+    // without a real Games for Windows LIVE image.
+    void TestGfwl()
+    {
+        Check(xla::core::kGfwlProtectionSiteOffset == 0xF1605,
+              "gfwl: the protection site is xlive.dll+0xF1605",
+              std::to_string(xla::core::kGfwlProtectionSiteOffset));
+
+        const HMODULE module = ::GetModuleHandleW(nullptr);
+        MODULEINFO info{};
+        const bool gotInfo =
+            module != nullptr &&
+            ::GetModuleInformation(::GetCurrentProcess(), module, &info, sizeof(info)) != FALSE;
+        Check(gotInfo && info.SizeOfImage != 0, "gfwl: the process image size is known");
+        if (gotInfo)
+        {
+            const auto base = reinterpret_cast<std::uintptr_t>(module);
+            Check(xla::core::ModuleImageContains(base, 0, 1),
+                  "gfwl: the image start is readable");
+            Check(xla::core::ModuleImageContains(base, info.SizeOfImage - 1, 1),
+                  "gfwl: the last image byte is readable");
+            Check(!xla::core::ModuleImageContains(base, info.SizeOfImage, 1),
+                  "gfwl: the first byte past the image is refused");
+            Check(!xla::core::ModuleImageContains(base, info.SizeOfImage - 1, 2),
+                  "gfwl: a read crossing the image end is refused");
+            Check(!xla::core::ModuleImageContains(0, 0, 1),
+                  "gfwl: a null module is refused");
+        }
+
+        // The arm's only write, on a byte the test owns: the pre-image opcode is the
+        // guard, so an already-patched site is idempotent and anything else is left
+        // alone.
+        std::byte bytes[4] = {std::byte{0x74}, std::byte{0xEB}, std::byte{0x75}, std::byte{0x0F}};
+        const auto at = [&](std::size_t index)
+        { return reinterpret_cast<std::uint8_t*>(&bytes[index]); };
+        Check(xla::core::ApplyGfwlProtectionByte(at(0)) && bytes[0] == std::byte{0xEB},
+              "gfwl: a jz site becomes the jmp");
+        Check(xla::core::ApplyGfwlProtectionByte(at(1)) && bytes[1] == std::byte{0xEB},
+              "gfwl: an already-patched site is idempotent");
+        Check(!xla::core::ApplyGfwlProtectionByte(at(2)) && bytes[2] == std::byte{0x75},
+              "gfwl: a jnz site is left untouched");
+        Check(!xla::core::ApplyGfwlProtectionByte(at(3)) && bytes[3] == std::byte{0x0F},
+              "gfwl: an unrelated byte is left untouched");
+        Check(!xla::core::ApplyGfwlProtectionByte(nullptr),
+              "gfwl: a null site is refused");
+
+        // No real xlive in this process: the install is a logged skip.
+        Check(!xla::core::InstallGfwlProtectionDisabler(),
+              "gfwl: the install refuses a process without xlive.dll");
+    }
+
+    // ---- SteamAchievements ---------------------------------------------------
+    //
+    // The recovered id -> Steam name table, and the refusal path: this process is not
+    // the game (no xlive import to hook and no steam_api.dll beside it), so the bridge
+    // installs nothing and keeps saying so.
+    void TestSteam()
+    {
+        const auto table = xla::steam::Achievements();
+        Check(table.size() == xla::steam::kMaxAchievementId,
+              "steam: the recovered table covers ids 1..65", std::to_string(table.size()));
+        Check(table.front().id == 1 && table.back().id == 65,
+              "steam: the table starts at id 1 and ends at id 65");
+
+        bool ordered = true;
+        for (std::size_t index = 0; index < table.size(); ++index)
+        {
+            ordered = ordered && table[index].id == index + 1 &&
+                      table[index].name != nullptr;
+        }
+        Check(ordered, "steam: the table is id-ordered and every row has a name");
+        Check(xla::steam::kWriteAchievementsOrdinal == 5278,
+              "steam: the GFWL import is ordinal 5278");
+
+        const auto nameOf = [](std::uint32_t id) -> std::string_view
+        {
+            const char* name = xla::steam::AchievementNameForTest(id);
+            return name != nullptr ? std::string_view(name) : std::string_view{};
+        };
+        Check(nameOf(1) == "THETOUR", "steam: id 1 is THE TOUR");
+        Check(nameOf(40) == "GAMECOMPLETION100", "steam: id 40 is 100% completion");
+        Check(nameOf(41) == "MPTEAMWIN1", "steam: id 41 starts the multiplayer block");
+        Check(nameOf(51) == "E1INTRO", "steam: id 51 starts TLAD");
+        Check(nameOf(65) == "E2ALLFLAIR", "steam: id 65 is the last TBoGT achievement");
+        Check(xla::steam::AchievementNameForTest(0) == nullptr,
+              "steam: id 0 has no Steam name");
+        Check(xla::steam::AchievementNameForTest(66) == nullptr,
+              "steam: id 66 has no Steam name");
+
+        // The refusal: the test process is not the game.
+        Check(!xla::steam::Install(), "steam: the bridge refuses a non-game process");
+        Check(!xla::steam::Install(), "steam: the refusal is stable");
+    }
+
     void TestRegistry()
     {
         Check(xla::registry::IsRockstarSubKey("Software\\Rockstar Games\\GTAIV"),
@@ -2224,11 +2732,13 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 27> expected{{
+        const std::array<std::string_view, 31> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
             "FusionFix", "ReportConfiguration", "Image", "Build", "Profile",
             "Savegames", "SkipLauncher", "LaunchWithPlayGTAIV", "BorderlessWindow", "FocusLoss",
-            "CorePatches", "LauncherStage", "WebConnect", "SkipIntro", "SkipMenu",
+            "CorePatches", "LauncherStage", "WebConnect",
+            "NewFilesCompatibility", "NewSavesCompatibility", "GFWLProtectionDisabler",
+            "SteamAchievements", "SkipIntro", "SkipMenu",
             "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "VramFix", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
@@ -2266,6 +2776,10 @@ int main()
     TestSavegames();
     TestCore();
     TestWebConnect();
+    TestCompatibility();
+    TestNewSavesWalk();
+    TestGfwl();
+    TestSteam();
     TestMenu();
     TestVram();
     TestRegistry();

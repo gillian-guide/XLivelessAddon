@@ -19,6 +19,12 @@
 // shell profile folders and works on this add-on's own detection. The frontend pair
 // (SkipIntro/SkipMenu) and the windowed options are genuinely FusionFix's
 // subsystems and stay gated.
+//
+// The recovered `[COMPATIBILITY]` set (NewFilesCompatibility, NewSavesCompatibility,
+// GFWLProtectionDisabler, SteamAchievements) lives here too: OpenPreCEPatch's section
+// moved to this companion, with its shipped defaults. The keys stay flat under
+// `[Options]` like every other key of this INI; the section list still searches an old
+// INI's own `[COMPATIBILITY]` section.
 
 module;
 
@@ -50,6 +56,11 @@ export namespace xla::config
         bool legacyLauncher{true};
         bool launchWithPlayGTAIV{true};
         bool removeRegistryPathDependency{true};
+        // The recovered [COMPATIBILITY] set (OpenPreCEPatch's section, shipped on).
+        bool newFilesCompatibility{true};
+        bool newSavesCompatibility{true};
+        bool gfwlProtectionDisabler{true};
+        bool steamAchievements{true};
         bool skipIntro{true};
         bool skipMenu{false};
         bool vramFix{true};
@@ -127,6 +138,18 @@ LegacyLauncher=1
 LaunchWithPlayGTAIV=1
 ; remove the Rockstar Games registry path dependency
 RemoveRegistryPathDependency=1
+; ---- the recovered [COMPATIBILITY] set (kept flat under [Options] here; an old
+; INI's own [COMPATIBILITY] section is searched as well) ----
+; allow script.img and radiohud from newer versions to work (script.img is 1060+ only)
+NewFilesCompatibility=1
+; allow newer savefiles to load properly without needing them to be downgraded first
+; [1060-1080]
+NewSavesCompatibility=1
+; disable the GFWL xlive.dll protection check
+GFWLProtectionDisabler=1
+; mirror GFWL achievements to Steam
+SteamAchievements=1
+; ---- end of the [COMPATIBILITY] set ----
 ; shorten the intro screens (the ones under 8000 ms; FusionFix's skipintro.ixx owns
 ; this when present)
 SkipIntro=1
@@ -169,7 +192,7 @@ CustomUserProfilePath=./Savefiles
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 17> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 21> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"RemoveDataIntegrityChecks", &Options::removeDataIntegrityChecks},
             {"SkipTokenActivation", &Options::skipTokenActivation},
@@ -181,6 +204,10 @@ CustomUserProfilePath=./Savefiles
             {"LegacyLauncher", &Options::legacyLauncher},
             {"LaunchWithPlayGTAIV", &Options::launchWithPlayGTAIV},
             {"RemoveRegistryPathDependency", &Options::removeRegistryPathDependency},
+            {"NewFilesCompatibility", &Options::newFilesCompatibility},
+            {"NewSavesCompatibility", &Options::newSavesCompatibility},
+            {"GFWLProtectionDisabler", &Options::gfwlProtectionDisabler},
+            {"SteamAchievements", &Options::steamAchievements},
             {"SkipIntro", &Options::skipIntro},
             {"SkipMenu", &Options::skipMenu},
             {"VRAMFix", &Options::vramFix},

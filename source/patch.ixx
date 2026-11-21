@@ -443,10 +443,19 @@ export namespace xla::patch
     // return value maps each input name to the target the slot held before the
     // replacement; a name with no map entry was not present, so "was it replaced"
     // is the lookup, not a null pointer.
+    //
+    // `includeUnbound` also replaces a named slot the loader left null (an import
+    // the loaded library does not implement). The map still reports the null
+    // original, so a caller that forwards to it must check it first. The
+    // achievement bridge is the one caller that wants this: the mirror belongs to
+    // the game's import table, so it must install even when xliveless left the
+    // slot empty. Every other caller keeps the default and leaves such a slot
+    // alone, because its hook body forwards to the captured original.
     using ImportHooks = std::initializer_list<std::pair<std::string_view, void*>>;
 
     inline std::map<std::string, void*> ReplaceImports(HMODULE module, std::string_view library,
-                                                       ImportHooks hooks)
+                                                       ImportHooks hooks,
+                                                       bool includeUnbound = false)
     {
         std::map<std::string, void*> originals;
         const auto base = reinterpret_cast<uintptr_t>(module);
@@ -468,7 +477,11 @@ export namespace xla::patch
 
         const auto replaceSlot = [&](void** slot, std::string_view hookedName, void* replacement)
         {
-            if (slot == nullptr || *slot == nullptr)
+            if (slot == nullptr)
+            {
+                return;
+            }
+            if (*slot == nullptr && !includeUnbound)
             {
                 return;
             }
@@ -564,7 +577,11 @@ export namespace xla::patch
                     continue;
                 }
 
-                for (size_t index = 0; slots[index] != nullptr; ++index)
+                // The thunk table is the terminator and the authority: a slot in
+                // the middle may be null (an import the loaded library did not
+                // implement), and stopping at it would hide every import after it -
+                // including, for the achievement bridge, the ordinal itself.
+                for (size_t index = 0;; ++index)
                 {
                     if (thunks[index].u1.AddressOfData == 0)
                     {
@@ -622,7 +639,10 @@ export namespace xla::patch
                                                        descriptor->ImportAddressTableRVA);
                 const auto* thunks = reinterpret_cast<const IMAGE_THUNK_DATA*>(
                     base + descriptor->ImportNameTableRVA);
-                for (size_t index = 0; slots[index] != nullptr; ++index)
+                // The name table terminates the walk, for the same reason as the
+                // import path above: a null slot in the middle is an unbound import,
+                // not the end of the table.
+                for (size_t index = 0;; ++index)
                 {
                     if (thunks[index].u1.AddressOfData == 0)
                     {

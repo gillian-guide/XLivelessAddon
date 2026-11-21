@@ -276,6 +276,24 @@ namespace
             ++count;
         }
 
+        // An import by ordinal: the thunk names the ordinal, and the slot starts
+        // unbound (callers overwrite it with SetSlot when the test needs a value).
+        void AddOrdinal(WORD ordinal)
+        {
+            auto* thunks = reinterpret_cast<IMAGE_THUNK_DATA*>(image.data() + 0x400);
+            auto* iat = reinterpret_cast<IMAGE_THUNK_DATA*>(image.data() + 0x500);
+            thunks[count].u1.Ordinal =
+                static_cast<ULONG_PTR>(IMAGE_ORDINAL_FLAG) | ordinal;
+            iat[count].u1.Function = 0;
+            ++count;
+        }
+
+        void SetSlot(std::size_t index, void* value)
+        {
+            auto* iat = reinterpret_cast<IMAGE_THUNK_DATA*>(image.data() + 0x500);
+            iat[index].u1.Function = reinterpret_cast<ULONG_PTR>(value);
+        }
+
         HMODULE Handle() { return reinterpret_cast<HMODULE>(image.data()); }
 
         void* Slot(std::size_t index)
@@ -284,6 +302,112 @@ namespace
             return reinterpret_cast<void*>(iat[index].u1.Function);
         }
     };
+
+    // A synthetic PE32 export table with the xlive shapes the classification must
+    // separate: the ABI (XLiveInitialize + the XUserWriteAchievements ordinal) with
+    // or without the two markers. The buffer is addressed like a mapped image
+    // (RVA == offset), which is what ProbeXliveExports assumes of a loaded module.
+    struct SyntheticXlive
+    {
+        static constexpr std::size_t kSize = 0x4000;
+        static constexpr std::uint32_t kInitialiseRva = 0x1000;
+        static constexpr std::uint32_t kWriteRva = 0x1010;
+        static constexpr std::uint32_t kMarkerRva = 0x1020;
+        // Ordinal 5278 - 5000 + 1: the smallest table that spans both probe ordinals.
+        static constexpr std::uint32_t kFunctionCount = 279;
+        static constexpr std::uint32_t kOrdinalBase = 5000;
+
+        std::vector<std::uint8_t> image;
+
+        SyntheticXlive(bool initialiseName, bool loaderMarker, bool exportWrite)
+            : image(kSize, 0)
+        {
+            auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image.data());
+            dos->e_magic = IMAGE_DOS_SIGNATURE;
+            dos->e_lfanew = 0x40;
+            auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(image.data() + dos->e_lfanew);
+            nt->Signature = IMAGE_NT_SIGNATURE;
+            nt->FileHeader.Machine = IMAGE_FILE_MACHINE_I386;
+            nt->FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER32);
+            nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+            nt->OptionalHeader.SizeOfImage = static_cast<DWORD>(kSize);
+            nt->OptionalHeader.NumberOfRvaAndSizes = 16;
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress =
+                0x200;
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size = 0x100;
+
+            auto* exports =
+                reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(image.data() + 0x200);
+            exports->Name = 0x300;
+            exports->Base = kOrdinalBase;
+            exports->NumberOfFunctions = kFunctionCount;
+            exports->AddressOfFunctions = 0x400;
+            exports->AddressOfNames = 0x900;
+            exports->AddressOfNameOrdinals = 0xA00;
+            std::memcpy(image.data() + 0x300, "xlive.dll", sizeof("xlive.dll"));
+
+            auto* functions = reinterpret_cast<std::uint32_t*>(image.data() + 0x400);
+            functions[0] = kInitialiseRva;
+            functions[1] = kMarkerRva;
+            if (exportWrite)
+            {
+                functions[kFunctionCount - 1] = kWriteRva;
+            }
+
+            auto* names = reinterpret_cast<std::uint32_t*>(image.data() + 0x900);
+            auto* ordinals = reinterpret_cast<std::uint16_t*>(image.data() + 0xA00);
+            std::uint32_t nameCount = 0;
+            std::size_t textAt = 0xB00;
+            const auto addName = [&](std::string_view name, std::uint16_t index)
+            {
+                names[nameCount] = static_cast<std::uint32_t>(textAt);
+                ordinals[nameCount] = index;
+                std::memcpy(image.data() + textAt, name.data(), name.size());
+                textAt += name.size() + 1;
+                ++nameCount;
+            };
+            if (initialiseName)
+            {
+                addName("XLiveInitialize", 0);
+            }
+            if (loaderMarker)
+            {
+                addName("IsUltimateASILoader", 1);
+            }
+            exports->NumberOfNames = nameCount;
+        }
+    };
+
+    // The suite's record of the hook's order: 'O' when a synthetic original runs,
+    // 'M' when the mirror observes an id. "OM" is the contract (original first).
+    std::string g_steamOrder;
+    std::vector<std::uint32_t> g_steamMirrored;
+
+    std::uint32_t __stdcall SteamOriginalFirst(std::uint32_t,
+                                               const xla::steam::XUserAchievement*,
+                                               void*) noexcept
+    {
+        g_steamOrder += 'O';
+        return 0x5A5A;
+    }
+
+    std::uint32_t __stdcall SteamOriginalOther(std::uint32_t,
+                                               const xla::steam::XUserAchievement*,
+                                               void*) noexcept
+    {
+        g_steamOrder += 'X';
+        return 0x1111;
+    }
+
+    void RecordSteamMirror(std::uint32_t id) noexcept
+    {
+        g_steamOrder += 'M';
+        g_steamMirrored.push_back(id);
+    }
+
+    using SteamWriteSlotFn = std::uint32_t(__stdcall*)(std::uint32_t,
+                                                       const xla::steam::XUserAchievement*,
+                                                       void*);
 
     void TestEvents()
     {
@@ -2083,13 +2207,24 @@ namespace
 
     // ---- SteamAchievements ---------------------------------------------------
     //
-    // The recovered id -> Steam name table, and the refusal path: this process is not
-    // the game (no xlive import to hook and no steam_api.dll beside it), so the bridge
-    // installs nothing and keeps saying so.
+    // The recovered table, the two real refusals, the export-table classification of
+    // the loaded xlive.dll, the one forwarding decision, and the hook itself driven
+    // through a synthetic xlive.dll import table: a bound GFWL-style slot forwards
+    // first and mirrors after, an unbound slot is never called and answers success,
+    // and a missing xlive.dll still installs the mirror.
+    //
+    // What the suite cannot reach: a real GFWL client or a real Ultimate ASI Loader
+    // xlive.dll (neither may be loaded here), a real steam_api.dll (the bridge would
+    // then initialise Steam), and the "not the game image" branch of Install(), whose
+    // image base is this executable by construction. Those are pinned through the
+    // shared decision (RefuseInstall / ProbeXliveExports / DecideForwarding) and the
+    // measured export tables the classification was built from.
     void TestSteam()
     {
-        const auto table = xla::steam::Achievements();
-        Check(table.size() == xla::steam::kMaxAchievementId,
+        using namespace xla::steam;
+
+        const auto table = Achievements();
+        Check(table.size() == kMaxAchievementId,
               "steam: the recovered table covers ids 1..65", std::to_string(table.size()));
         Check(table.front().id == 1 && table.back().id == 65,
               "steam: the table starts at id 1 and ends at id 65");
@@ -2101,12 +2236,14 @@ namespace
                       table[index].name != nullptr;
         }
         Check(ordered, "steam: the table is id-ordered and every row has a name");
-        Check(xla::steam::kWriteAchievementsOrdinal == 5278,
+        Check(kWriteAchievementsOrdinal == 5278,
               "steam: the GFWL import is ordinal 5278");
+        Check(kXLiveInitialiseOrdinal == 5000,
+              "steam: XLiveInitialize is probed at its recovered ordinal 5000");
 
         const auto nameOf = [](std::uint32_t id) -> std::string_view
         {
-            const char* name = xla::steam::AchievementNameForTest(id);
+            const char* name = AchievementNameForTest(id);
             return name != nullptr ? std::string_view(name) : std::string_view{};
         };
         Check(nameOf(1) == "THETOUR", "steam: id 1 is THE TOUR");
@@ -2114,14 +2251,208 @@ namespace
         Check(nameOf(41) == "MPTEAMWIN1", "steam: id 41 starts the multiplayer block");
         Check(nameOf(51) == "E1INTRO", "steam: id 51 starts TLAD");
         Check(nameOf(65) == "E2ALLFLAIR", "steam: id 65 is the last TBoGT achievement");
-        Check(xla::steam::AchievementNameForTest(0) == nullptr,
-              "steam: id 0 has no Steam name");
-        Check(xla::steam::AchievementNameForTest(66) == nullptr,
-              "steam: id 66 has no Steam name");
+        Check(AchievementNameForTest(0) == nullptr, "steam: id 0 has no Steam name");
+        Check(AchievementNameForTest(66) == nullptr, "steam: id 66 has no Steam name");
 
-        // The refusal: the test process is not the game.
-        Check(!xla::steam::Install(), "steam: the bridge refuses a non-game process");
-        Check(!xla::steam::Install(), "steam: the refusal is stable");
+        // ---- the two refusals that are real ---------------------------------
+        //
+        // This process is the game image (the suite points the game context at its own
+        // executable) and has no steam_api.dll beside it, so no xlive.dll refusal is
+        // left: the Steam-API one is reachable end to end and the offline-dump one
+        // through the shared decision that Install() calls.
+        Check(RefuseInstall(false, true) == InstallRefusal::NotGameImage,
+              "steam: an offline dump image is refused");
+        Check(RefuseInstall(true, false) == InstallRefusal::NoSteamApi,
+              "steam: a missing steam_api.dll is refused");
+        Check(RefuseInstall(true, true) == InstallRefusal::None,
+              "steam: the game image with steam_api.dll is not refused");
+        Check(!Install(), "steam: the bridge refuses without steam_api.dll");
+        Check(!Install(), "steam: the refusal is stable");
+
+        // ---- the classification, from the export table only -----------------
+        const SyntheticXlive gfwlImage(/*initialiseName=*/true, /*loaderMarker=*/false,
+                                       /*exportWrite=*/true);
+        const XliveProbe gfwl =
+            ProbeXliveExports(gfwlImage.image.data(), gfwlImage.image.size());
+        Check(gfwl.loaded && gfwl.functions == SyntheticXlive::kFunctionCount &&
+                  gfwl.names == 1,
+              "steam: the probe reads a GFWL-shaped export table",
+              std::to_string(gfwl.functions) + "/" + std::to_string(gfwl.names));
+        Check(gfwl.xliveInitialise && gfwl.writeAchievements && !gfwl.asiLoader,
+              "steam: the GFWL shape exports the ABI and no loader marker");
+        Check(ClassifyXlive(gfwl) == XliveKind::GfwlClient,
+              "steam: a GFWL client is classified GFWL");
+        Check(gfwl.ordinalAddress ==
+                  gfwlImage.image.data() + SyntheticXlive::kWriteRva,
+              "steam: the probe resolves the ordinal-5278 export target");
+
+        // The packed system client's shape: no named exports at all, so
+        // XLiveInitialize is recognised by its ordinal and the ABI still wins.
+        const SyntheticXlive packedImage(false, false, true);
+        const XliveProbe packed =
+            ProbeXliveExports(packedImage.image.data(), packedImage.image.size());
+        Check(packed.names == 0 && packed.xliveInitialise && packed.writeAchievements,
+              "steam: the packed client exports the ABI by ordinal with no names");
+        Check(ClassifyXlive(packed) == XliveKind::GfwlClient,
+              "steam: the packed client is classified GFWL");
+
+        // Ultimate ASI Loader's xliveless: the same ABI, filled with local emulation,
+        // plus the loader's own marker. It must not be a client.
+        const SyntheticXlive proxyImage(true, true, true);
+        const XliveProbe proxy =
+            ProbeXliveExports(proxyImage.image.data(), proxyImage.image.size());
+        Check(proxy.asiLoader && proxy.xliveInitialise && proxy.writeAchievements,
+              "steam: the xliveless stand-in exports the ABI and the loader marker");
+        Check(ClassifyXlive(proxy) == XliveKind::Proxy,
+              "steam: the xliveless stand-in is classified a proxy");
+
+        const SyntheticXlive bareImage(true, false, /*exportWrite=*/false);
+        const XliveProbe bare =
+            ProbeXliveExports(bareImage.image.data(), bareImage.image.size());
+        Check(!bare.writeAchievements && ClassifyXlive(bare) == XliveKind::Proxy,
+              "steam: a module without the ordinal is a proxy");
+        Check(ClassifyXlive({}) == XliveKind::Absent,
+              "steam: no module is classified absent");
+        Check(!ProbeXliveExports(nullptr, 0).loaded,
+              "steam: a null image is not loaded");
+        const std::uint8_t junk[64] = {};
+        const XliveProbe junkProbe = ProbeXliveExports(junk, sizeof(junk));
+        Check(junkProbe.loaded && !junkProbe.writeAchievements &&
+                  ClassifyXlive(junkProbe) == XliveKind::Proxy,
+              "steam: an unparseable image is a present, non-client module");
+        Check(!ProbeLoadedXlive().loaded,
+              "steam: this process maps no xlive.dll, so absent is a real path");
+
+        // ---- the one forwarding decision ------------------------------------
+        Check(DecideForwarding(gfwl, &SteamOriginalFirst).forward,
+              "steam: a GFWL client's bound thunk is forwarded to");
+        Check(!DecideForwarding(gfwl, nullptr).forward,
+              "steam: a null slot is never called");
+        Check(!DecideForwarding(gfwl, reinterpret_cast<const void*>(&WriteAchievements))
+                   .forward,
+              "steam: the hook itself is never called");
+        const int stackObject = 0;
+        Check(!DecideForwarding(gfwl, &stackObject).forward,
+              "steam: a pointer outside every module is never called");
+        Check(!DecideForwarding({}, &SteamOriginalFirst).forward,
+              "steam: no xlive module means no forwarding");
+
+        // A proxy's own ordinal export is a real bound thunk; a foreign stub that
+        // merely happens to be code in a module is not.
+        XliveProbe ownExport = proxy;
+        ownExport.ordinalAddress = reinterpret_cast<const void*>(&SteamOriginalFirst);
+        Check(DecideForwarding(ownExport, &SteamOriginalFirst).forward,
+              "steam: the proxy's own ordinal export is a real bound thunk");
+        XliveProbe foreignStub = proxy;
+        foreignStub.ordinalAddress = reinterpret_cast<const void*>(&SteamOriginalOther);
+        Check(!DecideForwarding(foreignStub, &SteamOriginalFirst).forward,
+              "steam: a proxy's foreign stub is never called");
+
+        // ---- the install and the hook, through a real import table ----------
+        //
+        // ResetInstallForTest leaves the mirror disabled, so no synthetic install can
+        // load a real Steam API; the observer still sees every observed id.
+        SetMirrorObserverForTest(&RecordSteamMirror);
+        const auto callSlot = [](void* slot)
+        {
+            const XUserAchievement entry{0, 1};
+            return reinterpret_cast<SteamWriteSlotFn>(slot)(1, &entry, nullptr);
+        };
+
+        // (a) a bound slot pointing at code, GFWL client: the original runs first,
+        // the mirror fires after it, and the original's answer reaches the game.
+        {
+            ResetInstallForTest();
+            SyntheticModule game("xlive.dll");
+            game.AddOrdinal(kWriteAchievementsOrdinal);
+            game.SetSlot(0, reinterpret_cast<void*>(&SteamOriginalFirst));
+            Check(InstallInto(game.Handle(), gfwl),
+                  "steam: the mirror installs over the game's ordinal slot");
+            Check(game.Slot(0) == reinterpret_cast<void*>(&WriteAchievements),
+                  "steam: the slot holds the hook after the install");
+            g_steamOrder.clear();
+            g_steamMirrored.clear();
+            const std::uint32_t answer = callSlot(game.Slot(0));
+            Check(g_steamOrder == "OM",
+                  "steam: the original is called first and the mirror fires after it",
+                  g_steamOrder);
+            Check(answer == 0x5A5A,
+                  "steam: the original's answer reaches the game",
+                  std::to_string(answer));
+            Check(g_steamMirrored.size() == 1 && g_steamMirrored[0] == 1,
+                  "steam: the mirrored id is the one the call carried");
+        }
+
+        // (b) an unbound (null) slot: no forward call, the mirror still fires, and
+        // the answer is the success value a completed write returns.
+        {
+            ResetInstallForTest();
+            SyntheticModule game("xlive.dll");
+            game.AddOrdinal(kWriteAchievementsOrdinal);
+            game.SetSlot(0, nullptr);
+            Check(InstallInto(game.Handle(), proxy),
+                  "steam: the mirror installs over an unbound ordinal slot");
+            Check(game.Slot(0) == reinterpret_cast<void*>(&WriteAchievements),
+                  "steam: the unbound slot holds the hook after the install");
+            g_steamOrder.clear();
+            g_steamMirrored.clear();
+            const std::uint32_t answer = callSlot(game.Slot(0));
+            Check(answer == 0, "steam: an unbound slot answers success",
+                  std::to_string(answer));
+            Check(g_steamOrder == "M",
+                  "steam: the unbound slot is not called, the mirror still fires",
+                  g_steamOrder);
+        }
+
+        // (c) xlive absent: the mirror installs, and a valid code pointer is still not
+        // called, because no module justifies the forward.
+        {
+            ResetInstallForTest();
+            SyntheticModule game("xlive.dll");
+            game.AddOrdinal(kWriteAchievementsOrdinal);
+            game.SetSlot(0, reinterpret_cast<void*>(&SteamOriginalFirst));
+            Check(InstallInto(game.Handle(), {}),
+                  "steam: the mirror installs with no xlive.dll mapped");
+            g_steamOrder.clear();
+            const std::uint32_t answer = callSlot(game.Slot(0));
+            Check(answer == 0 && g_steamOrder == "M",
+                  "steam: no xlive module means no call, but the mirror fires",
+                  g_steamOrder + " " + std::to_string(answer));
+        }
+
+        // The proxy's real bound thunk is the one proxy target that is forwarded to
+        // (it is the loaded module's own implementation); a foreign stub is not.
+        {
+            ResetInstallForTest();
+            SyntheticModule game("xlive.dll");
+            game.AddOrdinal(kWriteAchievementsOrdinal);
+            game.SetSlot(0, reinterpret_cast<void*>(&SteamOriginalFirst));
+            XliveProbe boundThunk = proxy;
+            boundThunk.ordinalAddress =
+                reinterpret_cast<const void*>(&SteamOriginalFirst);
+            Check(InstallInto(game.Handle(), boundThunk),
+                  "steam: the mirror installs with a proxy's real bound thunk");
+            g_steamOrder.clear();
+            const std::uint32_t answer = callSlot(game.Slot(0));
+            Check(answer == 0x5A5A && g_steamOrder == "OM",
+                  "steam: a proxy's real bound thunk keeps its store and then mirrors",
+                  g_steamOrder);
+
+            ResetInstallForTest();
+            SyntheticModule other("xlive.dll");
+            other.AddOrdinal(kWriteAchievementsOrdinal);
+            other.SetSlot(0, reinterpret_cast<void*>(&SteamOriginalFirst));
+            XliveProbe otherThunk = proxy;
+            otherThunk.ordinalAddress =
+                reinterpret_cast<const void*>(&SteamOriginalOther);
+            Check(InstallInto(other.Handle(), otherThunk),
+                  "steam: the mirror installs with a proxy's foreign stub in the slot");
+            g_steamOrder.clear();
+            const std::uint32_t stubAnswer = callSlot(other.Slot(0));
+            Check(stubAnswer == 0 && g_steamOrder == "M",
+                  "steam: a proxy's foreign stub is never called, the mirror fires",
+                  g_steamOrder + " " + std::to_string(stubAnswer));
+        }
     }
 
     void TestRegistry()

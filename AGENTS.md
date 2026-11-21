@@ -121,9 +121,12 @@ The invariants the tree is built around:
   section is `GFWLProtectionDisabler` — the xlive.dll protection byte patch
   (`xlive.dll+0xF1605`, `jz`/`jmp` becomes `jmp`). It lives here rather than in a
   module of its own because it is one byte at one offset; the module-image guard
-  (the offset must be inside the mapped, committed image, and the module must
-  export `XLiveInitialize`, so Ultimate ASI Loader's `xlive.dll` proxy is never
-  touched) and the pre-image-byte rule are its whole footprint.
+  (the offset must be inside the mapped, committed image, and the module must export
+  `XLiveInitialize` **by name**) and the pre-image-byte rule are its whole footprint.
+  Measured 2026-11-21: the packed system client has no named exports, so the name
+  guard skips it, while Ultimate ASI Loader's 9.7.4 xlive does export
+  `XLiveInitialize` (@5000) - there the pre-image byte is what prevents a write (the
+  last log's `the protection site holds 0x0` line).
 - `source/compatibility.ixx` — `[Options] NewFilesCompatibility` and
   `NewSavesCompatibility`, ported 1:1 from the fork's `source/compatibility.ixx`
   before it was stripped: the two publish steps (the registrar's call operand and
@@ -134,12 +137,19 @@ The invariants the tree is built around:
   `tools/verify_compat_bodies.py`. NewFiles is skipped when `GTAC.dll` or
   `JacksIVFixes.asi` is loaded (both install the same feature); NewSaves is gated
   on the original's own `[1060-1080]` build mask.
-- `source/steam.ixx` — `[Options] SteamAchievements`: the GFWL achievement mirror,
-  ported whole (the recovered id -> Steam name table, the xlive
-  `XUserWriteAchievements` ordinal-5278 import boundary, the lazy `SteamAPI_Init`
-  on the first achievement write, the queued/replayed ids and the refusal path).
-  The IAT slot is replaced through `patch::ReplaceImports`, and the original target
-  it returns is called first, so the GFWL store keeps working.
+- `source/steam.ixx` — `[Options] SteamAchievements`: the achievement mirror, ported
+  whole (the recovered id -> Steam name table, the lazy `SteamAPI_Init` on the first
+  achievement write, the queued/replayed ids). The hook is the game's own
+  `xlive.dll!XUserWriteAchievements` ordinal-5278 import slot, so it installs **with
+  or without a GFWL client**: the loaded xlive is classified from its export directory
+  (absent / GFWL client / xliveless proxy, `ProbeXliveExports`/`ClassifyXlive`). The
+  slot is replaced through `patch::ReplaceImports` with `includeUnbound`, so a slot
+  xliveless left null is still hooked, and one forwarding decision
+  (`DecideForwarding`, shared with the suite) calls the previous value only when it is
+  a validated code pointer inside a loaded module and either the module is the GFWL
+  client or the pointer is that module's own ordinal-5278 export (a real bound thunk).
+  Otherwise the hook answers `0` (what a completed write answers) and never calls it.
+  Only two refusals remain: not the game image, and no `steam_api.dll`.
 - `source/menu.ixx` — `SkipIntro`/`SkipMenu`: FusionFix's `skipintro.ixx`
   mechanism, ported as-is (the Loadsc window that zeroes the screens under
   8000 ms, and the `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch,
@@ -231,7 +241,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**555 checks**.
+**594 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -269,8 +279,21 @@ fine-grained keys) and the recovered `[COMPATIBILITY]` family:
   idempotent, `jnz` and an unrelated byte untouched, a null site refused), plus
   the install's refusal without xlive.
 - `TestSteam`: the 65-row recovered table (size, id order, five spot checks, ids
-  0/66 absent), the ordinal constant, and the refusal path (twice, so it is
-  stable).
+  0/66 absent), the ordinal constants, the two real refusals through
+  `RefuseInstall` and the live refusal without `steam_api.dll` (twice, so it is
+  stable); the export-table classification on synthetic PE32 export tables (the
+  GFWL shape, the packed client's no-name/ordinal-only shape, the UAL xliveless
+  shape with its `IsUltimateASILoader` marker, a module without the ordinal, an
+  unparseable image, and this process's real absent xlive); the one forwarding
+  decision (a GFWL bound thunk, a null slot, the hook itself, a non-module
+  pointer, no module, a proxy's own ordinal export versus a foreign stub); and the
+  hook driven through synthetic `xlive.dll` import tables: a bound GFWL slot calls
+  the original first and mirrors after it (`OM`) and returns the original's answer,
+  an unbound slot is never called, mirrors and answers `0`, an absent xlive still
+  installs and never calls, and a proxy's real bound thunk forwards while its
+  foreign stub does not. The suite cannot load a real GFWL client or a real
+  `steam_api.dll`; those paths are pinned through the shared decision functions and
+  the measured export tables the classification was built from.
 
 ## Rules learned the hard way
 
@@ -328,6 +351,20 @@ fine-grained keys) and the recovered `[COMPATIBILITY]` family:
     `GFWLProtectionDisabler` in `core` (one byte, one offset) and `SteamAchievements`
     in `steam` (its table and its bridge): that is the size of each arm, and a module
     per key would be an empty shell.
+    The achievement mirror is **not GFWL-gated**: the hook is the game's ordinal-5278
+    import slot, the loaded xlive is classified from its export directory only, and
+    the previous value is called only when `DecideForwarding` validates it (GFWL
+    client, or the module's own ordinal export). Do not bring back a path/size/name
+    test, and do not refuse because GFWL is absent: the old `ProtectedSystemXlive`
+    path check refused the system GFWL client - the very layout the mirror is for -
+    while letting UAL's xliveless stand-in through (measured 2026-11-21: the
+    15,453,904 B system client has 5,377 ordinal exports and **no** named exports;
+    UAL 9.7.4's 2,407,648 B xlive exports the same ABI with local emulation plus
+    `IsUltimateASILoader`). `patch::ReplaceImports`'s `includeUnbound` is the
+    steam-only flag that hooks a slot the loader left null; every other caller keeps
+    the default. The suite drives the classification, the decision and the hook
+    through synthetic PE32 export/import tables, and it cannot load a real client or
+    a real `steam_api.dll`; that limit is stated in `TestSteam`.
 
 ## Dependencies
 

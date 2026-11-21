@@ -58,9 +58,16 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 - `GFWLProtectionDisabler` — flip the GFWL `xlive.dll` protection branch to a jump. The offset
   is guarded by the mapped image and the pre-image byte, so another xlive build (and Ultimate
   ASI Loader's `xlive.dll` proxy) is left untouched.
-- `SteamAchievements` — mirror the GFWL achievements to Steam at the `xlive.dll` import
-  boundary: the GFWL store still runs first, and `steam_api.dll` is loaded lazily on the first
-  achievement write. Without `steam_api.dll` the game keeps its GFWL-only behaviour.
+- `SteamAchievements` — mirror the achievements to Steam at the game's `xlive.dll`
+  `XUserWriteAchievements` import (ordinal 5278), with **or without** a GFWL client. The mirror
+  hooks the game's import slot whenever `steam_api.dll` is beside the game; the loaded
+  `xlive.dll` is classified from its export table (absent / GFWL client / xliveless proxy) and
+  only decides forwarding: the previous slot is called first when it is a validated code pointer
+  in a loaded module and either that module is the GFWL client or the pointer is its own
+  ordinal-5278 export (a real bound thunk). An unbound or foreign slot is never called — the
+  hook answers `0`, what a completed GFWL write answers, so the game continues. `steam_api.dll`
+  is loaded lazily on the first achievement write; without it the game keeps its GFWL-only
+  behaviour.
 
 With a FusionFix ASI installed, `SkipIntro`, `SkipMenu`, `BorderlessWindowed` and
 `DoNotPauseOnMinimize` are switched off (FusionFix owns those subsystems) and the log records

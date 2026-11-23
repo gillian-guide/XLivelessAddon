@@ -48,10 +48,10 @@ The invariants the tree is built around:
   `GFWLProtectionDisabler`, `SteamAchievements`, `LoadDLCs`, `BenchmarkFix`,
   `CombinedRadioFreezeFix`
   and a non-empty `[USERPROFILE] CustomUserProfilePath`
-  cover the installs; `StartupWarnings` only
-  gates the non-fatal dialogs/notice. With every install key `0` and the path
-  empty, `startup::AnyInstallEnabled()` is false and no store runs; `TestAllOff`
-  pins it.
+  cover the installs. The startup warnings (the loader probe, the FusionFix
+  notice and the fatal checks) always run; they are not an option. With every
+  install key `0` and the path empty, `startup::AnyInstallEnabled()` is false and
+  no store runs; `TestAllOff` pins it.
 - **The user-data divergence is intentional.** `CustomUserProfilePath` is never
   switched off because FusionFix is present; only the windowed options are gated.
   Do not "restore" the old gate. It replaces the old addon's
@@ -231,8 +231,9 @@ The invariants the tree is built around:
 - `source/windowed.ixx` — `BorderlessWindowed`/`DoNotPauseOnMinimize`: the
   FusionFix-shaped borderless/focus-loss hooks and the legacy DefWindowProc
   shims.
-- `source/warnings.ixx` — `StartupWarnings`: the ASI loader probe, the
-  single-instance guard and the FusionFix notice.
+- `source/warnings.ixx` — the startup warnings: the ASI loader probe, the
+  single-instance guard and the FusionFix notice. The non-fatal dialogs and the
+  notice always run; there is no INI key for them.
 - `external/` — pinned upstream submodules (see Dependencies): the injector tree
   (with safetyhook/minhook/bddisasm/kananlib and the in-tree Zydis amalgamation),
   Hooking.Patterns and IniReader + mINI; a fresh clone needs
@@ -291,7 +292,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**674 checks**.
+**672 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered

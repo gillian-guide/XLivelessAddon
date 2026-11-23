@@ -61,3 +61,19 @@ was present, so there was never a double main/DFA install).
 DFA branches `0x455EFC`, `0xD17CD3`, `0xD17E6B`, `0xD17E92`, `0xD17EE1`, `0xD17D38`; collected
 jumps `0x4701B7`/`0x47031B` -> `0x470278`/`0x4703DC`; ROM `0x48FE46`/`0x490A20`. Tables vs the
 old addon golden: 71/71 records. Both presets: 6/6 ctest, 674 native checks.
+
+## 2026-11-23: the StartupWarnings key is gone; the shipped INI is the owner's live file
+
+`StartupWarnings` is no longer an option: it is out of the options struct/table, the built-in
+and shipped INI, the `options:` log line, `TestAllOff`'s key list and the two config checks that
+asserted its default/all-off state (672 native checks now, down from 674). The behaviour is
+unchanged because the key's shipped default was on: the old-loader dialog and the FusionFix
+notice now run unconditionally in the same `FusionFix` step, and the fatal loader/version/loaded-
+twice checks were already unconditional (`source/startup.ixx` still registers the warnings step).
+`data/XLivelessAddon.ini` and `config::kDefaultIni` were resynced to the owner's live
+`game_refs/XLivelessAddon.ini`: same order, comments and values (including
+`CustomUserProfilePath=./Savefiles`), plus the three ported fixes after the `[COMPATIBILITY]`
+marker, and with the warning key removed. The two defaults are byte-identical (the native suite
+compares them). README gained the startup-warnings section in its always-on wording. Release and
+Trace: 6/6 ctest, 672 checks each.
+

@@ -39,6 +39,28 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 
 With a FusionFix ASI installed, `SkipIntro`, `SkipMenu`, `BorderlessWindowed` and `DoNotPauseOnMinimize` are switched off.
 
+## Startup warnings
+
+The add-on shows FusionFix-style task dialogs (comctl32 6.0 activated from its own
+embedded manifest; a plain message box if that cannot be activated), always on a
+worker thread because it initializes from `DllMain`:
+
+- **Old ASI Loader detected!** — the loader is not Ultimate ASI Loader 6.9.0 or
+  newer (the first release that exports `IsUltimateASILoader`, the marker
+  FusionFix's own compatibility check trusts). The dialog has a button for the
+  download page.
+- **Unsupported game version.** — the executable's classification dword is not
+  one of the supported builds; the game exits when the dialog is closed.
+- **XLivelessAddon was loaded twice!** — a second copy of the ASI initialized in
+  the same process (for example two loader files each with their own copy); the
+  game exits.
+- **FusionFix is installed.** — `XLivelessAddon.fusionfix-notice.txt` lists the
+  options that were switched off because FusionFix owns them. The file is
+  rewritten on every launch and the dialog is shown only while it does not
+  exist; delete it to show the dialog again.
+
+These warnings always run; no INI key switches them off.
+
 ## Installation
 
 1. Install [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader/releases/latest).

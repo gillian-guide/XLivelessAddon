@@ -94,15 +94,14 @@ namespace xla::startup
                        loaded.legacyPath.string(), fusionFix ? 1 : 0);
             Log::Print("options: savegameFix={} launcher={} legacyLauncher={} "
                        "launchWithPlayGTAIV={} profile=\"{}\" skipIntro={} skipMenu={} "
-                       "vramFix={} webConnect={} borderless={} dontPause={} warnings={}",
+                       "vramFix={} webConnect={} borderless={} dontPause={}",
                        game.Option("SavegameFix"), game.Option("SkipLauncher"),
                        game.Option("LegacyLauncher"),
                        game.Option("LaunchWithPlayGTAIV"),
                        game.OptionString("CustomUserProfilePath"),
                        game.Option("SkipIntro"), game.Option("SkipMenu"),
                        game.Option("VRAMFix"), game.Option("SkipWebConnect"),
-                       game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"),
-                       game.Option("StartupWarnings"));
+                       game.Option("BorderlessWindowed"), game.Option("DoNotPauseOnMinimize"));
             Log::Print("compatibility: newFiles={} newSaves={} gfwlProtection={} "
                        "steamAchievements={}",
                        game.Option("NewFilesCompatibility"),
@@ -184,8 +183,7 @@ namespace xla::startup
                      warnings::LoaderVersionAccepted(g_loaderInfo.versionMs,
                                                      g_loaderInfo.versionLs));
                 // The INI is not loaded yet at this step; `FusionFix` shows the
-                // non-fatal loader warning after Config so StartupWarnings can
-                // gate it.
+                // non-fatal loader warning after Config.
                 g_loaderNeedsWarning = !modern;
             };
 
@@ -225,7 +223,7 @@ namespace xla::startup
                     return;
                 }
 
-                if (g_loaderNeedsWarning && game.Option("StartupWarnings"))
+                if (g_loaderNeedsWarning)
                 {
                     warnings::ShowAsync(warnings::OldLoaderDialog(g_loaderInfo), std::nullopt);
                     g_loaderNeedsWarning = false;
@@ -244,10 +242,7 @@ namespace xla::startup
                     Log::Print("fusionfix: gating {} (FusionFix {})", gate.option,
                                gate.fusionFixModule);
                 }
-                if (game.Option("StartupWarnings"))
-                {
-                    warnings::PublishFusionFixNotice(game.ModuleDirectory(), gated);
-                }
+                warnings::PublishFusionFixNotice(game.ModuleDirectory(), gated);
             };
 
             Record("ReportConfiguration");

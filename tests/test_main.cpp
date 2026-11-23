@@ -498,7 +498,6 @@ namespace
         Check(!game.Option("BorderlessWindowed"), "config: BorderlessWindowed code default is off");
         Check(!game.Option("DoNotPauseOnMinimize"),
               "config: DoNotPauseOnMinimize code default is off");
-        Check(game.Option("StartupWarnings"), "config: StartupWarnings defaults on");
         Check(xla::Game::Get().OptionString("CustomUserProfilePath").empty(),
               "config: CustomUserProfilePath code default is empty (feature off)");
         Check(game.Option("RemoveDataIntegrityChecks") && game.Option("SkipTokenActivation") &&
@@ -650,7 +649,7 @@ namespace
                   "[Options]\nSavegameFix=0\nSkipLauncher=0\nLegacyLauncher=0\n"
                   "LaunchWithPlayGTAIV=0\n"
                   "RemoveRegistryPathDependency=0\nDoNotPauseOnMinimize=0\n"
-                  "BorderlessWindowed=0\nStartupWarnings=0\n"
+                  "BorderlessWindowed=0\n"
                   "RemoveDataIntegrityChecks=0\nSkipTokenActivation=0\n"
                   "SkipFirstTimePlayAsk=0\nSkipInternetConnectionCheck=0\n"
                   "SkipHealthCheck=0\nSkipWebConnect=0\n"
@@ -661,7 +660,7 @@ namespace
                   "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
         xla::config::Publish(loaded);
-        Check(!loaded.options.legacyLauncher && !loaded.options.startupWarnings,
+        Check(!loaded.options.legacyLauncher,
               "all-off: the new toggles are read");
         Check(!loaded.options.skipWebConnect && !loaded.options.skipIntro &&
                   !loaded.options.skipMenu && !loaded.options.vramFix,
@@ -724,12 +723,6 @@ namespace
         Check(xla::startup::AnyInstallEnabled(),
               "all-off: a non-empty CustomUserProfilePath enables its install");
         game.SetOption("CustomUserProfilePath", "");
-
-        // Values, not installs on their own.
-        game.SetOption("StartupWarnings", "1");
-        Check(!xla::startup::AnyInstallEnabled(),
-              "all-off: StartupWarnings alone is not an install");
-        game.SetOption("StartupWarnings", "0");
     }
 
     void TestBuild()

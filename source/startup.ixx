@@ -34,6 +34,8 @@ import vram;
 import windowed;
 import compatibility;
 import steam;
+import episodes;
+import stability;
 
 export namespace xla::startup
 {
@@ -107,6 +109,9 @@ namespace xla::startup
                        game.Option("NewSavesCompatibility"),
                        game.Option("GFWLProtectionDisabler"),
                        game.Option("SteamAchievements"));
+            Log::Print("ported: loadDLCs={} benchmarkFix={} combinedRadioFreezeFix={}",
+                       game.Option("LoadDLCs"), game.Option("BenchmarkFix"),
+                       game.Option("CombinedRadioFreezeFix"));
         }
 
 
@@ -561,6 +566,75 @@ namespace xla::startup
                 Log::Print("steam: achievement mirror={}", installed ? "installed" : "skipped");
             };
 
+            // ---- the recovered fixes ported from the fork -----------------------
+            // Each key owns its own step and gates itself on the original's build
+            // mask; the two crash fixes are image-site arms and the DLC key publishes
+            // its discovery slots before it writes anything.
+
+            Record("LoadDLCs");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("LoadDLCs"))
+                {
+                    Log::Trace("loadDLCs: option off");
+                    return;
+                }
+                if (!episodes::BuildHasLoadDLCs(game.Build()))
+                {
+                    Log::Print("loadDLCs: build {} is outside the original's [1060,1070,1080] "
+                               "mask; skipped",
+                               BuildLabel(game.Build()));
+                    return;
+                }
+                episodes::Publish(game.View(), game.Build());
+                const episodes::Report report = episodes::Install(game.View(), game.Build());
+                Log::Print("loadDLCs: {} write(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
+            Record("BenchmarkFix");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("BenchmarkFix"))
+                {
+                    Log::Trace("benchmarkFix: option off");
+                    return;
+                }
+                const stability::Report report =
+                    stability::InstallBenchmarkFix(game.View(), game.Build());
+                Log::Print("benchmarkFix: {} site(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
+            Record("CombinedRadioFreezeFix");
+            FusionFix::onInitEvent() += []
+            {
+                const Game& game = Game::Get();
+                if (game.Stopped())
+                {
+                    return;
+                }
+                if (!game.Option("CombinedRadioFreezeFix"))
+                {
+                    Log::Trace("combinedRadio: option off");
+                    return;
+                }
+                const stability::Report report =
+                    stability::InstallCombinedRadioFreezeFix(game.View(), game.Build());
+                Log::Print("combinedRadio: {} site(s) applied, {} missing", report.applied,
+                           report.missing);
+            };
+
             Record("SkipIntro");
             FusionFix::onInitEvent() += []
             {
@@ -701,6 +775,8 @@ namespace xla::startup
                game.Option("NewSavesCompatibility") ||
                game.Option("GFWLProtectionDisabler") ||
                game.Option("SteamAchievements") ||
+               game.Option("LoadDLCs") || game.Option("BenchmarkFix") ||
+               game.Option("CombinedRadioFreezeFix") ||
                game.Option("SkipIntro") || game.Option("SkipMenu") ||
                game.Option("VRAMFix") ||
                !game.OptionString("CustomUserProfilePath").empty() ||

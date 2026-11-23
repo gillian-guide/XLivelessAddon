@@ -70,6 +70,53 @@ export namespace xla
                                GameBuild::v1130});
     }
 
+    // The original mod's build id for a recognised build: the bit index the recovered
+    // option masks use (bit i == ordinal i, the original's classify_game_build switch,
+    // which this add-on's own classification predates). A recovered mask is data and
+    // is kept verbatim, so this is the one mapping between the two vocabularies:
+    // 1.0.0.0 = 1, 1.0.4.0 = 5, 1.0.0.4 = 6, 1.0.6.0 = 7, 1.0.7.0 = 8, 1.0.8.0 = 9,
+    // 1.1.0.0 = 10, 1.1.1.0 = 11, 1.1.2.0 = 12, 1.1.3.0 = 13. 1.0.1.0/1.0.2.0/1.0.3.0
+    // are builds this add-on recognises and the original mod does not, so they have no
+    // id and no recovered mask can cover them (the original ASI patched nothing on an
+    // image it could not classify).
+    [[nodiscard]] inline constexpr std::optional<std::uint32_t> OriginalBuildId(
+        GameBuild build) noexcept
+    {
+        switch (build)
+        {
+        case GameBuild::v1000:
+            return 1u;
+        case GameBuild::v1040:
+            return 5u;
+        case GameBuild::v1050:
+            return 6u;
+        case GameBuild::v1060:
+            return 7u;
+        case GameBuild::v1070:
+            return 8u;
+        case GameBuild::v1080:
+            return 9u;
+        case GameBuild::v1100:
+            return 10u;
+        case GameBuild::v1110:
+            return 11u;
+        case GameBuild::v1120:
+            return 12u;
+        case GameBuild::v1130:
+            return 13u;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // Whether a build's original id is a set bit of a recovered mask.
+    [[nodiscard]] inline constexpr bool BuildInMask(GameBuild build,
+                                                    std::uint32_t mask) noexcept
+    {
+        const std::optional<std::uint32_t> id = OriginalBuildId(build);
+        return id.has_value() && *id < 32u && (mask & (1u << *id)) != 0u;
+    }
+
     // A mapped image: the load address and OptionalHeader.SizeOfImage. The game
     // module, a test buffer and a parity dump's private copy are all viewed the
     // same way.

@@ -61,6 +61,10 @@ export namespace xla::config
         bool newSavesCompatibility{true};
         bool gfwlProtectionDisabler{true};
         bool steamAchievements{true};
+        // The recovered ZolikaPatch fixes ported from the fork (shipped on).
+        bool benchmarkFix{true};
+        bool combinedRadioFreezeFix{true};
+        bool loadDLCs{true};
         bool skipIntro{true};
         bool skipMenu{false};
         bool vramFix{true};
@@ -116,45 +120,40 @@ export namespace xla::config
 [Options]
 ; the save-file CRC32 bypass
 SavegameFix=1
-; the recovered "core" fixes: the data-integrity (VDS) checks, the DLC token
-; activation, the first-time-play ask, the Internet connection check and the GFWL
-; health check. OpenPreCEPatch's legacy import maps its removed MiscFixes bundle
-; onto these five keys.
+; various GFWL things
 RemoveDataIntegrityChecks=1
 SkipTokenActivation=1
 SkipFirstTimePlayAsk=1
 SkipInternetConnectionCheck=1
 SkipHealthCheck=1
-; skip the GFWL web-connect and health checks (the old add-on's single key for the
-; two fine-grained keys above; 0 leaves both checks in place)
+; skip the GFWL web-connect and health checks
 SkipWebConnect=1
-; skip the launcher/DRM checks (recovered DFA and ROM stages)
+; skip the launcher/DRM checks
 SkipLauncher=1
-; legacy DFA + WM_ROM stage, only when SkipLauncher=0; with both at 0 no launcher work
+; legacy skip launcher mode, only when SkipLauncher=0
 LegacyLauncher=1
-; rewrite the game's LaunchGTAIV.exe name slots to PlayGTAIV.exe while a live
-; PlayGTAIV.exe is present, so a PlayGTAIV-launched game passes the DRM's launcher
-; check; standalone, it does not need OpenPreCEPatch
+; rewrite the game's LaunchGTAIV.exe name slots to PlayGTAIV.exe while a live PlayGTAIV.exe is present, so a PlayGTAIV-launched game passes the DRM's launcher check;
 LaunchWithPlayGTAIV=1
 ; remove the Rockstar Games registry path dependency
 RemoveRegistryPathDependency=1
-; ---- the recovered [COMPATIBILITY] set (kept flat under [Options] here; an old
-; INI's own [COMPATIBILITY] section is searched as well) ----
 ; allow script.img and radiohud from newer versions to work (script.img is 1060+ only)
 NewFilesCompatibility=1
-; allow newer savefiles to load properly without needing them to be downgraded first
-; [1060-1080]
+; allow newer savefiles to load properly without needing them to be downgraded first [1060-1080]
 NewSavesCompatibility=1
 ; disable the GFWL xlive.dll protection check
 GFWLProtectionDisabler=1
 ; mirror GFWL achievements to Steam
 SteamAchievements=1
-; ---- end of the [COMPATIBILITY] set ----
-; shorten the intro screens (the ones under 8000 ms; FusionFix's skipintro.ixx owns
-; this when present)
+; fix the crash after the benchmark ends (every build except 1.0.8.0 and 1.1.3.0)
+BenchmarkFix=1
+; fix the freeze after Concrete Jungle with the 3 EFLC exclusive radio stations installed
+CombinedRadioFreezeFix=1
+; load TBoGT and TLAD from EFLC or CE folders, plus addon episodes named Episode3, Episode4,
+; etc. (set their ids in setup2.xml to the episode id multiplied by 2) [1060,1070,1080]
+LoadDLCs=1
+; shorten the intro screens (the ones under 8000 ms; FusionFix owns this when present)
 SkipIntro=1
-; skip the main menu (hold SHIFT on startup to reach it) (FusionFix's skipintro.ixx
-; owns this when present)
+; skip the main menu (hold SHIFT on startup to reach it) (FusionFix owns this when present)
 SkipMenu=0
 ; fix the VRAM detection so the graphics settings are not locked out
 VRAMFix=1
@@ -192,7 +191,7 @@ CustomUserProfilePath=./Savefiles
 
         // One table, one default (the member initializer). A key absent from both
         // files keeps it, and Publish writes the same values into the Game context.
-        inline constexpr std::array<BoolOption, 21> kBoolOptions{{
+        inline constexpr std::array<BoolOption, 24> kBoolOptions{{
             {"SavegameFix", &Options::savegameFix},
             {"RemoveDataIntegrityChecks", &Options::removeDataIntegrityChecks},
             {"SkipTokenActivation", &Options::skipTokenActivation},
@@ -208,6 +207,9 @@ CustomUserProfilePath=./Savefiles
             {"NewSavesCompatibility", &Options::newSavesCompatibility},
             {"GFWLProtectionDisabler", &Options::gfwlProtectionDisabler},
             {"SteamAchievements", &Options::steamAchievements},
+            {"BenchmarkFix", &Options::benchmarkFix},
+            {"CombinedRadioFreezeFix", &Options::combinedRadioFreezeFix},
+            {"LoadDLCs", &Options::loadDLCs},
             {"SkipIntro", &Options::skipIntro},
             {"SkipMenu", &Options::skipMenu},
             {"VRAMFix", &Options::vramFix},

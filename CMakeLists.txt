@@ -117,6 +117,8 @@ set(XLA_MODULES
     source/windowed.ixx
     source/compatibility.ixx
     source/steam.ixx
+    source/episodes.ixx
+    source/stability.ixx
     source/startup.ixx)
 
 add_library(xla_modules STATIC

@@ -31,6 +31,8 @@ import profile;
 import core;
 import compatibility;
 import steam;
+import episodes;
+import stability;
 import launcher;
 import menu;
 import vram;
@@ -487,6 +489,9 @@ namespace
         Check(game.Option("LegacyLauncher"), "config: LegacyLauncher defaults on");
         Check(game.Option("LaunchWithPlayGTAIV"),
               "config: LaunchWithPlayGTAIV defaults on");
+        Check(game.Option("LoadDLCs") && game.Option("BenchmarkFix") &&
+                  game.Option("CombinedRadioFreezeFix"),
+              "config: the three ported fixes default on");
         Check(game.Option("SavegameFix"), "config: SavegameFix defaults on");
         Check(game.Option("RemoveRegistryPathDependency"),
               "config: RemoveRegistryPathDependency defaults on");
@@ -651,6 +656,7 @@ namespace
                   "SkipHealthCheck=0\nSkipWebConnect=0\n"
                   "NewFilesCompatibility=0\nNewSavesCompatibility=0\n"
                   "GFWLProtectionDisabler=0\nSteamAchievements=0\n"
+                  "LoadDLCs=0\nBenchmarkFix=0\nCombinedRadioFreezeFix=0\n"
                   "SkipIntro=0\nSkipMenu=0\nVRAMFix=0\n"
                   "[USERPROFILE]\nCustomUserProfilePath=\n");
         auto loaded = xla::config::Load(work.Path(), work.Path());
@@ -665,6 +671,9 @@ namespace
                   !loaded.options.gfwlProtectionDisabler &&
                   !loaded.options.steamAchievements,
               "all-off: the four [COMPATIBILITY] keys are read");
+        Check(!loaded.options.loadDLCs && !loaded.options.benchmarkFix &&
+                  !loaded.options.combinedRadioFreezeFix,
+              "all-off: the three ported fixes are read");
         Check(!xla::startup::AnyInstallEnabled(),
               "all-off: no install is enabled");
 
@@ -685,6 +694,9 @@ namespace
         flip("NewSavesCompatibility");
         flip("GFWLProtectionDisabler");
         flip("SteamAchievements");
+        flip("LoadDLCs");
+        flip("BenchmarkFix");
+        flip("CombinedRadioFreezeFix");
         flip("RemoveDataIntegrityChecks");
         flip("SkipTokenActivation");
         flip("SkipFirstTimePlayAsk");
@@ -738,6 +750,28 @@ namespace
               "build: a short image is unknown, not a fault");
         Check(!xla::build::ReadSignature(xla::Image{}).has_value(),
               "build: an empty image has no signature");
+
+        // The recovered option masks index the original mod's own build ids, which
+        // are not this enum's values: the mapping is pinned per build.
+        Check(xla::OriginalBuildId(xla::GameBuild::v1000) == 1u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1040) == 5u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1050) == 6u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1060) == 7u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1070) == 8u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1080) == 9u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1100) == 10u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1110) == 11u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1120) == 12u &&
+                  xla::OriginalBuildId(xla::GameBuild::v1130) == 13u,
+              "build: the original ids are the recovered classify switch's");
+        Check(!xla::OriginalBuildId(xla::GameBuild::v1010).has_value() &&
+                  !xla::OriginalBuildId(xla::GameBuild::unknown).has_value(),
+              "build: builds the original mod did not classify have no id");
+        Check(xla::BuildInMask(xla::GameBuild::v1080, 0x380u) &&
+                  !xla::BuildInMask(xla::GameBuild::v1000, 0x380u) &&
+                  !xla::BuildInMask(xla::GameBuild::v1010, 0xFFFFFFFFu) &&
+                  !xla::BuildInMask(xla::GameBuild::unknown, 0xFFFFFFFFu),
+              "build: a mask tests the original id, and an unknown build no mask");
     }
 
     void TestPatchPrimitives()
@@ -2455,6 +2489,593 @@ namespace
         }
     }
 
+    // ---- LoadDLCs -----------------------------------------------------------
+    //
+    // Two halves: the recovered write set (fixed RVAs, one table per build) and the
+    // discovery pass the struct-fixup body calls. The pass walks the folders next to
+    // the executable, so its test creates them there and removes them afterwards
+    // (the fork's own dlc_full shape; ctest runs this executable alone).
+
+    std::vector<std::pair<int, std::string>> g_dlcRegistrations;
+    std::vector<std::string> g_dlcAppliedPaths;
+    std::vector<std::uint8_t> g_dlcAppliedFlags;
+    std::vector<std::uint8_t> g_dlcAppliedModes;
+    void* g_dlcApplyThis = nullptr;
+
+    // The fake apply's second return value, so the `\Episode254\` EDX rule is visible
+    // from the test.
+    constexpr std::uint32_t kFakeDlcApplyEdx = 0xABCD1234u;
+
+    char __stdcall FakeDlcRegister(int id, const char* path, int)
+    {
+        g_dlcRegistrations.emplace_back(id, path != nullptr ? path : "");
+        return 1;
+    }
+
+    void __cdecl RecordDlcApply(void* self, const void* request)
+    {
+        g_dlcApplyThis = self;
+        const auto* bytes = static_cast<const std::uint8_t*>(request);
+        g_dlcAppliedPaths.emplace_back(reinterpret_cast<const char*>(bytes));
+        g_dlcAppliedFlags.push_back(bytes[xla::episodes::kRequestFlagOffset]);
+        g_dlcAppliedModes.push_back(bytes[xla::episodes::kRequestModeOffset]);
+    }
+
+    // The game's apply entry: `this` in ECX, the request on the stack, `ret 4`, and
+    // its second return value in EDX.
+    static __declspec(naked) void FakeDlcApply()
+    {
+        __asm
+        {
+            push dword ptr [esp + 4]
+            push ecx
+            call RecordDlcApply
+            add esp, 8
+            mov edx, 0ABCD1234h
+            ret 4
+        }
+    }
+
+    void TestLoadDLCs()
+    {
+        using xla::episodes::Body;
+        using xla::episodes::Write;
+        using xla::episodes::WriteKind;
+
+        // ---- the recovered data ---------------------------------------------
+        Check(xla::episodes::kBuildMask == 0x00000380u,
+              "loadDLCs: the build mask is the fork's row (0x380)");
+        Check(std::string_view(xla::episodes::kTladContent) == "\\dlc\\tlad\\content\\" &&
+                  std::string_view(xla::episodes::kTladLegacy) == "\\TLAD\\" &&
+                  std::string_view(xla::episodes::kTbogtContent) == "\\dlc\\TBoGT\\content\\" &&
+                  std::string_view(xla::episodes::kTbogtLegacy) == "\\TBoGT\\" &&
+                  std::string_view(xla::episodes::kEpisodeFormat) == "\\Episode%d\\",
+              "loadDLCs: the discovery literals are the recovered text");
+        Check(xla::episodes::kPathCapacity == 0x104 && xla::episodes::kRequestSize == 360 &&
+                  xla::episodes::kRequestFlagOffset == 0x158 &&
+                  xla::episodes::kRequestModeOffset == 0x166,
+              "loadDLCs: the request layout is the recovered one");
+
+        Check(xla::episodes::DlcPathFits(std::string(259, 'a')),
+              "dlc_path: a 259-byte path fits the 0x104 buffer");
+        Check(!xla::episodes::DlcPathFits(std::string(260, 'a')),
+              "dlc_path: a 260-byte path does not fit");
+        Check(!xla::episodes::DlcPathFits(""), "dlc_path: an empty path is refused");
+        Check(xla::episodes::DlcPathFits("C:\\GTAIV\\GTAIV.exe"),
+              "dlc_path: a normal install path fits");
+
+        using xla::GameBuild;
+        const std::array<std::pair<Body, std::uint32_t>, 3> vas{{
+            {Body::dummy, 0x10023480},
+            {Body::struct_fixup, 0x10023490},
+            {Body::discovery, 0x10023150},
+        }};
+        bool vasMatch = true;
+        for (const auto& [body, va] : vas)
+        {
+            vasMatch = vasMatch && xla::episodes::BodyVa(body) == va &&
+                       xla::episodes::ResolveBody(body) != 0;
+        }
+        Check(vasMatch, "loadDLCs: every body keeps its recovered VA");
+
+        // ---- the three recovered rows, byte for byte ------------------------
+        const auto writesMatch = [](std::span<const Write> got, std::span<const Write> want)
+        {
+            if (got.size() != want.size())
+            {
+                return false;
+            }
+            for (std::size_t index = 0; index < got.size(); ++index)
+            {
+                if (got[index].site != want[index].site ||
+                    got[index].kind != want[index].kind ||
+                    got[index].target != want[index].target)
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        constexpr Write kWant1060[] = {
+            {0x41450Eu, WriteKind::jump_rva, 0x41452Cu},
+            {0x41453Au, WriteKind::call_rva, 0x413E30u},
+            {0x41453Fu, WriteKind::nop_tail, 0u},
+            {0x41445Cu, WriteKind::jump_rva, 0x4144B8u},
+            {0x4137CDu, WriteKind::call_body, 0u},
+            {0x4144D4u, WriteKind::jump_body, 0u},
+        };
+        constexpr Write kWant1070[] = {
+            {0x4142AEu, WriteKind::jump_rva, 0x4142CCu},
+            {0x4142DAu, WriteKind::call_rva, 0x413BD0u},
+            {0x4142DFu, WriteKind::nop_tail, 0u},
+            {0x4141FCu, WriteKind::jump_rva, 0x414258u},
+            {0x41356Du, WriteKind::call_body, 0u},
+            {0x414274u, WriteKind::jump_body, 0u},
+        };
+        constexpr Write kWant1080[] = {
+            {0x49040Eu, WriteKind::jump_rva, 0x49042Cu},
+            {0x49043Au, WriteKind::call_rva, 0x48FBB0u},
+            {0x49043Fu, WriteKind::nop_tail, 0u},
+            {0x49035Cu, WriteKind::jump_rva, 0x4903B8u},
+            {0x48F558u, WriteKind::call_body, 0u},
+            {0x4903D4u, WriteKind::jump_body, 0u},
+        };
+
+        const auto builds = xla::episodes::Builds();
+        Check(builds.size() == 3, "loadDLCs: the key has three build rows");
+        Check(builds.size() == 3 && builds[0].build == GameBuild::v1060 &&
+                  builds[0].registerRva == 0x4136E0u && builds[0].applyRva == 0x414080u &&
+                  builds[0].loadCallbackRva == 0x414560u &&
+                  writesMatch(builds[0].writes, kWant1060),
+              "loadDLCs: the 1.0.6.0 row is the fork's table");
+        Check(builds.size() == 3 && builds[1].build == GameBuild::v1070 &&
+                  builds[1].registerRva == 0x413480u && builds[1].applyRva == 0x413E20u &&
+                  builds[1].loadCallbackRva == 0x414300u &&
+                  writesMatch(builds[1].writes, kWant1070),
+              "loadDLCs: the 1.0.7.0 row is the fork's table");
+        Check(builds.size() == 3 && builds[2].build == GameBuild::v1080 &&
+                  builds[2].registerRva == 0x48F440u && builds[2].applyRva == 0x48FE00u &&
+                  builds[2].loadCallbackRva == 0x490460u &&
+                  writesMatch(builds[2].writes, kWant1080),
+              "loadDLCs: the 1.0.8.0 row is the fork's table");
+
+        // ---- the mask: [1060,1070,1080] -------------------------------------
+        Check(xla::episodes::BuildHasLoadDLCs(GameBuild::v1060) &&
+                  xla::episodes::BuildHasLoadDLCs(GameBuild::v1070) &&
+                  xla::episodes::BuildHasLoadDLCs(GameBuild::v1080),
+              "loadDLCs: 1.0.6.0, 1.0.7.0 and 1.0.8.0 are inside the mask");
+        Check(!xla::episodes::BuildHasLoadDLCs(GameBuild::v1000) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1040) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1050) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1100) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1110) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1120) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1130) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::v1010) &&
+                  !xla::episodes::BuildHasLoadDLCs(GameBuild::unknown),
+              "loadDLCs: every other build is outside it");
+
+        // ---- the publish step ------------------------------------------------
+        static std::vector<std::byte> dlcImage(0x491000, std::byte{0});
+        const xla::Image dlcView{dlcImage.data(), dlcImage.size()};
+        const auto dlcBase = static_cast<std::uint32_t>(
+            reinterpret_cast<std::uintptr_t>(dlcImage.data()));
+
+        xla::episodes::Publish(dlcView, GameBuild::v1080);
+        const xla::episodes::Published published = xla::episodes::PublishedForTest();
+        Check(published.gameBase == dlcBase && published.registerRva == 0x48F440u &&
+                  published.applyRva == 0x48FE00u &&
+                  published.loadCallback == dlcBase + 0x490460u,
+              "loadDLCs: the publish step hands the discovery the build's RVAs");
+
+        const xla::episodes::Published beforePublish = published;
+        xla::episodes::Publish(dlcView, GameBuild::v1040);
+        const xla::episodes::Published afterPublish = xla::episodes::PublishedForTest();
+        Check(afterPublish.gameBase == beforePublish.gameBase &&
+                  afterPublish.registerRva == beforePublish.registerRva &&
+                  afterPublish.applyRva == beforePublish.applyRva &&
+                  afterPublish.loadCallback == beforePublish.loadCallback,
+              "loadDLCs: a build without a row publishes nothing");
+
+        // ---- the write set, one synthetic image per build -------------------
+        const auto checkWriteSet = [&](GameBuild build, std::vector<std::byte>& image,
+                                       std::string_view label)
+        {
+            const xla::Image view{image.data(), image.size()};
+            const std::vector<std::byte> pristine = image;
+            xla::episodes::Publish(view, build);
+            const xla::episodes::Report report = xla::episodes::Install(view, build);
+            Check(report.applied == 6 && report.missing == 0,
+                  std::format("loadDLCs: {} applies its six writes", label),
+                  std::format("{}/{}", report.applied, report.applied + report.missing));
+
+            const xla::episodes::BuildRow* const row = xla::episodes::BuildFor(build);
+            bool bytesMatch = row != nullptr && row->writes.size() == 6;
+            std::vector<std::pair<std::size_t, std::size_t>> spans;
+            if (row != nullptr)
+            {
+                for (const Write& write : row->writes)
+                {
+                    auto* const site = image.data() + write.site;
+                    spans.emplace_back(write.site,
+                                       write.kind == WriteKind::nop_tail ? 12u : 5u);
+                    if (write.kind == WriteKind::nop_tail)
+                    {
+                        for (std::size_t index = 0; index < 12; ++index)
+                        {
+                            bytesMatch = bytesMatch && site[index] == std::byte{0x90};
+                        }
+                        continue;
+                    }
+
+                    const bool isCall = write.kind == WriteKind::call_rva ||
+                                        write.kind == WriteKind::call_body;
+                    bytesMatch = bytesMatch && site[0] == (isCall ? std::byte{0xE8}
+                                                                  : std::byte{0xE9});
+                    const std::uintptr_t expected =
+                        (write.kind == WriteKind::jump_rva ||
+                         write.kind == WriteKind::call_rva)
+                            ? reinterpret_cast<std::uintptr_t>(image.data()) + write.target
+                            : xla::episodes::ResolveBody(
+                                  write.kind == WriteKind::jump_body ? Body::struct_fixup
+                                                                     : Body::dummy);
+                    bytesMatch = bytesMatch && JumpTarget(image, write.site) == expected;
+                }
+            }
+            Check(bytesMatch, std::format("loadDLCs: {}'s writes carry the recovered bytes",
+                                          label));
+            Check(OnlyChangedWithin(image, pristine, spans),
+                  std::format("loadDLCs: {} writes only its six sites", label));
+        };
+        static std::vector<std::byte> image1060(0x491000, std::byte{0});
+        static std::vector<std::byte> image1070(0x491000, std::byte{0});
+        static std::vector<std::byte> image1080(0x491000, std::byte{0});
+        checkWriteSet(GameBuild::v1060, image1060, "1.0.6.0");
+        checkWriteSet(GameBuild::v1070, image1070, "1.0.7.0");
+        checkWriteSet(GameBuild::v1080, image1080, "1.0.8.0");
+
+        // ---- refusals --------------------------------------------------------
+        // A build outside the mask writes nothing.
+        {
+            std::vector<std::byte> gated(0x491000, std::byte{0});
+            const xla::Image view{gated.data(), gated.size()};
+            const std::vector<std::byte> pristine = gated;
+            const xla::episodes::Report report =
+                xla::episodes::Install(view, GameBuild::v1040);
+            Check(report.applied == 0 && report.missing == 0 && gated == pristine,
+                  "loadDLCs: a build outside the mask installs nothing");
+        }
+        // A short view: every fixed-RVA site is outside it, so the arm is six logged
+        // skips (this key has no scan, so a short view is its \"missing anchor\").
+        {
+            std::vector<std::byte> shortView(0x1000, std::byte{0});
+            const xla::Image view{shortView.data(), shortView.size()};
+            const std::vector<std::byte> pristine = shortView;
+            const xla::episodes::Report report =
+                xla::episodes::Install(view, GameBuild::v1080);
+            Check(report.applied == 0 && report.missing == 6 && shortView == pristine,
+                  "loadDLCs: a short view refuses every write",
+                  std::format("{}/{}", report.applied, report.applied + report.missing));
+        }
+    }
+
+    // ---- the DLC discovery pass ----------------------------------------------
+    //
+    // The fork's dlc_full shape: fake register/apply entries reached through the
+    // published base plus RVAs, and folders created next to this executable. The
+    // apply fake is `__thiscall` (manager in ECX, request on the stack, `ret 4`), so a
+    // cdecl capture of the manager would fail here, and it answers a known EDX so the
+    // `\Episode254\` rule is observable.
+    void TestLoadDLCsDiscovery()
+    {
+        const std::filesystem::path base = xla::Game::Get().ExecutableDirectory();
+        Check(!base.empty(), "dlc discovery: the test module directory is known");
+        if (base.empty())
+        {
+            return;
+        }
+
+        constexpr std::array<std::string_view, 6> kFolders{{
+            "TLAD", "TBoGT", "Episode2", "Episode3", "EpisodeX", "Episode254",
+        }};
+        std::error_code ignored;
+        const auto folder = [&base](std::string_view name)
+        { return base / std::string(name); };
+        for (const std::string_view name : kFolders)
+        {
+            std::filesystem::remove_all(folder(name), ignored);
+        }
+        const auto reset = [&]
+        {
+            g_dlcRegistrations.clear();
+            g_dlcAppliedPaths.clear();
+            g_dlcAppliedFlags.clear();
+            g_dlcAppliedModes.clear();
+            g_dlcApplyThis = nullptr;
+        };
+
+        const auto imageBase = static_cast<std::uint32_t>(xla::Game::Get().ImageBase());
+        const auto rvaOf = [imageBase](const void* function)
+        {
+            return static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(function) - imageBase);
+        };
+        xla::episodes::SetDiscoveryForTest(imageBase, rvaOf(&FakeDlcRegister),
+                                           rvaOf(&FakeDlcApply));
+
+        std::array<std::uint8_t, 0x200> manager{};
+
+        // ---- the three fixed layouts and one addon episode -------------------
+        std::filesystem::create_directories(folder("TLAD"), ignored);
+        std::filesystem::create_directories(folder("TBoGT"), ignored);
+        std::filesystem::create_directories(folder("Episode3"), ignored);
+        reset();
+        manager.fill(0);
+        const std::uint32_t result = xla::episodes::DiscoverResultForTest(manager.data());
+        Check(g_dlcRegistrations.size() == 3,
+              "dlc discovery: TLAD, TBoGT and Episode3 are registered");
+        const bool wantPaths = g_dlcRegistrations.size() == 3 &&
+                               g_dlcRegistrations[0].second ==
+                                   (base / "TLAD").string() + "\\" &&
+                               g_dlcRegistrations[1].second ==
+                                   (base / "TBoGT").string() + "\\" &&
+                               g_dlcRegistrations[2].second ==
+                                   (base / "Episode3").string() + "\\";
+        Check(wantPaths, "dlc discovery: each registration carries the folder's own path",
+              g_dlcRegistrations.empty() ? std::string{} : g_dlcRegistrations[0].second);
+        Check(g_dlcRegistrations.size() == 3 && g_dlcRegistrations[0].first == 2 &&
+                  g_dlcRegistrations[1].first == 4 && g_dlcRegistrations[2].first == 6,
+              "dlc discovery: the ids are 2, 4 and 2*3 (the setup2.xml rule)");
+
+        bool applyMatches = g_dlcAppliedPaths.size() == g_dlcRegistrations.size() &&
+                            !g_dlcAppliedPaths.empty();
+        for (std::size_t index = 0; index < g_dlcAppliedPaths.size(); ++index)
+        {
+            applyMatches = applyMatches &&
+                           g_dlcAppliedPaths[index] == g_dlcRegistrations[index].second;
+        }
+        Check(applyMatches,
+              "dlc discovery: the apply call receives the registered request text");
+        Check(g_dlcApplyThis == manager.data(),
+              "dlc discovery: the apply call passes the manager as `this` (ECX)");
+        bool requestTail = !g_dlcAppliedFlags.empty();
+        for (const std::uint8_t flag : g_dlcAppliedFlags)
+        {
+            requestTail = requestTail && flag == 1;
+        }
+        for (const std::uint8_t mode : g_dlcAppliedModes)
+        {
+            requestTail = requestTail && mode == 1;
+        }
+        Check(requestTail,
+              "dlc discovery: the request carries the original's flag and mode bytes");
+        Check(manager[xla::episodes::kManagerMarkerOffset] == 1 &&
+                  manager[xla::episodes::kManagerModeOffset] == 2,
+              "dlc discovery: the manager's post-discovery bytes are set");
+        Check(result == xla::episodes::kDefaultResult,
+              "dlc discovery: without Episode254 the pass leaves 0x40 in EDX",
+              std::format("{:#x}", result));
+
+        reset();
+        const void* returned = xla::episodes::DiscoverForTest(manager.data());
+        Check(returned == manager.data(), "dlc discovery: the pass returns its object");
+
+        // ---- rejections: a missing fixed folder and a non-addon name ---------
+        // TLAD is deleted, `Episode2` (the TBoGT id) and `EpisodeX` (not a number)
+        // are created: only TBoGT and Episode3 may register.
+        std::filesystem::remove_all(folder("TLAD"), ignored);
+        std::filesystem::create_directories(folder("Episode2"), ignored);
+        std::filesystem::create_directories(folder("EpisodeX"), ignored);
+        reset();
+        (void)xla::episodes::DiscoverForTest(manager.data());
+        Check(g_dlcRegistrations.size() == 2 && g_dlcRegistrations[0].first == 4 &&
+                  g_dlcRegistrations[1].first == 6,
+              "dlc discovery: a missing folder and a reserved/non-numeric episode are "
+              "rejected",
+              std::to_string(g_dlcRegistrations.size()));
+
+        // ---- the Episode254 rule --------------------------------------------
+        std::filesystem::create_directories(folder("Episode254"), ignored);
+        reset();
+        const std::uint32_t with254 = xla::episodes::DiscoverResultForTest(manager.data());
+        Check(!g_dlcRegistrations.empty() && g_dlcRegistrations.back().first == 508,
+              "dlc discovery: Episode254 is registered as id 508 (2*254)");
+        Check(with254 == kFakeDlcApplyEdx,
+              "dlc discovery: Episode254 forwards the last apply's EDX",
+              std::format("{:#x}", with254));
+
+        // ---- no published entry ---------------------------------------------
+        xla::episodes::SetDiscoveryForTest(imageBase, 0, 0);
+        reset();
+        manager.fill(0);
+        (void)xla::episodes::DiscoverForTest(manager.data());
+        Check(g_dlcRegistrations.empty() &&
+                  manager[xla::episodes::kManagerMarkerOffset] == 0 &&
+                  manager[xla::episodes::kManagerModeOffset] == 0,
+              "dlc discovery: a build with no published entry registers nothing");
+
+        for (const std::string_view name : kFolders)
+        {
+            std::filesystem::remove_all(folder(name), ignored);
+        }
+    }
+
+    // ---- BenchmarkFix / CombinedRadioFreezeFix -------------------------------
+    //
+    // The two recovered crash fixes, driven exactly as the install pass drives them:
+    // the masks through the original's build ids, the two benchmark sites (each with
+    // its own continuation), the radio call replacement, and the refusals (a missing
+    // anchor, a partial multi-hit scan, a short view, a build outside the mask).
+    void TestStability()
+    {
+        using xla::GameBuild;
+        using xla::stability::Body;
+
+        // ---- the recovered data ---------------------------------------------
+        Check(std::string_view(xla::stability::kBenchmarkAnchor) ==
+                  "E8 ? ? ? ? 83 C4 04 57 8B D8 FF D6 8B 77 20",
+              "benchmarkFix: the anchor is the recovered row");
+        Check(std::string_view(xla::stability::kCombinedRadioAnchor) ==
+                  "E8 ? ? ? ? 8B 35 ? ? ? ? 3B F0",
+              "combinedRadio: the anchor is the recovered row");
+        Check(xla::stability::kBenchmarkBuildMask == 0x00049DE2u &&
+                  xla::stability::kCombinedRadioBuildMask == 0x0004BFE2u,
+              "stability: the two masks are the fork's option rows");
+        Check(xla::stability::kBenchmarkSiteOffset == 8 &&
+                  xla::stability::kBenchmarkResumeOffset == 13 &&
+                  xla::stability::kBenchmarkSiteCount == 2,
+              "benchmarkFix: the site, continuation and count are the recovered ones");
+
+        const std::array<std::pair<Body, std::uint32_t>, 3> vas{{
+            {Body::benchmark_a, 0x10005650},
+            {Body::benchmark_b, 0x10005670},
+            {Body::combined_radio, 0x10005ED0},
+        }};
+        bool vasMatch = true;
+        for (const auto& [body, va] : vas)
+        {
+            vasMatch = vasMatch && xla::stability::BodyVa(body) == va &&
+                       xla::stability::ResolveBody(body) != 0;
+        }
+        Check(vasMatch, "stability: every body keeps its recovered VA");
+
+        // ---- the masks -------------------------------------------------------
+        Check(xla::stability::BuildHasBenchmark(GameBuild::v1000) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1040) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1050) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1060) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1070) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1100) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1110) &&
+                  xla::stability::BuildHasBenchmark(GameBuild::v1120),
+              "benchmarkFix: every classified build except 1.0.8.0/1.1.3.0 is inside");
+        Check(!xla::stability::BuildHasBenchmark(GameBuild::v1080) &&
+                  !xla::stability::BuildHasBenchmark(GameBuild::v1130),
+              "benchmarkFix: 1.0.8.0 and 1.1.3.0 are outside the mask");
+        Check(!xla::stability::BuildHasBenchmark(GameBuild::v1010) &&
+                  !xla::stability::BuildHasBenchmark(GameBuild::unknown),
+              "benchmarkFix: unclassified builds are outside the mask");
+        Check(xla::stability::BuildHasCombinedRadio(GameBuild::v1000) &&
+                  xla::stability::BuildHasCombinedRadio(GameBuild::v1080) &&
+                  xla::stability::BuildHasCombinedRadio(GameBuild::v1130) &&
+                  xla::stability::BuildHasCombinedRadio(GameBuild::v1050),
+              "combinedRadio: the original's all-builds mask covers every classified build");
+        Check(!xla::stability::BuildHasCombinedRadio(GameBuild::v1010) &&
+                  !xla::stability::BuildHasCombinedRadio(GameBuild::v1020) &&
+                  !xla::stability::BuildHasCombinedRadio(GameBuild::v1030) &&
+                  !xla::stability::BuildHasCombinedRadio(GameBuild::unknown),
+              "combinedRadio: unclassified builds are outside it");
+
+        // ---- refusals first (the scanner caches hits per signature string for a
+        // whole-image scan, so the missing-anchor pass runs before the real image)
+        static std::vector<std::byte> bare(0x100, std::byte{0});
+        const xla::Image bareView{bare.data(), bare.size()};
+        const auto noneBench = xla::stability::InstallBenchmarkFix(bareView,
+                                                                   GameBuild::v1070);
+        Check(noneBench.applied == 0 && noneBench.missing == 1,
+              "benchmarkFix: a missing anchor is a logged skip");
+        Check(xla::stability::PublishedForTest().first == 0 &&
+                  xla::stability::PublishedForTest().second == 0,
+              "benchmarkFix: a missed anchor publishes nothing");
+        const auto noneRadio =
+            xla::stability::InstallCombinedRadioFreezeFix(bareView, GameBuild::v1080);
+        Check(noneRadio.applied == 0 && noneRadio.missing == 1,
+              "combinedRadio: a missing anchor is a logged skip");
+
+        const auto gatedBench = xla::stability::InstallBenchmarkFix(bareView,
+                                                                    GameBuild::v1080);
+        Check(gatedBench.applied == 0 && gatedBench.missing == 0,
+              "benchmarkFix: a build outside the mask installs nothing");
+        const auto gatedRadio =
+            xla::stability::InstallCombinedRadioFreezeFix(bareView, GameBuild::v1010);
+        Check(gatedRadio.applied == 0 && gatedRadio.missing == 0,
+              "combinedRadio: a build outside the mask installs nothing");
+
+        // A short view: one byte less than the anchor, so the scan cannot match it.
+        {
+            std::vector<std::byte> truncated(15, std::byte{0});
+            WriteBytes(truncated, 0, BytesOf(xla::stability::kBenchmarkAnchor));
+            const xla::Image shortView{truncated.data(), truncated.size() - 1};
+            const auto report = xla::stability::InstallBenchmarkFix(shortView,
+                                                                    GameBuild::v1070);
+            Check(report.applied == 0 && report.missing == 1 &&
+                      truncated[8] == std::byte{0x57},
+                  "benchmarkFix: a short view refuses to install");
+        }
+
+        // A partial multi-hit scan: one site is not the recovered shape, so the arm
+        // refuses both writes instead of sending body B to body A's continuation.
+        {
+            std::vector<std::byte> single(0x200, std::byte{0});
+            WriteBytes(single, 0x40, BytesOf(xla::stability::kBenchmarkAnchor));
+            const xla::Image singleView{single.data(), single.size()};
+            const xla::stability::Resumes before = xla::stability::PublishedForTest();
+            const auto report = xla::stability::InstallBenchmarkFix(singleView,
+                                                                    GameBuild::v1070);
+            const xla::stability::Resumes after = xla::stability::PublishedForTest();
+            Check(report.applied == 0 && report.missing == 1 &&
+                      single[0x48] == std::byte{0x57} && after.first == before.first &&
+                      after.second == before.second,
+                  "benchmarkFix: a one-hit scan refuses the arm");
+        }
+
+        // ---- the write set ---------------------------------------------------
+        constexpr std::size_t kBenchmarkFirst = 0x100;
+        constexpr std::size_t kBenchmarkSecond = 0x200;
+        constexpr std::size_t kRadioSite = 0x300;
+        static std::vector<std::byte> image(0x400, std::byte{0});
+        WriteBytes(image, kBenchmarkFirst, BytesOf(xla::stability::kBenchmarkAnchor));
+        WriteBytes(image, kBenchmarkSecond, BytesOf(xla::stability::kBenchmarkAnchor));
+        WriteBytes(image, kRadioSite, BytesOf(xla::stability::kCombinedRadioAnchor));
+        const xla::Image view{image.data(), image.size()};
+
+        const std::vector<std::byte> pristine = image;
+        const auto bench = xla::stability::InstallBenchmarkFix(view, GameBuild::v1070);
+        Check(bench.applied == 2 && bench.missing == 0,
+              "benchmarkFix: both sites are installed",
+              std::format("{}/{}", bench.applied, bench.applied + bench.missing));
+
+        const xla::stability::Resumes resumes = xla::stability::PublishedForTest();
+        const std::byte* const imageData = image.data();
+        const auto baseOf = [imageData](std::size_t offset)
+        {
+            return static_cast<std::uint32_t>(
+                reinterpret_cast<std::uintptr_t>(imageData) + offset);
+        };
+        Check(resumes.first == baseOf(kBenchmarkFirst + 13) &&
+                  resumes.second == baseOf(kBenchmarkSecond + 13),
+              "benchmarkFix: each site publishes its own +0xD continuation");
+        Check(image[kBenchmarkFirst + 8] == std::byte{0xE9} &&
+                  JumpTarget(image, kBenchmarkFirst + 8) ==
+                      xla::stability::ResolveBody(Body::benchmark_a),
+              "benchmarkFix: the first site jumps to its body");
+        Check(image[kBenchmarkSecond + 8] == std::byte{0xE9} &&
+                  JumpTarget(image, kBenchmarkSecond + 8) ==
+                      xla::stability::ResolveBody(Body::benchmark_b),
+              "benchmarkFix: the second site jumps to its own body");
+        const std::array<std::pair<std::size_t, std::size_t>, 2> benchSpans{{
+            {kBenchmarkFirst + 8, 5},
+            {kBenchmarkSecond + 8, 5},
+        }};
+        Check(OnlyChangedWithin(image, pristine, benchSpans),
+              "benchmarkFix: the arm writes only its two sites");
+
+        const std::vector<std::byte> beforeRadio = image;
+        const auto radio =
+            xla::stability::InstallCombinedRadioFreezeFix(view, GameBuild::v1080);
+        Check(radio.applied == 1 && radio.missing == 0,
+              "combinedRadio: the call site is installed");
+        Check(image[kRadioSite] == std::byte{0xE8} &&
+                  CallTarget(image, kRadioSite) ==
+                      xla::stability::ResolveBody(Body::combined_radio),
+              "combinedRadio: the call targets its body");
+        const std::array<std::pair<std::size_t, std::size_t>, 1> radioSpans{{
+            {kRadioSite, 5},
+        }};
+        Check(OnlyChangedWithin(image, beforeRadio, radioSpans),
+              "combinedRadio: the arm writes only its one site");
+    }
+
     void TestRegistry()
     {
         Check(xla::registry::IsRockstarSubKey("Software\\Rockstar Games\\GTAIV"),
@@ -2569,13 +3190,12 @@ namespace
               "skipLauncher: the collected table has a label and two targets");
         Check(!collected[0].targets[0].label.empty() && !collected[0].targets[1].signature.empty(),
               "skipLauncher: the collected targets are named");
-        Check(!HasStage(kShippedStages, SkipLauncherStage::main),
-              "skipLauncher: the shipped stages never apply main");
-        Check(HasStage(kShippedStages, SkipLauncherStage::dfa) &&
+        Check(HasStage(kShippedStages, SkipLauncherStage::main) &&
+                  HasStage(kShippedStages, SkipLauncherStage::dfa) &&
                   HasStage(kShippedStages, SkipLauncherStage::rom),
-              "skipLauncher: the shipped stages are DFA+ROM");
-        Check(DescribeStages(kShippedStages) == "dfa|rom",
-              "skipLauncher: the stage description is dfa|rom");
+              "skipLauncher: the shipped stages are main+DFA+ROM");
+        Check(DescribeStages(kShippedStages) == "main|dfa|rom",
+              "skipLauncher: the stage description is main|dfa|rom");
 
         std::size_t patchRows = 0;
         for (const Entry& entry : entries)
@@ -2624,7 +3244,7 @@ namespace
                   "skipLauncher: the +34 branch byte is EB");
         }
 
-        // The shipped stages must never apply the main table.
+        // The shipped stages include main, so the same signature is written.
         std::vector<std::byte> shipped(0x1000, std::byte{0});
         WriteBytes(shipped, 0x100, signature);
         result = ApplySkipLauncher(xla::Image{shipped.data(), shipped.size()}, &ResolveSkipHook,
@@ -2632,12 +3252,13 @@ namespace
         Check(result.has_value(), "skipLauncher: the shipped stages run");
         if (result)
         {
-            Check(result->entriesFound == 0 && result->writes == 0,
-                  "skipLauncher: the shipped stages do not touch the main table");
+            Check(result->entriesFound == 1 && result->writes == 2,
+                  "skipLauncher: the shipped stages apply the main table");
             Check(result->dfaMissing == SkipLauncherDfaInstalls().size(),
                   "skipLauncher: the missing DFA hooks are counted");
         }
-        Check(shipped[0x100 + 34] == std::byte{0}, "skipLauncher: the main row is untouched");
+        Check(shipped[0x100 + 34] == std::byte{0xEB},
+              "skipLauncher: the shipped main row is written");
 
         // A store past the image is the pass's one hard failure.
         std::vector<std::byte> bounds(0x100, std::byte{0});
@@ -2647,6 +3268,48 @@ namespace
         Check(!result.has_value() &&
                   result.error().code == PatchError::Code::out_of_bounds,
               "skipLauncher: a store past the image fails cleanly");
+    }
+
+    // The two multi-hit collectors are the SecuROM spot-check bypass: the first
+    // two matches of the first pattern and the last two of the second become
+    // `mov al,1; ret; nop`. The script natives then report success; the mission
+    // scripts gate on them (vlad3.sco's Clean Getaway state 3).
+    void TestSkipLauncherCollectors()
+    {
+        using namespace xla::launcher;
+
+        std::vector<std::byte> image(0x4000, std::byte{0});
+        const auto first = BytesOf("A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75");
+        const auto last = BytesOf("33 C0 83 3D ? ? ? ? 01 0F 94 C0 C3");
+        WriteBytes(image, 0x100, first);
+        WriteBytes(image, 0x180, first);
+        const std::size_t lastSites[] = {0x300, 0x320, 0x340, 0x360, 0x380};
+        for (const std::size_t site : lastSites)
+        {
+            WriteBytes(image, site, last);
+        }
+
+        const auto result = ApplySkipLauncher(xla::Image{image.data(), image.size()}, nullptr,
+                                              nullptr, SkipLauncherStage::main);
+        Check(result.has_value(), "skipLauncher: the collectors' main pass applies");
+        if (!result)
+        {
+            return;
+        }
+        Check(result->collectorsFound == 2 && result->collectorWrites == 4,
+              "skipLauncher: both collectors patch two sites each");
+
+        const std::array<std::byte, 4> stub{std::byte{0xB0}, std::byte{0x01},
+                                            std::byte{0xC3}, std::byte{0x90}};
+        Check(std::equal(stub.begin(), stub.end(), image.begin() + 0x100) &&
+                  std::equal(stub.begin(), stub.end(), image.begin() + 0x180),
+              "skipLauncher: the first collector patches the first two matches");
+        Check(std::equal(stub.begin(), stub.end(), image.begin() + 0x360) &&
+                  std::equal(stub.begin(), stub.end(), image.begin() + 0x380),
+              "skipLauncher: the second collector patches the last two matches");
+        Check(image[0x300] == std::byte{0x33} && image[0x320] == std::byte{0x33} &&
+                  image[0x340] == std::byte{0x33},
+              "skipLauncher: the second collector leaves the earlier matches alone");
     }
 
     constexpr std::uintptr_t kStubHandle = 0x1234;
@@ -3063,13 +3726,14 @@ namespace
     void TestStartupOrder()
     {
         const auto order = xla::startup::Order();
-        const std::array<std::string_view, 31> expected{{
+        const std::array<std::string_view, 34> expected{{
             "Banner", "Console", "SingleInstance", "Loader", "Probe", "Paths", "Config",
             "FusionFix", "ReportConfiguration", "Image", "Build", "Profile",
             "Savegames", "SkipLauncher", "LaunchWithPlayGTAIV", "BorderlessWindow", "FocusLoss",
             "CorePatches", "LauncherStage", "WebConnect",
             "NewFilesCompatibility", "NewSavesCompatibility", "GFWLProtectionDisabler",
-            "SteamAchievements", "SkipIntro", "SkipMenu",
+            "SteamAchievements", "LoadDLCs", "BenchmarkFix", "CombinedRadioFreezeFix",
+            "SkipIntro", "SkipMenu",
             "DoNotPauseOnMinimize", "DefWindowProcShims", "Registry", "VramFix", "Complete",
         }};
         Check(order.size() == expected.size(), "startup: the registration count is pinned",
@@ -3111,12 +3775,16 @@ int main()
     TestNewSavesWalk();
     TestGfwl();
     TestSteam();
+    TestLoadDLCs();
+    TestLoadDLCsDiscovery();
+    TestStability();
     TestMenu();
     TestVram();
     TestRegistry();
     TestProfile();
     TestSkipLauncherTable();
     TestSkipLauncherPass();
+    TestSkipLauncherCollectors();
     TestSkipLauncherCreateFileSlot();
     TestSkipLauncherStub();
     TestLaunchWithPlayGTAIV();

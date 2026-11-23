@@ -3196,6 +3196,11 @@ namespace
               "skipLauncher: the shipped stages are main+DFA+ROM");
         Check(DescribeStages(kShippedStages) == "main|dfa|rom",
               "skipLauncher: the stage description is main|dfa|rom");
+        Check(DescribeStages(ShippedStagesFor(xla::GameBuild::v1080)) == "main|dfa|rom",
+              "skipLauncher: 1.0.8.0 ships main+DFA+ROM");
+        Check(DescribeStages(ShippedStagesFor(xla::GameBuild::v1100)) == "main|rom" &&
+                  DescribeStages(ShippedStagesFor(xla::GameBuild::v1130)) == "main|rom",
+              "skipLauncher: the EFLC builds ship main+ROM (the DFA handler refuses them)");
 
         std::size_t patchRows = 0;
         for (const Entry& entry : entries)

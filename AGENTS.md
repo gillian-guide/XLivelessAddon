@@ -45,7 +45,8 @@ The invariants the tree is built around:
   `SkipInternetConnectionCheck`/`SkipHealthCheck` refining it), `SkipIntro`,
   `SkipMenu`, `VRAMFix`, `BorderlessWindowed`,
   `DoNotPauseOnMinimize`, `NewFilesCompatibility`, `NewSavesCompatibility`,
-  `GFWLProtectionDisabler`, `SteamAchievements`
+  `GFWLProtectionDisabler`, `SteamAchievements`, `LoadDLCs`, `BenchmarkFix`,
+  `CombinedRadioFreezeFix`
   and a non-empty `[USERPROFILE] CustomUserProfilePath`
   cover the installs; `StartupWarnings` only
   gates the non-fatal dialogs/notice. With every install key `0` and the path
@@ -67,24 +68,47 @@ The invariants the tree is built around:
   `lmsgboxExit("SRLC10")` (the "Game needs to be launched using LaunchGTAIV.exe"
   dialog). Without this arm `SkipLauncher` looks inert. Do not fold the rewrite
   back into `SkipLauncher`: it is its own key and its own install step, and the
-  recovered process gate (a live `PlayGTAIV.exe`) stays its own.
+  recovered process gate (a live `PlayGTAIV.exe`) stays its own. The name-slot
+  rewrite only gets the game past the startup launcher check; it does **not**
+  satisfy the SecuROM spot-check natives (see the next paragraph), so the two
+  mechanisms are both required and are not substitutes.
+- **`SkipLauncher` ships ZolikaPatch's full three-stage pass (`main|dfa|rom`).**
+  The main stage is not optional: it runs the two multi-hit collectors from
+  handler `0x10045CE0`, and those are the SecuROM spot-check bypass. The first
+  collector matches `A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75` at game
+  `0xB4FAA0`/`0xB4FAD0` and writes `B0 01 C3 90` (`mov al,1; ret; nop`) over
+  them; the second patches the last two matches of its own pattern. The game
+  registers those bodies as `SECUROM_SPOT_CHECK1/2/3/4`
+  (`NativeHashes.h`: `0x63576E53`, `0x1F40505C`, `0x5D1C0A6A`, `0x764236CE`),
+  and mission scripts gate on them: `vlad3.sco` (Clean Getaway) only runs its
+  garage/carwash state when `SECUROM_SPOT_CHECK3()` returns true, so a pass
+  that omits `main` leaves the mission stuck before the garage door opens.
+  XLivelessAddon applied these same rows in its unconditional process-patch
+  block; the old note that `main` "broke the GFWL session" was about applying
+  the table a second time after the add-on had already patched the same sites,
+  which this tree does not do. On EFLC the shipped set is `main|rom`: the
+  original DFA handler returns for product versions 10–13 (0x100048A2) and the
+  DFA path faults at `0x00426440`; `ShippedStagesFor` is the one place that
+  mask lives.
 - **Recovered tables are data.** Signature strings, offsets, stored bytes, fill
-  values and the stage order are 1:1 with the old addon. Renaming is free;
-  changing a number or a scan is a behaviour change.
+  values and the stage order are 1:1 with the ZolikaPatch handlers and the old
+  addon. Renaming is free; changing a number or a scan is a behaviour change.
 
 ## Layout
 
 - `source/*.ixx` — one C++23 module interface unit per feature family, plus the
   infrastructure units (`common`, `patch`, `build`, `config`, `probe`, `startup`)
   and the feature families `warnings`, `savegames`, `registry`, `profile`,
-  `core`, `compatibility`, `steam`, `launcher`, `menu`, `vram`, `windowed`. They
+  `core`, `compatibility`, `steam`, `episodes`, `stability`, `launcher`, `menu`,
+  `vram`, `windowed`. They
   are listed in the `CXX_MODULES` file set.
   A module is one feature family, not one original handler: `launcher` owns every
   launcher stage (both SkipLauncher stages and the `LaunchWithPlayGTAIV` arm),
   `core` owns the recovered check fixes (the three "core" rows, the
   SkipWebConnect family and the GFWLProtectionDisabler byte patch),
   `compatibility` owns the two file/save path arms, `steam` owns the achievement
-  bridge, `menu` owns the frontend pair, and `vram` owns the VRAM
+  bridge, `episodes` owns the DLC/episode discovery arm, `stability` owns the two
+  recovered crash fixes, `menu` owns the frontend pair, and `vram` owns the VRAM
   detection fix.
 - `source/common.hxx` — the one include header; included in each module's
   `module;` global fragment. It is includes only.
@@ -98,13 +122,14 @@ The invariants the tree is built around:
 - `source/startup.ixx` — `Game` initialisation, the registration order, the
   synchronous pass, `AnyInstallEnabled` and the all-off path.
 - `source/launcher.ixx` — the whole launcher family: the `SkipLauncher=1`
-  recovered DFA + ROM stage (main table, ABI-exact bodies, the CreateFile slot
-  and the ROM message window), the `SkipLauncher=0` legacy DFA file-API +
-  WM_ROM stage under `legacy::dfa`/`legacy::rom`, and the `LaunchWithPlayGTAIV`
-  arm (the recovered `.rdata` name-slot rewrite: handler `0x100441B0`, the
-  per-build slot table, the `PlayGTAIV.exe` process walk and its own install
-  step). `source/launcher_recovered.inc` is the recovered main table (data only,
-  not shipped), included inside the module.
+  recovered main + DFA + ROM pass (main table, the two SecuROM-spot-check
+  collectors, ABI-exact bodies, the CreateFile slot and the ROM message window),
+  the `SkipLauncher=0` legacy DFA file-API + WM_ROM stage under
+  `legacy::dfa`/`legacy::rom`, and the `LaunchWithPlayGTAIV` arm (the recovered
+  `.rdata` name-slot rewrite: handler `0x100441B0`, the per-build slot table, the
+  `PlayGTAIV.exe` process walk and its own install step).
+  `source/launcher_recovered.inc` is the recovered main table, shipped by
+  `kShippedStages` and included inside the module.
 - `source/savegames.ixx` — `[Options] SavegameFix`: the save-file CRC32 bypass
   **and** the hardened save-path call sites. The ported OpenPreCEPatch arm (chosen
   because it is the more robust of the two implementations) retargets the ten
@@ -150,6 +175,29 @@ The invariants the tree is built around:
   client or the pointer is that module's own ordinal-5278 export (a real bound thunk).
   Otherwise the hook answers `0` (what a completed write answers) and never calls it.
   Only two refusals remain: not the game image, and no `steam_api.dll`.
+- `source/episodes.ixx` — `[Options] LoadDLCs`, ported 1:1 from the fork's
+  `source/episodic.ixx` (the publish step, the per-build write table, the two
+  transcribed bodies and the C++ discovery pass the struct-fixup body calls). The
+  key replaces the game's DLC-manager tail with a body that clears the five
+  request slots and, for a not-yet-initialised manager, runs the game's load
+  callback and then the discovery pass: `\dlc\tlad\content\` or `\TLAD\`,
+  `\dlc\TBoGT\content\` or `\TBoGT\`, and addon episodes
+  `\Episode3\`...`\Episode254\` (folder `EpisodeN` registers as id `2*N`, its
+  `setup2.xml` id). The build mask is the original's `[1060,1070,1080]`; the
+  module-path buffer bound (`0x104` bytes) is the arm's own first refusal. The
+  bodies are proved by `tools/verify_port_bodies.py`; the discovery pass is a
+  rebuild (the fork carries no proof row for it either) and the suite drives it
+  with fake register/apply entries.
+- `source/stability.ixx` — `[Options] BenchmarkFix` and
+  `[Options] CombinedRadioFreezeFix`, ported 1:1 from the fork's
+  `source/stability.ixx`: the benchmark arm publishes each of its two sites' own
+  `+0xD` continuation before it jumps, and refuses a scan that does not find
+  exactly two (a shared resume would send the second body to the first one's
+  continuation); the radio arm replaces the game's radio-update call with the
+  two-instruction `mov eax,19; ret` body. The masks are the fork's option rows:
+  BenchmarkFix is every classified build except 1.0.8.0/1.1.3.0,
+  CombinedRadioFreezeFix is the original's all-builds mask. The five bodies are
+  proved by `tools/verify_port_bodies.py`.
 - `source/menu.ixx` — `SkipIntro`/`SkipMenu`: FusionFix's `skipintro.ixx`
   mechanism, ported as-is (the Loadsc window that zeroes the screens under
   8000 ms, and the `sub_7870A0` body with its `bOnce`/`bSkipIntroNotNeeded` latch,
@@ -192,10 +240,12 @@ The invariants the tree is built around:
 - `tests/` — the native suite, the ASI image load and the PE checks; also the
   recovered SkipLauncher table golden.
 - `tools/` — `check_no_installs.py`, `check_module_layout.py`,
-  `check_skip_launcher_tables.py` and `verify_compat_bodies.py` (the manual proof:
-  it decodes the compatibility module's asm tail and the original ASI's bodies at
-  their recovered VAs and compares them instruction by instruction; it needs the
-  oracle, so it is not a ctest target).
+  `check_skip_launcher_tables.py`, `verify_compat_bodies.py` and
+  `verify_port_bodies.py` (the manual proofs: they decode a module's asm tail and
+  the original ASI's bodies at their recovered VAs and compare them instruction by
+  instruction; `verify_compat_bodies.py` covers the compatibility family,
+  `verify_port_bodies.py` the episodes/stability bodies. Both need the oracle, so
+  neither is a ctest target).
 - `README.md` — features, startup warnings, install, credits and the build.
 
 ### FusionFix overlap
@@ -241,7 +291,7 @@ ctest --preset trace
 Win32/MSVC only, static CRT, image base `0x10000000`, windowed subsystem. Both
 Release and Trace must stay green. The artifact is
 `build/win-x86/Release/XLivelessAddon.asi`; the native suite currently reports
-**594 checks**.
+**674 checks**.
 
 `ctest` runs the native suite (checks + the ASI image load), the PE header check,
 `xla_no_installs`, `xla_module_layout` and `xla_skip_tables` (the recovered
@@ -294,6 +344,27 @@ fine-grained keys) and the recovered `[COMPATIBILITY]` family:
   foreign stub does not. The suite cannot load a real GFWL client or a real
   `steam_api.dll`; those paths are pinned through the shared decision functions and
   the measured export tables the classification was built from.
+
+The ported fixes have their own tests:
+
+- `TestLoadDLCs`: the three recovered rows byte for byte (the register/apply/load-callback
+  RVAs and all six writes each, including the 12-byte NOP tail), the literals, the request
+  layout and the `0x104` path bound, the body VAs, the `[1060,1070,1080]` mask, the publish
+  step's four slots, the exact write set on one synthetic image per build (the branch bytes,
+  the jump/call destinations, and "only these six sites changed"), and the two refusals (a
+  build outside the mask and a view too short for any fixed-RVA site).
+- `TestLoadDLCsDiscovery`: the discovery pass driven through its own seam with fake
+  register/apply entries (`__thiscall`: manager in ECX, request on the stack, `ret 4`) and
+  folders created next to the test executable - the `TLAD`/`TBoGT`/`Episode3` paths and ids
+  2/4/6, the request's flag/mode bytes, the manager's `0xA4`/`0x166` markers, the `0x40` EDX
+  answer and the `\Episode254\` EDX forward (id 508), and the rejections: a missing folder,
+  `Episode2` (a reserved id) and a non-numeric episode name are not registered, and a build
+  with no published entry registers nothing.
+- `TestStability`: the two anchors, both masks (inside and outside, plus the unclassified
+  builds), the three body VAs, the missing-anchor, one-hit-scan and short-view refusals
+  (nothing written, nothing published), the two benchmark sites with their own `+0xD`
+  continuations and body targets, the radio call replacement, and the exact write set of
+  both arms.
 
 ## Rules learned the hard way
 

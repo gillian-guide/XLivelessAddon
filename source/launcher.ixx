@@ -2,12 +2,14 @@
 //
 // xla.launcher - the launcher family: every launcher stage the INI selects.
 //
-//   SkipLauncher=1  the recovered DFA + ROM stage: the 25-entry main table and
-//                   the two multi-hit collectors (0x10045CE0), the six DFA
-//                   file-API hooks and the two collected jumps (0x10004850), and
-//                   the two ROM message-window hooks (0x10004620) with their
+//   SkipLauncher=1  the recovered ZolikaPatch launcher pass: the 25-entry main
+//                   table and the two multi-hit collectors (0x10045CE0), the six
+//                   DFA file-API hooks and the two collected jumps (0x10004850),
+//                   and the two ROM message-window hooks (0x10004620) with their
 //                   ABI-exact bodies (0x10004570/0x10004610, service
-//                   0x100041A0..0x10004570).
+//                   0x100041A0..0x10004570). All three stages are shipped: the
+//                   main stage's collectors are the SecuROM spot-check bypass
+//                   (see the stage-mask comment below).
 //   SkipLauncher=0  the legacy DFA file-API stage and the WM_ROM message window
 //                   (with LegacyLauncher=1), descended from XLivelessAddon's
 //                   dfa.ixx and rom_window.ixx.
@@ -36,8 +38,8 @@
 //
 //   1. the SkipLauncher=1 data model and API, and the LaunchWithPlayGTAIV API;
 //   2. the legacy stage's API, in its own legacy::dfa / legacy::rom namespaces;
-//   3. the recovered main table, included from launcher_recovered.inc
-//      (data only, not shipped, kept for parity and the native suite);
+//   3. the recovered main table, included from launcher_recovered.inc (data
+//      only; shipped by the main stage and pinned by the native suite);
 //   4. the shipping data: the six DFA hooks, the two ROM hooks and the two
 //      collected jumps;
 //   5. the pass that applies the selected stage;
@@ -222,10 +224,23 @@ export namespace xla::launcher
         std::uint32_t createFileSlot{};
     };
 
-    // The original's three passes as a bitmask. The shipping path applies only
-    // `kShippedStages` (DFA + ROM): XLivelessAddon only ever ran those two, and
-    // applying `main` after the add-on had hooked the launcher broke the GFWL
-    // session. `main` stays available to callers that ask for it explicitly.
+    // The original's three passes as a bitmask. The shipping path applies all
+    // three (`main|dfa|rom`): only the main stage runs the two multi-hit
+    // collectors, and those collectors are the SecuROM spot-check bypass. The
+    // first collector's `A1 ? ? ? ? 85 C0 8B 0D ? ? ? ? 75` matches the two
+    // spot-check bodies at game 0xB4FAA0/0xB4FAD0 and writes `B0 01 C3 90`
+    // over them (`mov al,1; ret; nop`), so the script natives return true;
+    // the second collector does the same to the last two matches of its own
+    // pattern. Mission scripts gate on those natives: `vlad3.sco` (Clean
+    // Getaway) only runs its garage/carwash state when `SECUROM_SPOT_CHECK3()`
+    // is true, so a pass that omits `main` stalls the mission before the
+    // garage door opens.
+    //
+    // XLivelessAddon applied these same rows in its unconditional
+    // process-patch block. This tree is the add-on's replacement, so it ships
+    // them here. The old note that `main` "broke the GFWL session" described
+    // applying the table a second time after the add-on's own process patches
+    // had already run; this tree does not apply that second copy.
     enum class SkipLauncherStage : std::uint8_t
     {
         main = 1,
@@ -248,7 +263,16 @@ export namespace xla::launcher
     }
 
     inline constexpr SkipLauncherStage kShippedStages =
-        SkipLauncherStage::dfa | SkipLauncherStage::rom;
+        SkipLauncherStage::main | SkipLauncherStage::dfa | SkipLauncherStage::rom;
+
+    // The stages the SkipLauncher=1 pass ships for one build. The main table and
+    // the ROM hooks are every-build; the DFA file-API stage is not. The original's
+    // 0x10004850 handler returns for product versions 10..13 (0x100048A2's four
+    // comparisons = EFLC 1.1.0.0/1.1.1.0/1.1.2.0/1.1.3.0), and the DFA path faults
+    // on EFLC (unhandled 0xC0000005 at 0x00426440). So an EFLC build ships
+    // main|rom; every other build ships main|dfa|rom. The main rows self-gate by
+    // signature, so no per-build row mask is needed there.
+    [[nodiscard]] SkipLauncherStage ShippedStagesFor(GameBuild build) noexcept;
 
     [[nodiscard]] std::string DescribeStages(SkipLauncherStage stages);
 
@@ -282,10 +306,10 @@ export namespace xla::launcher
     bool PublishCreateFileSlot(const SkipLauncherReport& report) noexcept;
     std::uintptr_t ResolveSkipHook(SkipHook hook, void* user) noexcept;
 
-    // The SkipLauncher=1 install step: applies the shipped DFA + ROM stage and
-    // logs the recovered report. The startup driver gates it with the
-    // `SkipLauncher` key.
-    void InstallSkipStage(const Image& image);
+    // The SkipLauncher=1 install step: applies the build's shipped stages
+    // (`ShippedStagesFor`) and logs the recovered report. The startup driver
+    // gates it with the `SkipLauncher` key and passes the classified build.
+    void InstallSkipStage(const Image& image, GameBuild build);
 
     // The SkipLauncher=0 install step (with LegacyLauncher=1): the legacy DFA
     // file-API stage and the WM_ROM window. The original skipped the DFA hooks on
@@ -410,7 +434,7 @@ namespace xla::launcher
 }
 
 // ---------------------------------------------------------------------------
-// 2. The recovered main table (data only; not shipped)
+// 2. The recovered main table (data; shipped by `kShippedStages`)
 // ---------------------------------------------------------------------------
 namespace xla::launcher
 {
@@ -676,6 +700,10 @@ namespace xla::launcher
                         return std::unexpected(
                             PatchError{PatchError::Code::out_of_bounds, "collector out of bounds"});
                     }
+                    Log::Print("skipLauncher: {}: site {:08X} <- B0 01 C3 90", collector.label,
+                               static_cast<std::uint32_t>(
+                                   reinterpret_cast<std::uintptr_t>(pattern.get<std::uint8_t>(hit)) -
+                                   reinterpret_cast<std::uintptr_t>(image.base)));
                     ++report.collectorWrites;
                     ++applied;
                 }
@@ -903,10 +931,21 @@ namespace xla::launcher
 // ---------------------------------------------------------------------------
 namespace xla::launcher
 {
-    void InstallSkipStage(const Image& image)
+    SkipLauncherStage ShippedStagesFor(GameBuild build) noexcept
     {
-        const auto applied = ApplySkipLauncher(image, &ResolveSkipHook, nullptr,
-                                               kShippedStages);
+        // EFLC: the DFA handler returns before its installs (0x100048A2) and its
+        // file-API path faults at 0x00426440, so only main and ROM ship.
+        if (IsEflc(build))
+        {
+            return SkipLauncherStage::main | SkipLauncherStage::rom;
+        }
+        return kShippedStages;
+    }
+
+    void InstallSkipStage(const Image& image, GameBuild build)
+    {
+        const SkipLauncherStage stages = ShippedStagesFor(build);
+        const auto applied = ApplySkipLauncher(image, &ResolveSkipHook, nullptr, stages);
         if (!applied)
         {
             Log::Print("skipLauncher: failed with code {} ({})",
@@ -915,11 +954,14 @@ namespace xla::launcher
         }
 
         const auto& report = *applied;
-        Log::Print("skipLauncher: stages={} dfa={}/{} rom={}/{} collected={} "
+        Log::Print("skipLauncher: build={} stages={} entries={}/{} writes={} "
+                   "collectors={} collectorWrites={} dfa={}/{} rom={}/{} collected={} "
                    "createFileSlot={:08X}",
-                   DescribeStages(kShippedStages), report.dfaInstalls, report.dfaMissing,
-                   report.romInstalls, report.romMissing, report.collectedInstalls,
-                   report.createFileSlot);
+                   BuildLabel(build), DescribeStages(stages), report.entriesFound,
+                   report.entriesFound + report.entriesMissing, report.writes,
+                   report.collectorsFound, report.collectorWrites, report.dfaInstalls,
+                   report.dfaMissing, report.romInstalls, report.romMissing,
+                   report.collectedInstalls, report.createFileSlot);
     }
 
     void InstallLegacyStage(const Image& image, GameBuild build)

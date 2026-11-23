@@ -359,7 +359,7 @@ namespace xla::startup
                     Log::Trace("skipLauncher: option off");
                     return;
                 }
-                launcher::InstallSkipStage(game.View());
+                launcher::InstallSkipStage(game.View(), game.Build());
             };
 
             Record("LaunchWithPlayGTAIV");

@@ -4,11 +4,14 @@
 // data include, not a module: `launcher.ixx` defines the Edit/Entry types and
 // includes this file inside the module.
 //
-// It is NOT part of the shipping path. XLivelessAddon only ever ran the DFA and
-// ROM stages; applying this table after the add-on had hooked the launcher broke
-// the GFWL session. It is kept because it is recovered data and because the
-// native suite pins its shape; `ApplySkipLauncher(..., SkipLauncherStage::main)`
-// is the only caller that applies it.
+// It IS part of the shipping path: `kShippedStages` is `main|dfa|rom`. The main
+// stage owns the two collectors, and those collectors are the SecuROM
+// spot-check bypass the mission scripts depend on (`vlad3.sco`'s Clean Getaway
+// garage/carwash state only runs when `SECUROM_SPOT_CHECK3()` is true). The old
+// note about `main` breaking the GFWL session described applying the table a
+// second time after XLivelessAddon's own process patches; this tree applies it
+// once. `ApplySkipLauncher(..., SkipLauncherStage::main)` is also the
+// native-suite entry for the table's shape.
 //
 // Every row is one signature scan and the exact in-place instruction edits the
 // original makes at the first match. The labels describe the code, the comments

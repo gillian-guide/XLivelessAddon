@@ -17,7 +17,13 @@ It is meant to be used with [OpenPreCEPatch](https://github.com/gillian-guide/IV
 
 The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 
-- DRM and launcher check bypasses.
+- DRM and launcher check bypasses: the full ZolikaPatch `SkipLauncher` pass (main table, DFA
+  file-API hooks and the ROM message window), including the two multi-hit collectors that keep
+  the `SECUROM_SPOT_CHECK1/2/3/4` script natives answering true (mission scripts such as
+  `vlad3.sco`, Clean Getaway, gate on `SECUROM_SPOT_CHECK3`), and the `LaunchWithPlayGTAIV`
+  launcher-name rewrite that gets a `PlayGTAIV.exe`-started 1.0.8.0 past the startup check.
+  EFLC ships the main and ROM stages only; its DFA handler refuses those product versions and
+  the DFA path faults there (0x00426440), so the build's stage set is `main|rom`.
 - Bypass the save-file CRC32 check.
 - `CustomUserProfilePath` ported from FusionFix with some improvements for 1.0.8.0.
 - Unnecessary GFWL and Social Club checks removal 
@@ -26,6 +32,9 @@ The source modules are grouped by the INI families in `data/XLivelessAddon.ini`.
 - Borderless Windowed
 - Allow `script.img` and `radiohud` from newer versions to work on an older executable
 - Allow newer savefiles to load without downgrading them first, by converting the file when the game loads it (`1.0.6.0`-`1.0.8.0` only).
+- Fix the crash after the benchmark ends (every build except `1.0.8.0` and `1.1.3.0`).
+- Fix the freeze after Concrete Jungle with the 3 EFLC exclusive radio stations installed.
+- Load TBoGT and TLAD from the EFLC or CE folders, plus addon episodes named `Episode3`, `Episode4`, etc. (`1.0.6.0`-`1.0.8.0` only).
 - Mirror the achievements to Steam
 
 With a FusionFix ASI installed, `SkipIntro`, `SkipMenu`, `BorderlessWindowed` and `DoNotPauseOnMinimize` are switched off.
@@ -72,6 +81,7 @@ INI. `ctest` runs tests.
   overall module conventions.
 - **OpenPreCEPatch** — the recovered `[COMPATIBILITY]` arms moved here from that project:
   the NewFiles/NewSaves bodies, anchors and save-file converter, the GFWL protection site and
-  the Steam achievement table/bridge.
+  the Steam achievement table/bridge; also the `LoadDLCs` discovery pass and the two
+  recovered crash fixes (`BenchmarkFix`, `CombinedRadioFreezeFix`).
 
 Licensed under the GNU General Public License, version 3 or later; see `LICENSE` and `NOTICE`.
